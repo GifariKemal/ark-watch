@@ -8,8 +8,11 @@ recovery. Contract under test: only SUCCEEDED jobs persist/restore — a
 failed job re-runs exactly once per restart."""
 
 import json
+import subprocess
 from datetime import datetime
+from types import SimpleNamespace
 
+from arkwatch import daemon
 from arkwatch.daemon import WIB, _due_jobs, _load_state, _save_state
 
 TODAY_KEY = "0715-verify"
@@ -80,3 +83,18 @@ def test_weekly_gdelt_retention_runs_after_daily_backup():
 
     assert "backup" not in commands
     assert "gdelt-retention --apply" in commands
+
+
+def test_gdelt_retention_logs_complete_structured_result(monkeypatch):
+    result = '{"deleted":{"gdelt_gkg":123456},"db_bytes_before":123456789}'
+    logs = []
+    monkeypatch.setattr(daemon, "_heartbeat", lambda: None)
+    monkeypatch.setattr(daemon.logger, "info", logs.append)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=result, stderr=""),
+    )
+
+    assert daemon._run_job("gdelt-retention --apply", "weekly cleanup") is True
+    assert f"gdelt-retention-result {result}" in logs

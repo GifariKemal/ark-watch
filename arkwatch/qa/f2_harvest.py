@@ -13,6 +13,7 @@ from .. import db
 from ..config import load_cot_contracts
 from ..fetchers import bybit, cot, spdr
 from ..transforms import xccy
+from .fetch_log import log_collection as _log_collection
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
 
@@ -781,9 +782,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if not a.skip_cot:
         print("=== COT (13 contracts × 2 reports) ===")
-        cot_result = harvest_cot(conn)
-        ok = sum(1 for v in cot_result.values() if v > 0)
-        print(f"  {ok}/{len(cot_result)} contract-reports populated")
+        try:
+            cot_result = harvest_cot(conn)
+            ok = sum(1 for v in cot_result.values() if v > 0)
+            failures = sum(1 for v in cot_result.values() if v < 0)
+            _log_collection(
+                conn, "f2", "COT:HARVEST", None, sum(v for v in cot_result.values() if v > 0),
+                err=f"{failures} contract-report fetches failed" if failures else None,
+                status="ERROR" if failures else None,
+            )
+            print(f"  {ok}/{len(cot_result)} contract-reports populated")
+        except Exception as ex:
+            _log_collection(conn, "f2", "COT:HARVEST", None, 0, err=str(ex))
+            print(f"  ⚠ COT: {str(ex)[:90]}")
 
     if not a.skip_flows:
         print("=== Flows (Bybit + DefiLlama) ===")
@@ -792,7 +803,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {k}: {v}")
 
     print("=== FedWatch-DIY (from ZQ settlements in DB) ===")
-    probs = compute_fedwatch(conn)
+    try:
+        probs = compute_fedwatch(conn)
+        _log_collection(conn, "f2", "F2:FEDWATCH", None, len(probs))
+    except Exception as ex:
+        probs = []
+        _log_collection(conn, "f2", "F2:FEDWATCH", None, 0, err=str(ex))
+        print(f"  ⚠ FedWatch: {str(ex)[:90]}")
     for p in probs:
         print(
             f"  {p['meeting']}: ease={p['ease']:.1%} hold={p['hold']:.1%} "
@@ -801,11 +818,13 @@ def main(argv: list[str] | None = None) -> int:
 
     print("=== ECBWatch-DIY (from ESR settlements in DB) ===")
     try:
-        compute_ecbwatch(conn)
+        ecb_rows = compute_ecbwatch(conn)
+        _log_collection(conn, "f2", "F2:ECBWATCH", None, len(ecb_rows))
     except Exception as ex:
         # review P1: a broken numpy env must not abort the rest of the
         # harvest (every sibling block is individually guarded)
         print(f"  ⚠ ECBWatch: {str(ex)[:90]}")
+        _log_collection(conn, "f2", "F2:ECBWATCH", None, 0, err=str(ex))
 
     # Earnings calendar (FMP) — data-first phase deliverable: the weekly
     # heavyweight-share gauge lands in computed_signals (no brief; delivery
@@ -825,6 +844,7 @@ def main(argv: list[str] | None = None) -> int:
     print("=== XCCY Basis (CIP from SR3+ESR+6E) ===")
     try:
         xccy_rows = xccy.compute_xccy(conn)
+        _log_collection(conn, "f2", "F2:XCCY", None, len(xccy_rows))
         for r in xccy_rows[:4]:
             print(
                 f"  {r.contract}: {r.basis_bps:+.2f}bp "
@@ -832,6 +852,7 @@ def main(argv: list[str] | None = None) -> int:
             )
     except Exception as ex:
         print(f"  ⚠ {ex}")
+        _log_collection(conn, "f2", "F2:XCCY", None, 0, err=str(ex))
 
     # CNN Fear & Greed — snapshot + components + momentum + history
     _harvest_cnn_fg(conn)

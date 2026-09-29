@@ -84,6 +84,12 @@ def test_gdelt_retention_apply_removes_temporary_backup_after_verified_cleanup(
         "gdelt_gkg": 1,
         "gdelt_events": 1,
     }
+    assert result["remaining"] == {table: 0 for table in gdelt_retention.TABLES}
+    assert result["quick_check"] == "ok"
+    assert result["db_bytes_before"] > 0
+    assert result["db_bytes_after"] > 0
+    assert result["wal_bytes_before"] >= 0
+    assert result["wal_bytes_after"] >= 0
     assert result["temporary_backup_removed"] is True
     assert list((tmp_path / "backups").iterdir()) == []
     conn = db.get_conn(path)

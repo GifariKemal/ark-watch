@@ -235,6 +235,13 @@ def _run_job(cmd: str, desc: str) -> bool:
         dt = time.monotonic() - t0
         if r.returncode == 0:
             tail = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
+            if cmd == "gdelt-retention --apply":
+                result = next((ln for ln in reversed(tail) if ln.startswith("{")), None)
+                if result is None:
+                    logger.error("gdelt-retention-result missing structured output")
+                    return False
+                logger.info(f"gdelt-retention-result {result}")
+                return True
             # last FEW lines, not the last one: exit-0 jobs print per-source
             # ⚠ warnings mid-run (a 3-week Farside freeze was invisible
             # because the summary only kept f2's final LME line — D-021)

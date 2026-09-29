@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -59,6 +60,18 @@ def _old_fetch_log_rows(conn: sqlite3.Connection) -> int:
     ).fetchone()[0]
 
 
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
+def _record_file_sizes(result: dict, path: Path) -> None:
+    result["db_bytes_after"] = _file_size(path)
+    result["wal_bytes_after"] = _file_size(Path(f"{path}-wal"))
+
+
 def _verify_backup(db_path: Path, backup_path: Path) -> dict[str, int]:
     source = sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True)
     backup = sqlite3.connect(backup_path.as_uri() + "?mode=ro", uri=True)
@@ -113,6 +126,8 @@ def clean(
     cutoff = _cutoff(instant)
     path = Path(db_path).resolve()
     _require_database(path)
+    db_bytes_before = _file_size(path)
+    wal_bytes_before = _file_size(Path(f"{path}-wal"))
     conn = (
         _db.get_conn(path, allow_init=False)
         if apply
@@ -127,8 +142,11 @@ def clean(
             "tables": {table: _summary(conn, table, cutoff) for table in TABLES},
             "protected_events": _protected_events(conn, cutoff),
             "fetch_log_candidates": _old_fetch_log_rows(conn),
+            "db_bytes_before": db_bytes_before,
+            "wal_bytes_before": wal_bytes_before,
         }
         if not apply:
+            _record_file_sizes(result, path)
             return result
 
         if (
@@ -139,6 +157,9 @@ def clean(
             result["fetch_log_deleted"] = 0
             result["temporary_backup_bytes"] = 0
             result["temporary_backup_removed"] = True
+            result["remaining"] = {table: item["rows"] for table, item in result["tables"].items()}
+            result["quick_check"] = "not_run_no_deletions"
+            _record_file_sizes(result, path)
             return result
 
         temporary_backup, backup_bytes, backup_counts = _create_temporary_backup(path, instant)
@@ -172,12 +193,15 @@ def clean(
             conn.rollback()
             raise
         result["deleted"] = deleted
+        result["remaining"] = remaining
+        result["quick_check"] = quick_check
         result["fetch_log_deleted"] = fetch_log.rowcount
         result["freelist_pages"] = conn.execute("PRAGMA freelist_count").fetchone()[0]
         conn.close()
         conn = None
         temporary_backup.unlink()
         result["temporary_backup_removed"] = not temporary_backup.exists()
+        _record_file_sizes(result, path)
         return result
     finally:
         if conn is not None:
@@ -214,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true", help="delete eligible records")
     args = parser.parse_args(argv)
     result = clean(args.db, apply=args.apply)
-    print(result)
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0
 
 

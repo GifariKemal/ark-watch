@@ -1,8 +1,7 @@
 """surprise.py — σ surprise engine + ESI.
 
   z = (actual − consensus) / σ          — macro vs macro, NO price term
-  σ  = stdev(historical surprises, rolling 5y, updated per release,
-       winsorized ±4σ so a single 10σ event cannot poison it)
+  σ  = sample stdev over rolling 5y surprises after >10×MAD outlier exclusion
   n<30 obs → permanently low_conf in indicator_stats (quarterly indicators etc.)
   ESI = Σ z·e^(−Δt/90d) / Σ e^(−Δt/90d) — exponential decay; empty days carry
        the previous value (not 0)
@@ -13,6 +12,8 @@ later measured on the daily bar.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import math
 import sys
 import time
@@ -34,7 +35,9 @@ try:
 except Exception:
     _PS = {}
 WINDOW_YEARS = int(_PS.get("surprise_window_years", 5))
-MIN_OBS = int(_PS.get("surprise_min_obs", 30))  # below this, σ is flagged low_conf (quarterly indicators etc.)
+MIN_OBS = int(
+    _PS.get("surprise_min_obs", 30)
+)  # below this, σ is flagged low_conf (quarterly indicators etc.)
 WINSOR_SIGMA = float(_PS.get("surprise_winsor_sigma", 4.0))
 ESI_TAU_DAYS = float(_PS.get("surprise_esi_tau_days", 90.0))
 
@@ -153,25 +156,31 @@ def backfill_fmp(conn, years: int = 5, db_path: str | None = None) -> int:
 
 
 def compute_sigma(conn, as_of: str | None = None) -> dict:
-    """Compute σ per indicator_key (rolling 5y, winsorized) → indicator_stats.
+    """Compute and append a point-in-time sigma snapshot.
 
-    Returns {'n_indicators': n, 'low_conf': n_lc}.
+    Returns indicator counts and the immutable snapshot ID.
     """
-    now = as_of or datetime.now(UTC).isoformat(timespec="seconds")
-    cutoff = (datetime.now(UTC) - timedelta(days=365 * WINDOW_YEARS)).isoformat(timespec="seconds")
+    now_dt = datetime.fromisoformat(as_of) if as_of else datetime.now(UTC)
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=UTC)
+    now_dt = now_dt.astimezone(UTC)
+    now = now_dt.isoformat(timespec="microseconds")
+    snapshot_id = f"{now}#{time.time_ns()}"
+    cutoff = (now_dt - timedelta(days=365 * WINDOW_YEARS)).isoformat(timespec="microseconds")
     # One row per (key, date) — deterministic dedup across sources: a
     # NOT-EXISTS-by-rowid filter is not deterministic (the surviving row
     # depends on insertion order, so σ could change between runs without any
     # data change); GROUP BY + MAX is deterministic — duplicate rows of the
     # same event carry identical actual/consensus.
     rows = conn.execute(
-        "SELECT indicator_key, substr(ts_utc,1,10) d, MAX(actual), MAX(consensus) "
+        "SELECT indicator_key, substr(release_ts,1,10) d, MAX(actual), MAX(consensus) "
         "FROM events "
         "WHERE indicator_key IS NOT NULL AND actual IS NOT NULL AND consensus IS NOT NULL "
-        "AND ts_utc >= ? "
-        "GROUP BY indicator_key, substr(ts_utc,1,10) "
+        "AND release_ts IS NOT NULL AND release_ts NOT IN ('', 'na') "
+        "AND release_ts >= ? AND release_ts <= ? "
+        "GROUP BY indicator_key, substr(release_ts,1,10) "
         "ORDER BY indicator_key, d",
-        (cutoff,),
+        (cutoff, now),
     ).fetchall()
 
     by_key: dict[str, list[float]] = {}
@@ -187,6 +196,7 @@ def compute_sigma(conn, as_of: str | None = None) -> dict:
     # are EXCLUDED from the population (round-5); the old 'winsor4MAD'
     # label described a clipping step that no longer exists
     _window_label = f"{WINDOW_YEARS}y-excl10MAD"
+    snapshot_rows = []
     conn.execute("BEGIN IMMEDIATE")
     for key, diffs in by_key.items():
         n = len(diffs)
@@ -212,11 +222,13 @@ def compute_sigma(conn, as_of: str | None = None) -> dict:
         sigma = math.sqrt(sum((d - mean_c) ** 2 for d in kept) / max(n_k - 1, 1))
         low_conf = 1 if n < MIN_OBS else 0
         n_lc += low_conf
+        vintage = (key, sigma, n, _window_label, low_conf)
+        snapshot_rows.append(vintage)
         conn.execute(
             "INSERT OR REPLACE INTO indicator_stats"
             "(indicator, as_of, sigma, n_obs, window, low_conf)"
             " VALUES (?,?,?,?,?,?)",
-            (key, now[:10], sigma, n, _window_label, low_conf),
+            (key, now_dt.date().isoformat(), sigma, n, _window_label, low_conf),
         )
     # ROUND-2: drop this as_of's ghost keys — families removed by re-keying/
     # stub-cleanup otherwise keep stale σ rows forever and the indicator
@@ -224,14 +236,40 @@ def compute_sigma(conn, as_of: str | None = None) -> dict:
     conn.execute(
         "DELETE FROM indicator_stats WHERE as_of=? AND indicator NOT IN"
         " (SELECT DISTINCT indicator_key FROM events WHERE indicator_key IS NOT NULL)",
-        (now[:10],),
+        (now_dt.date().isoformat(),),
+    )
+    payload = json.dumps(snapshot_rows, separators=(",", ":"), ensure_ascii=True)
+    payload_sha256 = hashlib.sha256(payload.encode()).hexdigest()
+    method = json.dumps(
+        {
+            "engine": "rolling-mad-exclusion-v1",
+            "window_years": WINDOW_YEARS,
+            "min_obs": MIN_OBS,
+            "outlier_mad_multiple": 10,
+            "mad_normal_consistency": 1.4826,
+            "diff_rounding_decimals": 10,
+            "sample_standard_deviation": True,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    conn.execute(
+        "INSERT INTO indicator_sigma_snapshots"
+        "(snapshot_id,as_of,calculated_at,n_indicators,method,payload_sha256)"
+        " VALUES (?,?,?,?,?,?)",
+        (snapshot_id, now_dt.date().isoformat(), now, len(snapshot_rows), method, payload_sha256),
+    )
+    conn.executemany(
+        "INSERT INTO indicator_sigma_vintages"
+        "(snapshot_id,indicator,sigma,n_obs,window,low_conf) VALUES (?,?,?,?,?,?)",
+        [(snapshot_id, *row) for row in snapshot_rows],
     )
     conn.execute("COMMIT")
-    return {"n_indicators": len(by_key), "low_conf": n_lc}
+    return {"n_indicators": len(by_key), "low_conf": n_lc, "snapshot_id": snapshot_id}
 
 
 def update_surprise_z(conn) -> int:
-    """Fill surprise_z for paired events (using the latest σ per key).
+    """Recompute paired events and retain the exact sigma snapshot used.
 
     ROUND-5: recompute EVERY paired event each run (the vintage-locked
     `AND surprise_z IS NULL` fill meant sigma recalibrations never
@@ -240,20 +278,24 @@ def update_surprise_z(conn) -> int:
     NULL (mixed units / corruption — distrusted numbers never reach the
     brief), and previously-filled rows that NOW exceed 10 are re-NULLed.
     """
-    # Dedup by as_of: with multi-day stats rows, a plain dict comprehension
-    # would keep whichever row was scanned last; MAX(as_of) is explicit
+    snapshot = conn.execute(
+        "SELECT snapshot_id,calculated_at FROM indicator_sigma_snapshots "
+        "ORDER BY calculated_at DESC,snapshot_id DESC LIMIT 1"
+    ).fetchone()
+    if snapshot is None:
+        return 0
     sigma_by_key = {
-        r[0]: r[1]
+        r[0]: r[1:]
         for r in conn.execute(
-            "SELECT indicator, sigma FROM indicator_stats s "
-            "WHERE as_of=(SELECT MAX(as_of) FROM indicator_stats s2 "
-            "             WHERE s2.indicator=s.indicator)"
+            "SELECT indicator,sigma,n_obs,window,low_conf FROM indicator_sigma_vintages "
+            "WHERE snapshot_id=?",
+            (snapshot[0],),
         )
     }
     n = 0
     quarantined = 0
     conn.execute("BEGIN IMMEDIATE")
-    for key, sigma in sigma_by_key.items():
+    for key, (sigma, n_obs, window, low_conf) in sigma_by_key.items():
         if not sigma or sigma <= 0:
             continue
         # ROUND-5: no `AND surprise_z IS NULL` — every paired event is
@@ -261,32 +303,121 @@ def update_surprise_z(conn) -> int:
         # propagate; rows that now exceed the |z|>10 quarantine band are
         # re-NULLed in the same statement
         cur = conn.execute(
-            "UPDATE events SET surprise_z = (actual - consensus) / ? "
+            "UPDATE events SET surprise_z = (actual - consensus) / ?, sigma_vintage=?, "
+            "sigma_snapshot_id=?, sigma_n_obs=?, sigma_window=?, sigma_low_conf=? "
             "WHERE indicator_key=? "
             "AND actual IS NOT NULL AND consensus IS NOT NULL "
+            "AND release_ts IS NOT NULL AND release_ts NOT IN ('','na') AND release_ts<=? "
             "AND ABS((actual - consensus) / ?) <= 10",
-            (sigma, key, sigma),
+            (sigma, sigma, snapshot[0], n_obs, window, low_conf, key, snapshot[1], sigma),
         )
         n += cur.rowcount
         # ROUND-5: re-quarantine drift — previously-filled rows that the
         # CURRENT sigma now puts beyond |z|>10 go back to NULL
         conn.execute(
-            "UPDATE events SET surprise_z = NULL WHERE indicator_key=? "
+            "UPDATE events SET surprise_z=NULL,sigma_vintage=?,sigma_snapshot_id=?,"
+            "sigma_n_obs=?,sigma_window=?,sigma_low_conf=? WHERE indicator_key=? "
             "AND surprise_z IS NOT NULL "
+            "AND release_ts IS NOT NULL AND release_ts NOT IN ('','na') AND release_ts<=? "
             "AND ABS((actual - consensus) / ?) > 10",
-            (key, sigma),
+            (sigma, snapshot[0], n_obs, window, low_conf, key, snapshot[1], sigma),
         )
         q = conn.execute(
             "SELECT COUNT(*) FROM events WHERE indicator_key=? "
             "AND surprise_z IS NULL AND actual IS NOT NULL "
-            "AND consensus IS NOT NULL AND ABS((actual - consensus) / ?) > 10",
-            (key, sigma),
+            "AND consensus IS NOT NULL AND release_ts<=? "
+            "AND ABS((actual - consensus) / ?) > 10",
+            (key, snapshot[1], sigma),
         ).fetchone()[0]
         quarantined += q
-    conn.execute("COMMIT")
     if quarantined:
         print(f"  quarantined: {quarantined} events with |z|>10 (mixed units/bad data)")
+    conn.execute(
+        "UPDATE events SET surprise_z=NULL,sigma_vintage=NULL,sigma_snapshot_id=NULL,"
+        "sigma_n_obs=NULL,sigma_window=NULL,sigma_low_conf=NULL "
+        "WHERE actual IS NOT NULL AND consensus IS NOT NULL "
+        "AND (release_ts IS NULL OR release_ts IN ('','na') OR release_ts>? "
+        "OR indicator_key IS NULL OR indicator_key NOT IN "
+        "(SELECT indicator FROM indicator_sigma_vintages WHERE snapshot_id=?))",
+        (snapshot[1], snapshot[0]),
+    )
+    conn.execute("COMMIT")
     return n
+
+
+def _esi_inputs(conn, as_of: datetime, lookback_days: int):
+    as_of = as_of.astimezone(UTC)
+    snapshot = conn.execute(
+        "SELECT snapshot_id,calculated_at,method,payload_sha256 FROM indicator_sigma_snapshots "
+        "WHERE calculated_at<=? ORDER BY calculated_at DESC,snapshot_id DESC LIMIT 1",
+        (as_of.isoformat(timespec="microseconds"),),
+    ).fetchone()
+    if snapshot is None:
+        return None, None
+    snapshot_id, calculated_at, method, payload_sha256 = snapshot
+    sigma_by_key = {
+        r[0]: (r[1], r[2], r[3], r[4])
+        for r in conn.execute(
+            "SELECT indicator,sigma,n_obs,window,low_conf FROM indicator_sigma_vintages "
+            "WHERE snapshot_id=?",
+            (snapshot_id,),
+        )
+    }
+    cutoff = (as_of - timedelta(days=lookback_days)).isoformat(timespec="microseconds")
+    rows = conn.execute(
+        "SELECT indicator_key,substr(release_ts,1,10) d,AVG(actual-consensus) "
+        "FROM events WHERE indicator_key IS NOT NULL AND actual IS NOT NULL "
+        "AND consensus IS NOT NULL AND release_ts IS NOT NULL AND release_ts NOT IN ('','na') "
+        "AND release_ts>=? AND release_ts<=? "
+        "GROUP BY indicator_key,substr(release_ts,1,10) ORDER BY d,indicator_key",
+        (cutoff, as_of.isoformat(timespec="microseconds")),
+    ).fetchall()
+    daily = {}
+    for key, day, surprise in rows:
+        sigma_row = sigma_by_key.get(key)
+        if sigma_row is None:
+            continue
+        sigma, _n_obs, _window, low_conf = sigma_row
+        if low_conf or not sigma or sigma <= 0:
+            continue
+        z = surprise / sigma
+        if abs(z) > 10:
+            continue
+        daily.setdefault((key, day), []).append(z)
+
+    num = den = 0.0
+    for (_key, day), zs in daily.items():
+        z = sum(zs) / len(zs)
+        z = min(max(z, -WINSOR_SIGMA), WINSOR_SIGMA)
+        event_time = datetime.fromisoformat(day + "T12:00:00+00:00")
+        age = (as_of - event_time).total_seconds() / 86400.0
+        weight = math.exp(-age / ESI_TAU_DAYS)
+        num += z * weight
+        den += weight
+    esi = num / den if den > 0 else None
+    if not payload_sha256:
+        vintage_rows = [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT indicator,sigma,n_obs,window,low_conf FROM indicator_sigma_vintages "
+                "WHERE snapshot_id=? ORDER BY indicator",
+                (snapshot_id,),
+            )
+        ]
+        payload_sha256 = hashlib.sha256(
+            json.dumps(vintage_rows, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest()
+    inputs = {
+        "engine": "esi-v2",
+        "sigma_snapshot_id": snapshot_id,
+        "sigma_snapshot_calculated_at": calculated_at,
+        "sigma_snapshot_method": method,
+        "sigma_snapshot_sha256": payload_sha256,
+        "tau_days": ESI_TAU_DAYS,
+        "lookback_days": lookback_days,
+        "z_clip": WINSOR_SIGMA,
+    }
+    return esi, inputs
 
 
 def compute_esi(conn, as_of: datetime | None = None, lookback_days: int = 365) -> float | None:
@@ -298,34 +429,18 @@ def compute_esi(conn, as_of: datetime | None = None, lookback_days: int = 365) -
     the index.
     """
     now = as_of or datetime.now(UTC)
-    # Dedup per (key, date) — cross-source duplicates must not double-weight
-    rows = conn.execute(
-        "SELECT substr(e.ts_utc,1,10) d, AVG(e.surprise_z) FROM events e "
-        "JOIN indicator_stats s ON s.indicator = e.indicator_key AND s.low_conf = 0 "
-        "AND s.as_of=(SELECT MAX(as_of) FROM indicator_stats s2 "
-        "             WHERE s2.indicator = s.indicator) "
-        "WHERE e.surprise_z IS NOT NULL AND e.ts_utc >= ? "
-        "GROUP BY e.indicator_key, substr(e.ts_utc,1,10) "
-        "ORDER BY d",
-        ((now - timedelta(days=lookback_days)).isoformat(timespec="seconds"),),
-    ).fetchall()
-    num = den = 0.0
-    for d, z_avg in rows:
-        z_c = min(max(z_avg, -WINSOR_SIGMA), WINSOR_SIGMA)
-        # Use midday for the age (±12h precision is enough for 90-day decay)
-        dt = (now - datetime.fromisoformat(d + "T12:00:00+00:00")).total_seconds() / 86400.0
-        w = math.exp(-dt / ESI_TAU_DAYS)
-        num += z_c * w
-        den += w
-    return (num / den) if den > 0 else None
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    value, _inputs = _esi_inputs(conn, now, lookback_days)
+    return value
 
 
 def store_esi(conn) -> float | None:
     """Daily ESI → computed_signals (audit trail + input to the flip trigger)."""
-    esi = compute_esi(conn)
+    now = datetime.now(UTC)
+    esi, inputs = _esi_inputs(conn, now, 365)
     if esi is None:
         return None
-    now = datetime.now(UTC)
     conn.execute("BEGIN IMMEDIATE")
     conn.execute(
         "INSERT OR REPLACE INTO computed_signals"
@@ -338,7 +453,7 @@ def store_esi(conn) -> float | None:
             now.isoformat(timespec="seconds"),
             round(esi, 4),
             "POSITIVE" if esi > 0 else "NEGATIVE",
-            f'{{"tau_days": {ESI_TAU_DAYS:g}}}',
+            json.dumps(inputs, sort_keys=True, separators=(",", ":")),
         ),
     )
     conn.execute("COMMIT")
@@ -371,9 +486,10 @@ def main(argv: list[str] | None = None) -> int:
         total = backfill_fmp(conn, years=a.backfill)
         print(f"total new rows: {total}")
 
-    print("=== σ engine (rolling 5y, winsorized ±4σ) ===")
+    print("=== σ engine (rolling 5y, >10 MAD outlier exclusion) ===")
     r = compute_sigma(conn)
     print(f"  {r['n_indicators']} indicators · {r['low_conf']} low_conf (n<{MIN_OBS})")
+    print(f"  snapshot: {r['snapshot_id']}")
     for row in conn.execute(
         "SELECT indicator, sigma, n_obs, low_conf FROM indicator_stats ORDER BY n_obs DESC LIMIT 8"
     ).fetchall():

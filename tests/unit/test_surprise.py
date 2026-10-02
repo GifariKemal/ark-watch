@@ -5,7 +5,9 @@ exponential decay e^(-dt/90d). Also covers indicator key normalization."""
 
 from __future__ import annotations
 
+import json
 import math
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -15,6 +17,7 @@ from arkwatch.qa.calendar import indicator_key, norm
 from arkwatch.qa.surprise import (
     compute_esi,
     compute_sigma,
+    store_esi,
     update_surprise_z,
 )
 
@@ -56,7 +59,7 @@ def conn(tmp_path):
     c.close()
 
 
-def _seed_events(conn, diffs: list[float], start="2026-08-01", key="TEST IND", consensus=50.0):
+def _seed_events(conn, diffs: list[float], start="2025-10-01", key="TEST IND", consensus=50.0):
     """Seed n weekly releases with surprise = actual - consensus = diffs[i]."""
     d0 = datetime.fromisoformat(start).replace(tzinfo=UTC)
     rows = []
@@ -104,6 +107,14 @@ class TestSigma:
         assert low_conf == 0  # meets MIN_OBS
         expected = math.sqrt(sum((d - sum(diffs) / 40) ** 2 for d in diffs) / 39)
         assert sigma == pytest.approx(expected, rel=1e-6)
+        vintage = conn.execute(
+            "SELECT n_indicators,payload_sha256 FROM indicator_sigma_snapshots WHERE snapshot_id=?",
+            (r["snapshot_id"],),
+        ).fetchone()
+        assert vintage[0] == 1 and len(vintage[1]) == 64
+        assert conn.execute(
+            "SELECT sigma FROM indicator_sigma_vintages WHERE snapshot_id=?", (r["snapshot_id"],)
+        ).fetchone()[0] == pytest.approx(expected, rel=1e-6)
 
     def test_float_dust_rounded_data(self, conn):
         """Float dust from 0.1-precision calendar data must not collapse MAD.
@@ -176,24 +187,102 @@ class TestSigma:
         assert z == pytest.approx(
             1.0 / conn.execute("SELECT sigma FROM indicator_stats").fetchone()[0], rel=1e-6
         )
+        audit = conn.execute(
+            "SELECT sigma_vintage,sigma_snapshot_id,sigma_n_obs,sigma_window,sigma_low_conf "
+            "FROM events ORDER BY ts_utc LIMIT 1"
+        ).fetchone()
+        assert audit[0] == pytest.approx(
+            conn.execute("SELECT sigma FROM indicator_stats").fetchone()[0]
+        )
+        assert audit[1] and audit[2:] == (36, "5y-excl10MAD", 0)
+
+    def test_sigma_snapshots_are_append_only(self, conn):
+        _seed_events(conn, [1.0, -1.0] * 20)
+        result = compute_sigma(conn)
+        with pytest.raises(sqlite3.IntegrityError, match="sigma snapshots are immutable"):
+            conn.execute(
+                "UPDATE indicator_sigma_snapshots SET method='changed' WHERE snapshot_id=?",
+                (result["snapshot_id"],),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="sigma vintages are immutable"):
+            conn.execute(
+                "DELETE FROM indicator_sigma_vintages WHERE snapshot_id=?",
+                (result["snapshot_id"],),
+            )
 
 
 class TestEsi:
     def test_decay_weights_recent_more(self, conn):
         _seed_events(
-            conn, [1.0, -1.0, 1.0, -1.0] * 10, start="2026-05-01"
-        )  # weekly cadence → latest release lands in ~August
-        compute_sigma(conn)
-        update_surprise_z(conn)
+            conn, [1.0, -1.0, 1.0, -1.0] * 10, start="2025-11-01"
+        )  # weekly cadence; all inputs are known by the replay date
         now = datetime(2026, 9, 2, tzinfo=UTC)
+        compute_sigma(conn, as_of=now.isoformat())
+        update_surprise_z(conn)
         esi = compute_esi(conn, as_of=now)
         assert esi is not None
         assert -5.0 < esi < 5.0
 
+    def test_replay_uses_only_sigma_vintage_available_at_asof(self, conn):
+        _seed_events(conn, [0.2, -0.2] * 20, start="2025-11-01")
+        first_asof = datetime(2026, 9, 1, tzinfo=UTC)
+        first = compute_sigma(conn, as_of=first_asof.isoformat())
+        update_surprise_z(conn)
+        replay_asof = datetime(2026, 9, 2, tzinfo=UTC)
+        old_esi = compute_esi(conn, as_of=replay_asof)
+        assert old_esi is not None
+
+        release = "2026-09-03T12:00:00+00:00"
+        conn.execute(
+            "INSERT INTO events(event_uid,ts_utc,release_ts,country,name,normalized_name,"
+            "importance,consensus,consensus_source,actual,actual_source,previous,"
+            "surprise_z,is_curated,indicator_key) VALUES ("
+            "'future-release',?,?,'US','Test Later','TEST IND','high',50,'FMP',51,'FMP',"
+            "NULL,NULL,0,'TEST IND')",
+            (release, release),
+        )
+        pending = "2026-09-05T12:00:00+00:00"
+        conn.execute(
+            "INSERT INTO events(event_uid,ts_utc,release_ts,country,name,normalized_name,"
+            "importance,consensus,consensus_source,actual,actual_source,previous,"
+            "surprise_z,is_curated,indicator_key) VALUES ("
+            "'not-yet-released',?,?,'US','Pending','TEST IND','high',50,'FMP',52,'FMP',"
+            "NULL,NULL,0,'TEST IND')",
+            (pending, pending),
+        )
+        later_asof = datetime(2026, 9, 4, tzinfo=UTC)
+        later = compute_sigma(conn, as_of=later_asof.isoformat())
+        update_surprise_z(conn)
+        pending_z = conn.execute(
+            "SELECT surprise_z,sigma_snapshot_id FROM events WHERE event_uid='not-yet-released'"
+        ).fetchone()
+
+        replay_after_new_data = compute_esi(conn, as_of=replay_asof)
+        new_esi = compute_esi(conn, as_of=datetime(2026, 9, 5, tzinfo=UTC))
+        assert replay_after_new_data == pytest.approx(old_esi)
+        assert new_esi != pytest.approx(old_esi)
+        assert first["snapshot_id"] != later["snapshot_id"]
+        assert pending_z == (None, None)
+
+    def test_esi_persists_sigma_vintage_reference(self, conn):
+        _seed_events(conn, [0.2, -0.2] * 20, start="2025-11-01")
+        sigma = compute_sigma(conn)
+        update_surprise_z(conn)
+        result = store_esi(conn)
+        assert result is not None
+        raw_inputs = conn.execute(
+            "SELECT inputs_json FROM computed_signals WHERE signal_id='esi'"
+        ).fetchone()[0]
+        inputs = json.loads(raw_inputs)
+        assert inputs["engine"] == "esi-v2"
+        assert inputs["sigma_snapshot_id"] == sigma["snapshot_id"]
+        assert len(inputs["sigma_snapshot_sha256"]) == 64
+
     def test_clip_bad_z(self, conn):
         # a single wild z row (24 sigma) must not drag the ESI far
         _seed_events(conn, [0.1, -0.1] * 20)
-        compute_sigma(conn)
+        now = datetime(2026, 9, 2, tzinfo=UTC)
+        compute_sigma(conn, as_of=now.isoformat())
         update_surprise_z(conn)
         conn.execute(
             "INSERT INTO events(event_uid,ts_utc,release_ts,country,name,normalized_name,"
@@ -203,7 +292,6 @@ class TestEsi:
             "'Bad','BAD','high',1,'FMP',200,'FMP',1,-24.0,0,'BAD')"
         )
         conn.commit()
-        now = datetime(2026, 9, 2, tzinfo=UTC)
         esi = compute_esi(conn, as_of=now)
         # 'BAD' has no stats row (implicitly low-confidence) → excluded from ESI;
         # TEST IND z values are small → ESI stays near 0
@@ -213,8 +301,8 @@ class TestEsi:
         # a low-confidence indicator (n=1, large z) must not drive the ESI
         _seed_events(conn, [0.2, -0.2] * 20)  # confident, small z
         _seed_events(conn, [8.0], key="ONE OFF")  # single release → low_conf
-        compute_sigma(conn)
-        update_surprise_z(conn)
         now = datetime(2026, 9, 2, tzinfo=UTC)
+        compute_sigma(conn, as_of=now.isoformat())
+        update_surprise_z(conn)
         esi = compute_esi(conn, as_of=now)
         assert esi is not None and abs(esi) < 0.5

@@ -16,7 +16,7 @@ import sqlite3
 from datetime import UTC
 from pathlib import Path
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 SCHEMA_V1 = """
 CREATE TABLE series_registry (
@@ -498,6 +498,73 @@ ALTER TABLE gdelt_gkg ADD COLUMN raw_record_gzip BLOB;
   last_window_ts_utc TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+""",
+    30: """ALTER TABLE events ADD COLUMN sigma_vintage REAL;
+ALTER TABLE events ADD COLUMN sigma_snapshot_id TEXT;
+ALTER TABLE events ADD COLUMN sigma_n_obs INTEGER;
+ALTER TABLE events ADD COLUMN sigma_window TEXT;
+ALTER TABLE events ADD COLUMN sigma_low_conf INTEGER;
+CREATE TABLE indicator_sigma_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  as_of TEXT NOT NULL,
+  calculated_at TEXT NOT NULL,
+  n_indicators INTEGER NOT NULL,
+  method TEXT NOT NULL,
+  payload_sha256 TEXT NOT NULL
+);
+CREATE TABLE indicator_sigma_vintages (
+  snapshot_id TEXT NOT NULL REFERENCES indicator_sigma_snapshots(snapshot_id),
+  indicator TEXT NOT NULL,
+  sigma REAL NOT NULL,
+  n_obs INTEGER NOT NULL,
+  window TEXT NOT NULL,
+  low_conf INTEGER NOT NULL,
+  PRIMARY KEY (snapshot_id, indicator)
+);
+CREATE INDEX idx_sigma_snapshots_calculated ON indicator_sigma_snapshots(calculated_at DESC);
+CREATE TRIGGER immutable_sigma_snapshots_update BEFORE UPDATE ON indicator_sigma_snapshots
+BEGIN SELECT RAISE(ABORT, 'sigma snapshots are immutable'); END;
+CREATE TRIGGER immutable_sigma_snapshots_delete BEFORE DELETE ON indicator_sigma_snapshots
+BEGIN SELECT RAISE(ABORT, 'sigma snapshots are immutable'); END;
+CREATE TRIGGER immutable_sigma_vintages_update BEFORE UPDATE ON indicator_sigma_vintages
+BEGIN SELECT RAISE(ABORT, 'sigma vintages are immutable'); END;
+CREATE TRIGGER immutable_sigma_vintages_delete BEFORE DELETE ON indicator_sigma_vintages
+BEGIN SELECT RAISE(ABORT, 'sigma vintages are immutable'); END;
+INSERT OR IGNORE INTO indicator_sigma_snapshots
+  (snapshot_id,as_of,calculated_at,n_indicators,method,payload_sha256)
+SELECT s.run_id, i.as_of, s.computed_at, COUNT(*), 'legacy-daily-sigma', ''
+FROM indicator_stats i JOIN computed_signals s
+  ON s.signal_id='esi' AND s.ts=i.as_of
+WHERE s.run_id IS NOT NULL AND s.computed_at IS NOT NULL
+GROUP BY s.run_id,i.as_of,s.computed_at;
+INSERT OR IGNORE INTO indicator_sigma_vintages
+  (snapshot_id,indicator,sigma,n_obs,window,low_conf)
+SELECT s.run_id,i.indicator,i.sigma,i.n_obs,i.window,i.low_conf
+FROM indicator_stats i JOIN computed_signals s
+  ON s.signal_id='esi' AND s.ts=i.as_of
+WHERE s.run_id IS NOT NULL AND s.computed_at IS NOT NULL;
+UPDATE events SET
+  sigma_vintage=(SELECT v.sigma FROM indicator_sigma_vintages v
+                 WHERE v.snapshot_id=(SELECT MAX(snapshot_id) FROM indicator_sigma_snapshots)
+                   AND v.indicator=events.indicator_key),
+  sigma_snapshot_id=(SELECT MAX(snapshot_id) FROM indicator_sigma_snapshots),
+  sigma_n_obs=(SELECT v.n_obs FROM indicator_sigma_vintages v
+               WHERE v.snapshot_id=(SELECT MAX(snapshot_id) FROM indicator_sigma_snapshots)
+                 AND v.indicator=events.indicator_key),
+  sigma_window=(SELECT v.window FROM indicator_sigma_vintages v
+                WHERE v.snapshot_id=(SELECT MAX(snapshot_id) FROM indicator_sigma_snapshots)
+                  AND v.indicator=events.indicator_key),
+  sigma_low_conf=(SELECT v.low_conf FROM indicator_sigma_vintages v
+                  WHERE v.snapshot_id=(SELECT MAX(snapshot_id) FROM indicator_sigma_snapshots)
+                    AND v.indicator=events.indicator_key)
+WHERE events.surprise_z IS NOT NULL
+  AND events.release_ts IS NOT NULL AND events.release_ts NOT IN ('', 'na')
+  AND events.release_ts <= (SELECT calculated_at FROM indicator_sigma_snapshots
+                            WHERE snapshot_id=(SELECT MAX(snapshot_id)
+                                               FROM indicator_sigma_snapshots))
+  AND EXISTS (SELECT 1 FROM indicator_sigma_vintages v
+              WHERE v.snapshot_id=(SELECT MAX(snapshot_id) FROM indicator_sigma_snapshots)
+                AND v.indicator=events.indicator_key);
 """,
 }
 

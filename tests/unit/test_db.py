@@ -24,6 +24,8 @@ def test_init_creates_all_tables_and_version(conn):
         "instrument_prices",
         "events",
         "indicator_stats",
+        "indicator_sigma_snapshots",
+        "indicator_sigma_vintages",
         "cot_raw",
         "flows_daily",
         "flows_periodic",
@@ -63,19 +65,62 @@ def test_gdelt_gzip_migration_preserves_existing_raw_json(tmp_path):
         "VALUES (?,?,?,?,?)",
         ("event-1", "20260925", "2026-09-25T00:00:00+00:00", "now", raw_json),
     )
+    conn.execute(
+        "INSERT INTO indicator_stats(indicator,as_of,sigma,n_obs,window,low_conf) "
+        "VALUES ('TEST','2026-09-01',1.0,40,'5y-excl10MAD',0)"
+    )
+    conn.execute(
+        "INSERT INTO computed_signals"
+        "(signal_id,ts,run_id,computed_at,value,state,inputs_json) "
+        "VALUES ('esi','2026-09-01','2026-09-01T23:59:00+00:00',"
+        "'2026-09-01T23:59:00+00:00',0,'NEUTRAL','{}')"
+    )
+    conn.execute(
+        "INSERT INTO events(event_uid,ts_utc,release_ts,country,name,normalized_name,"
+        "actual,consensus,surprise_z,indicator_key) VALUES "
+        "('event-1','2026-09-01T12:00:00+00:00','2026-09-01T12:00:00+00:00',"
+        "'US','Test','Test',11,10,1,'TEST')"
+    )
     for table in ("gdelt_events", "gdelt_mentions", "gdelt_gkg"):
         conn.execute(f"ALTER TABLE {table} DROP COLUMN raw_record_gzip")
     conn.execute("DROP TABLE gdelt_feed_state")
+    conn.execute("DROP TABLE indicator_sigma_vintages")
+    conn.execute("DROP TABLE indicator_sigma_snapshots")
+    for column in (
+        "sigma_vintage",
+        "sigma_snapshot_id",
+        "sigma_n_obs",
+        "sigma_window",
+        "sigma_low_conf",
+    ):
+        conn.execute(f"ALTER TABLE events DROP COLUMN {column}")
     conn.execute("DELETE FROM schema_migrations WHERE version>=28")
     conn.close()
 
     migrated = db.get_conn(path, allow_init=True)
-    assert migrated.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == db.SCHEMA_VERSION
+    assert (
+        migrated.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+        == db.SCHEMA_VERSION
+    )
     assert migrated.execute("SELECT raw_record_json FROM gdelt_events").fetchone()[0] == raw_json
     assert "raw_record_gzip" in {
         row[1] for row in migrated.execute("PRAGMA table_info(gdelt_events)")
     }
     assert migrated.execute("SELECT COUNT(*) FROM gdelt_feed_state").fetchone()[0] == 0
+    sigma_snapshot = migrated.execute(
+        "SELECT snapshot_id,n_indicators FROM indicator_sigma_snapshots"
+    ).fetchone()
+    assert sigma_snapshot == ("2026-09-01T23:59:00+00:00", 1)
+    assert migrated.execute(
+        "SELECT sigma_vintage,sigma_snapshot_id,sigma_n_obs FROM events WHERE event_uid='event-1'"
+    ).fetchone() == (1.0, sigma_snapshot[0], 40)
+    sigma_snapshot = migrated.execute(
+        "SELECT snapshot_id,n_indicators FROM indicator_sigma_snapshots"
+    ).fetchone()
+    assert sigma_snapshot == ("2026-09-01T23:59:00+00:00", 1)
+    assert migrated.execute(
+        "SELECT sigma_vintage,sigma_snapshot_id,sigma_n_obs FROM events WHERE event_uid='event-1'"
+    ).fetchone() == (1.0, sigma_snapshot[0], 40)
     migrated.close()
 
 

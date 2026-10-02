@@ -83,9 +83,7 @@ def _seed(conn) -> None:
 
     # DTWEXBGS: 25 daily points, -0.2/day → 20d momentum ≈ -3.4% → WEAK
     # smile WITH the "(as of MM-DD)" suffix — exactly the R7 bug shape.
-    dtw = [
-        obs("FRED:DTWEXBGS", _day(24 - i), 120.0 - 0.2 * i) for i in range(25)
-    ]
+    dtw = [obs("FRED:DTWEXBGS", _day(24 - i), 120.0 - 0.2 * i) for i in range(25)]
     # VIX + real yield: two distinct prints each → overnight-changes lines
     vix = [obs("FRED:VIXCLS", _day(1), 18.0), obs("FRED:VIXCLS", _day(0), 19.5)]
     ry = [obs("FRED:DFII10", _day(1), 1.90), obs("FRED:DFII10", _day(0), 2.05)]
@@ -123,20 +121,42 @@ def _seed(conn) -> None:
     # events + indicator_stats: one scored release → Surprise/ESI line;
     # one upcoming high-importance release → Event radar
     conn.executemany(
-        "INSERT INTO events(event_uid, ts_utc, country, name, normalized_name,"
+        "INSERT INTO events(event_uid, ts_utc, release_ts, country, name, normalized_name,"
         " importance, consensus, actual, surprise_z, indicator_key)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         [
-            ("t-esi", f"{_day(1)}T13:30:00+00:00", "US", "TEST CPI", "TEST CPI",
-             "medium", 0.2, 1.4, 1.2, "TESTCPI"),
-            ("t-radar", f"{_day(-2)}T13:30:00+00:00", "US", "TEST NFP", "TEST NFP",
-             "high", None, None, None, None),
+            ("t-esi", now, now, "US", "TEST CPI", "TEST CPI", "medium", 0.2, 1.4, 1.2, "TESTCPI"),
+            (
+                "t-radar",
+                f"{_day(-2)}T13:30:00+00:00",
+                f"{_day(-2)}T13:30:00+00:00",
+                "US",
+                "TEST NFP",
+                "TEST NFP",
+                "high",
+                None,
+                None,
+                None,
+                None,
+            ),
         ],
     )
     conn.execute(
         "INSERT INTO indicator_stats(indicator, as_of, sigma, n_obs, window, low_conf)"
         " VALUES (?,?,?,?,?,0)",
         ("TESTCPI", _day(0), 1.0, 60, "5y"),
+    )
+    sigma_snapshot_id = f"fixture-{now}"
+    conn.execute(
+        "INSERT INTO indicator_sigma_snapshots"
+        "(snapshot_id,as_of,calculated_at,n_indicators,method,payload_sha256) "
+        "VALUES (?,?,?,?,?,?)",
+        (sigma_snapshot_id, _day(0), now, 1, "fixture", "fixture"),
+    )
+    conn.execute(
+        "INSERT INTO indicator_sigma_vintages"
+        "(snapshot_id,indicator,sigma,n_obs,window,low_conf) VALUES (?,?,?,?,?,?)",
+        (sigma_snapshot_id, "TESTCPI", 1.0, 60, "5y", 0),
     )
 
     # fetch_log: two OK fetches today → Sources ratio

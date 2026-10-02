@@ -137,6 +137,13 @@ def harvest_alfred_vintages(
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        pass
+
     p = argparse.ArgumentParser(prog="arkwatch alfred")
     p.add_argument("--db", default=str(DEFAULT_DB))
     p.add_argument(

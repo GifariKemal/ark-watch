@@ -354,7 +354,8 @@ def assess_freshness(
         return Freshness("EMPTY", latest_iso, expected_iso, None)
     if expected is None:
         return Freshness("WAITING" if market_open else "UNKNOWN", latest_iso, None, None)
-    lag = (expected - latest).total_seconds() / 60
+    latest_slot = _floor_interval(latest)
+    lag = (expected - latest_slot).total_seconds() / 60
     if lag < 0:
         status = "OUT_OF_SESSION" if regular_only and symbol in EQUITY_SYMBOLS else "FUTURE"
         return Freshness(status, latest_iso, expected_iso, lag)

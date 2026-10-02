@@ -219,6 +219,24 @@ def test_future_or_unzoned_bar_is_never_marked_fresh():
     assert unzoned.status == "UNKNOWN"
 
 
+def test_bar_with_closing_seconds_within_slot_is_not_future():
+    in_slot = market_timeline.assess_freshness(
+        "BTCUSD",
+        [_bar("2026-09-26T13:54:55+00:00")],
+        datetime.fromisoformat("2026-09-26T13:55:02+00:00"),
+    )
+    assert in_slot.status == "FRESH"
+    assert in_slot.lag_minutes == 0.0
+
+    postmarket = market_timeline.assess_freshness(
+        "SPY",
+        [_bar("2026-09-25T23:59:46+00:00")],
+        datetime.fromisoformat("2026-09-26T02:00:00+00:00"),
+    )
+    assert postmarket.status == "CLOSED"
+    assert postmarket.lag_minutes == 0.0
+
+
 def test_crypto_is_continuous_on_weekends_and_stales_after_three_intervals():
     now = datetime.fromisoformat("2026-09-26T14:00:00+00:00")
     fresh = market_timeline.assess_freshness("BTCUSD", [_bar("2026-09-26T13:55:00+00:00")], now)

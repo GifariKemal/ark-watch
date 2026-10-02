@@ -381,6 +381,24 @@ series:
   # ADDED 2026-09-17 (calendar audit): leading indicator — permits lead starts
   # (authorization precedes construction).
 
+- series_id: FRED:MORTGAGE30US
+  name: "30-Year Fixed Rate Mortgage Average in the United States (Freddie Mac PMMS)"
+  block: D
+  tier: 1
+  unit: "percent"
+  value_format: pct
+  freq: W
+  ts_convention: obs_day
+  release_schedule: "weekly; Thursday ~12:00 ET"
+  expected_start: "1971-04-02"
+  sanity_min: 2.0
+  sanity_max: 20.0
+  primary_source: "FRED:MORTGAGE30US"
+  secondary_source: null
+  tolerance: null
+  active: 1
+  # Canonical US 30Y mortgage rate from Freddie Mac Primary Mortgage Market Survey (replaces retired Atlanta Fed CQER).
+
 - series_id: FRED:GACDFSA066MSFRBPHI
   name: "Philly Fed Mfg Survey — General Activity (diffusion index, SA)"
   block: D

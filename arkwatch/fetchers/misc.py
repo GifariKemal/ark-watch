@@ -112,18 +112,7 @@ def fetch_earnings_calendar(from_d: str, to_d: str, page: int = 0) -> list[dict]
 def fetch_mpt_mortgage() -> dict | None:
     """Atlanta Fed Mortgage Analytics Tool (30Y fixed mortgage rate).
 
-    Simple scrape of the public page for the latest rate.
+    NOTE: The Atlanta Fed CQER page was retired in 2021. The canonical 30Y
+    fixed mortgage rate is tracked via FRED:MORTGAGE30US (Freddie Mac PMMS).
     """
-    from curl_cffi import requests as creq
-
-    s = creq.Session(impersonate="chrome")
-    r = s.get("https://www.atlantafed.org/cqer/research/mortgage-analytics", timeout=(10, 30))
-    if r.status_code != 200:
-        return None
-    # find an "X.XX%" figure near the '30-Year Fixed Rate' label
-    import re
-
-    m = re.search(r"30[- ]Year[^%]*?(\d+\.\d+)\s*%", r.text)
-    if m:
-        return {"rate_30y": float(m.group(1))}
     return None

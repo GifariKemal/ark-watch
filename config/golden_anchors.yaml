@@ -117,22 +117,22 @@ golden_anchors:
   # --- Inflation ------------------------------------------------------
 
   - series_id: CPIAUCSL
-    anchor_date: "2026-07-01"
-    expected: 332.813
+    anchor_date: "2026-08-01"
+    expected: 334.131
     tolerance: 0.01      # NSA index, 3dp; base-year revisions are rare
-    provenance: "live-test verified 2026-08-28, FRED CPIAUCSL"
+    provenance: "quarterly recalibrated 2026-10-02, FRED CPIAUCSL"
 
   - series_id: PCEPILFE
-    anchor_date: "2026-07-01"
-    expected: 130.658
+    anchor_date: "2026-08-01"
+    expected: 130.455
     tolerance: 0.01      # core PCE index, 3dp
-    provenance: "live-test verified 2026-08-28, FRED PCEPILFE"
+    provenance: "quarterly recalibrated 2026-10-02, FRED PCEPILFE"
 
   - series_id: MICH
-    anchor_date: "2026-07-01"
-    expected: 4.2
+    anchor_date: "2026-08-01"
+    expected: 4.0
     tolerance: 0.05      # survey, 1dp; half-ulp
-    provenance: "live-test verified 2026-08-28, FRED MICH"
+    provenance: "quarterly recalibrated 2026-10-02, FRED MICH"
 
   - series_id: DCOILWTICO
     anchor_date: "2026-08-25"
@@ -238,10 +238,10 @@ golden_anchors:
     provenance: "live-test verified 2026-08-27, FRED ICSA"
 
   - series_id: UNRATE
-    anchor_date: "2026-07-01"
+    anchor_date: "2026-08-01"
     expected: 4.1
     tolerance: 0.05      # unemployment rate, 1dp; half-ulp
-    provenance: "live-test verified 2026-08-28, FRED UNRATE"
+    provenance: "quarterly recalibrated 2026-10-02, FRED UNRATE"
 
   - series_id: PAYEMS
     anchor_date: "2026-08-01"
@@ -258,19 +258,16 @@ golden_anchors:
     provenance: "live-test verified 2026-08-28, FRED SAHMREALTIME"
 
   - series_id: INDPRO
-    anchor_date: "2026-07-01"
-    expected: 103.0454
+    anchor_date: "2026-08-01"
+    expected: 103.0682
     tolerance: 0.005     # IP index, 4dp
-    provenance: "recalibrated 2026-09-18 (round-8 audit): G.17 revision cycle moved the
-      July index 102.9939 → 103.0454 after the 08-28 anchor was cut; FMP
-      crossval agrees exactly with the revised value; FRED live"
+    provenance: "quarterly recalibrated 2026-10-02 (G.17 revision cycle), FRED INDPRO"
 
   - series_id: RSAFS
-    anchor_date: "2026-07-01"
-    expected: 764462
+    anchor_date: "2026-08-01"
+    expected: 737763
     tolerance: 100       # $ millions; monthly revisions with each retail-sales cycle
-    provenance: "recalibrated 2026-09-17 (round-2 audit): June level revised 763,602 to 764,462 with the September retail-sales cycle; FRED live"
-
+    provenance: "quarterly recalibrated 2026-10-02 (Census annual benchmark revision), FRED RSAFS"
   - series_id: GDPNOW
     anchor_date: "2026-04-01"
     expected: 1.54
@@ -318,10 +315,10 @@ golden_anchors:
     provenance: "live-test verified 2026-08-28, FRED RRPONTSYD"
 
   - series_id: M2SL
-    anchor_date: "2026-07-01"
-    expected: 23218
-    tolerance: 1        # SA $ billions; monthly level
-    provenance: "live-test verified 2026-08-28, FRED M2SL"
+    anchor_date: "2026-08-01"
+    expected: 23342.8
+    tolerance: 1.0       # SA $ billions; monthly level
+    provenance: "quarterly recalibrated 2026-10-02, FRED M2SL"
 
   - series_id: FISCAL:TGA_DAILY
     anchor_date: "2026-08-27"

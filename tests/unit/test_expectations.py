@@ -48,7 +48,7 @@ def _seed_obs(conn, sid, ts, value):
 
 
 def _seed_full(conn, exp10=2.49, exp1=2.39, be=2.42, rr=2.20, dfii=2.34, stale=False):
-    m = _month(3 if stale else 0)
+    m = _month(4 if stale else 0)
     _seed_obs(conn, "CLEVE:EXPINF_10Y", m, exp10)
     _seed_obs(conn, "CLEVE:EXPINF_1Y", m, exp1)
     _seed_obs(conn, "CLEVE:REALRATE_10Y", m, rr)

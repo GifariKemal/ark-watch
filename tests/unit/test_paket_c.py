@@ -218,7 +218,7 @@ def test_recession_all_three_elevated(conn):
 
 
 def test_recession_stale_legs_vanish(conn):
-    _seed(conn, "CLEVE:RECPROB", _q(3), 24.4)  # 3 months old > M window
+    _seed(conn, "CLEVE:RECPROB", _q(4), 24.4)  # 4 months old > M window
     snap = recession_snapshot(conn)
     assert snap["model_pct"] is None
     assert recession_brief_line(conn) is None

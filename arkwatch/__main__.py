@@ -58,6 +58,10 @@ def main() -> int:
         from .qa.calendar import main as cal_main
 
         return cal_main(sys.argv[2:])
+    if cmd == "calibrate":
+        from .qa.calibrate import main as calibrate_main
+
+        return calibrate_main(sys.argv[2:])
     if cmd == "surprise":
         from .qa.surprise import main as surp_main
 

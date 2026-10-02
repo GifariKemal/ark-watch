@@ -222,9 +222,7 @@ def test_future_or_unzoned_bar_is_never_marked_fresh():
 def test_crypto_is_continuous_on_weekends_and_stales_after_three_intervals():
     now = datetime.fromisoformat("2026-09-26T14:00:00+00:00")
     fresh = market_timeline.assess_freshness("BTCUSD", [_bar("2026-09-26T13:55:00+00:00")], now)
-    boundary = market_timeline.assess_freshness(
-        "BTCUSD", [_bar("2026-09-26T13:40:00+00:00")], now
-    )
+    boundary = market_timeline.assess_freshness("BTCUSD", [_bar("2026-09-26T13:40:00+00:00")], now)
     stale = market_timeline.assess_freshness("BTCUSD", [_bar("2026-09-26T13:35:00+00:00")], now)
     assert fresh.status == boundary.status == "FRESH"
     assert stale.status == "STALE"
@@ -253,6 +251,19 @@ def test_btc_prefers_fmp_before_eodhd(monkeypatch):
         market_timeline, "_eodhd_bars", lambda _symbol: [_bar("2026-09-22T13:55:00+00:00")]
     )
     selection = market_timeline._provider_bars("BTCUSD", now)
+    assert selection.source == "FMP"
+    assert [attempt.source for attempt in selection.attempts] == ["FMP"]
+
+
+def test_eth_prefers_fmp_before_eodhd(monkeypatch):
+    now = datetime.fromisoformat("2026-09-22T14:00:00+00:00")
+    monkeypatch.setattr(
+        market_timeline, "_fmp_bars", lambda _symbol: [_bar("2026-09-22T13:55:00+00:00")]
+    )
+    monkeypatch.setattr(
+        market_timeline, "_eodhd_bars", lambda _symbol: [_bar("2026-09-22T13:55:00+00:00")]
+    )
+    selection = market_timeline._provider_bars("ETHUSD", now)
     assert selection.source == "FMP"
     assert [attempt.source for attempt in selection.attempts] == ["FMP"]
 
@@ -305,12 +316,22 @@ def test_stale_eodhd_is_logged_and_fresher_fmp_is_selected(tmp_path, monkeypatch
 
 
 def test_news_canonical_url_and_gdelt_timestamp():
-    assert market_news._canonical_url("HTTPS://Example.com/a/?utm_source=x&b=2") == "https://example.com/a?b=2"
+    assert (
+        market_news._canonical_url("HTTPS://Example.com/a/?utm_source=x&b=2")
+        == "https://example.com/a?b=2"
+    )
     assert market_news._time("20260922T120000Z") == "2026-09-22T12:00:00+00:00"
 
 
 def test_okx_liquidation_event_parser():
-    message = {"data": [{"instId": "BTC-USDT-SWAP", "details": [{"ts": "1790000000000", "bkPx": "100", "sz": "2", "posSide": "long"}]}]}
+    message = {
+        "data": [
+            {
+                "instId": "BTC-USDT-SWAP",
+                "details": [{"ts": "1790000000000", "bkPx": "100", "sz": "2", "posSide": "long"}],
+            }
+        ]
+    }
     events = okx_liquidations._events(message)
     assert len(events) == 1
     assert events[0]["notional"] is None
@@ -322,7 +343,13 @@ def test_news_cluster_reuses_similar_recent_headline(tmp_path):
 
     conn = sqlite3.connect(tmp_path / "news.db")
     conn.execute("CREATE TABLE market_news(title TEXT,cluster_id TEXT,published_at_utc TEXT)")
-    conn.execute("INSERT INTO market_news VALUES (?,?,datetime('now'))", ("Oil falls after Middle East ceasefire agreement", "existing",))
+    conn.execute(
+        "INSERT INTO market_news VALUES (?,?,datetime('now'))",
+        (
+            "Oil falls after Middle East ceasefire agreement",
+            "existing",
+        ),
+    )
     cluster, novelty = market_news._cluster(conn, "Oil falls after Middle East ceasefire deal")
     assert cluster == "existing"
     assert novelty == 0.5
@@ -508,20 +535,44 @@ def test_okx_trade_and_book_streams_store_raw_and_normalized_values(tmp_path):
     conn = db.get_conn(tmp_path / "okx.db", allow_init=True)
     specs = {
         "BTC-USDT-SWAP": {
-            "instId": "BTC-USDT-SWAP", "baseCcy": "BTC", "ctVal": "0.01",
-            "ctValCcy": "BTC", "ctMult": "1",
+            "instId": "BTC-USDT-SWAP",
+            "baseCcy": "BTC",
+            "ctVal": "0.01",
+            "ctValCcy": "BTC",
+            "ctMult": "1",
         }
     }
     trades = {
         "arg": {"channel": "trades", "instId": "BTC-USDT-SWAP"},
         "data": [
-            {"instId": "BTC-USDT-SWAP", "tradeId": "123", "px": "100000", "sz": "2", "side": "buy", "ts": "1790000000000"},
-            {"instId": "BTC-USDT-SWAP", "tradeId": "124", "px": "100200", "sz": "3", "side": "sell", "ts": "1790000000001"},
+            {
+                "instId": "BTC-USDT-SWAP",
+                "tradeId": "123",
+                "px": "100000",
+                "sz": "2",
+                "side": "buy",
+                "ts": "1790000000000",
+            },
+            {
+                "instId": "BTC-USDT-SWAP",
+                "tradeId": "124",
+                "px": "100200",
+                "sz": "3",
+                "side": "sell",
+                "ts": "1790000000001",
+            },
         ],
     }
     books = {
         "arg": {"channel": "books5", "instId": "BTC-USDT-SWAP"},
-        "data": [{"ts": "1790000000000", "bids": [["100000", "2", "0", "1"]], "asks": [["100100", "1", "0", "1"]], "seqId": 7}],
+        "data": [
+            {
+                "ts": "1790000000000",
+                "bids": [["100000", "2", "0", "1"]],
+                "asks": [["100100", "1", "0", "1"]],
+                "seqId": 7,
+            }
+        ],
     }
     buffer = okx_liquidations.TradeFlowBuffer(conn, specs)
     concurrent_buffer = okx_liquidations.TradeFlowBuffer(conn, specs)
@@ -535,14 +586,19 @@ def test_okx_trade_and_book_streams_store_raw_and_normalized_values(tmp_path):
     raw_trades = json.loads(payload)
     assert [row["tradeId"] for row in raw_trades] == ["123", "124"]
     assert all("_sizeAsset" not in row for row in raw_trades)
-    assert conn.execute("SELECT payload_sha256 FROM crypto_trade_raw_batches").fetchone()[0] == hashlib.sha256(payload).hexdigest()
+    assert (
+        conn.execute("SELECT payload_sha256 FROM crypto_trade_raw_batches").fetchone()[0]
+        == hashlib.sha256(payload).hexdigest()
+    )
     flow = conn.execute(
         "SELECT trade_count,buy_count,sell_count,buy_contracts,sell_contracts,buy_asset,sell_asset,buy_notional_usd,sell_notional_usd "
         "FROM crypto_trade_flow_1m"
     ).fetchone()
     assert flow == (2, 1, 1, 2.0, 3.0, 0.02, 0.03, 2000.0, 3006.0)
     assert conn.execute("SELECT COUNT(*) FROM crypto_trade_raw_batches").fetchone()[0] == 1
-    book = conn.execute("SELECT bid_notional_usd_top5,ask_notional_usd_top5,imbalance_notional_usd_top5 FROM crypto_orderbook_snapshots").fetchone()
+    book = conn.execute(
+        "SELECT bid_notional_usd_top5,ask_notional_usd_top5,imbalance_notional_usd_top5 FROM crypto_orderbook_snapshots"
+    ).fetchone()
     assert book == (2000.0, 1001.0, (2000.0 - 1001.0) / (2000.0 + 1001.0))
     conn.close()
 
@@ -554,13 +610,44 @@ def test_okx_trade_flow_backfills_legacy_events_once(tmp_path):
         "(event_uid,ts_utc,source,instrument,trade_id,aggressor_side,price,size_contracts,raw_json,fetched_at) "
         "VALUES (?,?,?,?,?,?,?,?,?,?)",
         [
-            ("a", "2026-09-23T15:01:01+00:00", "OKX", "BTC-USDT-SWAP", "100", "buy", 100000, 2, "{}", "2026-09-23T15:01:02+00:00"),
-            ("b", "2026-09-23T15:01:30+00:00", "OKX", "BTC-USDT-SWAP", "101", "sell", 100100, 1, "{}", "2026-09-23T15:01:31+00:00"),
+            (
+                "a",
+                "2026-09-23T15:01:01+00:00",
+                "OKX",
+                "BTC-USDT-SWAP",
+                "100",
+                "buy",
+                100000,
+                2,
+                "{}",
+                "2026-09-23T15:01:02+00:00",
+            ),
+            (
+                "b",
+                "2026-09-23T15:01:30+00:00",
+                "OKX",
+                "BTC-USDT-SWAP",
+                "101",
+                "sell",
+                100100,
+                1,
+                "{}",
+                "2026-09-23T15:01:31+00:00",
+            ),
         ],
     )
-    specs = {"BTC-USDT-SWAP": {"instId": "BTC-USDT-SWAP", "baseCcy": "BTC", "ctVal": "0.01", "ctValCcy": "BTC"}}
+    specs = {
+        "BTC-USDT-SWAP": {
+            "instId": "BTC-USDT-SWAP",
+            "baseCcy": "BTC",
+            "ctVal": "0.01",
+            "ctValCcy": "BTC",
+        }
+    }
     okx_liquidations.TradeFlowBuffer(conn, specs)
-    flow = conn.execute("SELECT trade_count,buy_count,sell_count,buy_notional_usd,sell_notional_usd FROM crypto_trade_flow_1m").fetchone()
+    flow = conn.execute(
+        "SELECT trade_count,buy_count,sell_count,buy_notional_usd,sell_notional_usd FROM crypto_trade_flow_1m"
+    ).fetchone()
     assert flow == (2, 1, 1, 2000.0, 1001.0)
     okx_liquidations.TradeFlowBuffer(conn, specs)
     assert conn.execute("SELECT trade_count FROM crypto_trade_flow_1m").fetchone()[0] == 2

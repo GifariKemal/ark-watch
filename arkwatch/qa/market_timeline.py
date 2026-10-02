@@ -133,9 +133,8 @@ def _open_minute(calendar, value: datetime) -> bool:
         minute_of_day = local.hour * 60 + local.minute
         if local.weekday() == 5 or (local.weekday() == 4 and minute_of_day >= 17 * 60):
             return False
-        if (
-            17 * 60 <= minute_of_day < 20 * 60
-            and not (local.weekday() == 6 and minute_of_day >= 18 * 60)
+        if 17 * 60 <= minute_of_day < 20 * 60 and not (
+            local.weekday() == 6 and minute_of_day >= 18 * 60
         ):
             return False
         if local.weekday() == 6 and minute_of_day < 18 * 60:
@@ -511,8 +510,10 @@ def _provider_bars(symbol: str, now: datetime | None = None) -> ProviderSelectio
     now = now or datetime.now(UTC)
     attempts = []
     stale = []
-    providers = (("FMP", _fmp_bars), ("EODHD", _eodhd_bars)) if symbol == "BTCUSD" else (
-        ("EODHD", _eodhd_bars), ("FMP", _fmp_bars)
+    providers = (
+        (("FMP", _fmp_bars), ("EODHD", _eodhd_bars))
+        if symbol in ("BTCUSD", "ETHUSD")
+        else (("EODHD", _eodhd_bars), ("FMP", _fmp_bars))
     )
     for source, fetch in providers:
         try:

@@ -29,9 +29,7 @@ CLASS_A_VINTAGE_SERIES: tuple[str, ...] = (
     "UNRATE",
     "CPIAUCSL",
     "CPILFESL",
-    "PCEPI",
     "PCEPILFE",
-    "GDPC1",
     "INDPRO",
     "RSAFS",
     "ICSA",
@@ -70,10 +68,14 @@ def harvest_alfred_vintages(
     counts: dict[str, int] = {}
     end_date = end or datetime.now(UTC).date().isoformat()
     now_iso = datetime.now(UTC).isoformat(timespec="seconds")
+    registered = {r[0] for r in conn.execute("SELECT series_id FROM series_registry").fetchall()}
 
     for raw_sid in target_series:
         sid = raw_sid[5:] if raw_sid.startswith("FRED:") else raw_sid
         full_sid = f"FRED:{sid}"
+        if full_sid not in registered:
+            print(f"  ⚠ {full_sid}: not found in series_registry — skipped")
+            continue
         t0 = time.time()
         try:
             obs = fetch_observations(

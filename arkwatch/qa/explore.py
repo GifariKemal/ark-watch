@@ -8,8 +8,10 @@ import sys
 from pathlib import Path
 
 from ..config import load_registry
+from ..transforms.core import zscore
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+_TRACE_WINDOWS = {"D": 1260, "W": 260, "M": 60, "Q": 20, "A": 5}
 
 
 def explore_blocks():
@@ -161,18 +163,101 @@ def explore_signal(conn: sqlite3.Connection, signal_id: str, trace: bool = False
             inputs = _json.loads(latest_inputs) if latest_inputs else {}
         except (ValueError, TypeError):
             inputs = {}
-        series_ids = [v for v in inputs.values() if isinstance(v, str) and ":" in v]
+        series_ids = list(dict.fromkeys(_input_series_ids(inputs)))
+        if not series_ids and signal_id in {
+            "regime_score",
+            *(f"pillar_{b.lower()}" for b in "ABCDEF"),
+        }:
+            from ..signals.pillars import compute_pillars
+
+            pillars = compute_pillars(conn)
+            blocks = "ABCDEF" if signal_id == "regime_score" else signal_id[-1].upper()
+            series_ids = list(
+                dict.fromkeys(
+                    sid for block in blocks for sid in pillars.get(block, {}).get("parts", [])
+                )
+            )
         if series_ids:
-            print("\n  trace inputs → current values:")
+            entries = {e["series_id"]: e for e in load_registry(active_only=False)}
+            print("\n  trace inputs -> latest value, change, and 5y z-score:")
+            print(
+                "  z5y(level) is descriptive raw-level context, not necessarily the signal's transform."
+            )
             for sid in series_ids[:8]:
-                row = conn.execute(
-                    "SELECT ts, value FROM raw_observations WHERE series_id=? "
-                    "AND vintage_ts='realtime' ORDER BY ts DESC LIMIT 1",
-                    (sid,),
-                ).fetchone()
-                if row:
-                    print(f"    {sid:<28} {row[1]:>12,.4f}  ({row[0][:10]})")
+                traced = _trace_series(conn, sid, entries.get(sid, {}))
+                if traced is None:
+                    print(f"    {sid:<28} no realtime observations")
+                    continue
+                current, previous, source, z, n_obs, window, ts, previous_ts = traced
+                delta = (
+                    "N/A"
+                    if previous is None
+                    else f"{current - previous:+,.4f} vs {previous_ts[:10]}"
+                )
+                if window is None:
+                    z_text = "N/A (irregular frequency)"
+                elif z is None:
+                    minimum = int(window * 0.8)
+                    reason = (
+                        f"{n_obs}/{window}; needs {minimum}" if n_obs < minimum else "zero variance"
+                    )
+                    z_text = f"N/A ({reason})"
+                else:
+                    z_text = f"{z:+.2f} ({n_obs}/{window})"
+                unit = entries.get(sid, {}).get("unit") or ""
+                print(
+                    f"    {sid:<28} {current:>12,.4f} {unit:<10} delta={delta:<10} "
+                    f"z5y(level)={z_text:<28} via {source} ({ts[:10]})"
+                )
+            if len(series_ids) > 8:
+                print(f"    ... {len(series_ids) - 8} additional input series omitted")
+        else:
+            print("\n  trace unavailable: stored signal has no raw-series references")
     return None
+
+
+def _input_series_ids(value) -> list[str]:
+    if isinstance(value, str):
+        return [value] if ":" in value else []
+    if isinstance(value, dict):
+        return [sid for item in value.values() for sid in _input_series_ids(item)]
+    if isinstance(value, list):
+        return [sid for item in value for sid in _input_series_ids(item)]
+    return []
+
+
+def _trace_series(conn, sid: str, entry: dict):
+    """Return latest-source observations without mixing providers or vintages."""
+    source = conn.execute(
+        "SELECT source FROM raw_observations WHERE series_id=? AND vintage_ts='realtime' "
+        "GROUP BY source ORDER BY MAX(ts) DESC, source=? DESC LIMIT 1",
+        (sid, entry.get("primary_source", "")),
+    ).fetchone()
+    if source is None:
+        return None
+    window = _TRACE_WINDOWS.get(str(entry.get("freq", "")))
+    limit = max(window or 2, 2) + 1
+    rows = conn.execute(
+        "SELECT ts,value FROM raw_observations WHERE series_id=? AND source=? "
+        "AND vintage_ts='realtime' ORDER BY ts DESC LIMIT ?",
+        (sid, source[0], limit),
+    ).fetchall()
+    rows.reverse()
+    current = rows[-1]
+    previous = rows[-2] if len(rows) > 1 else None
+    values = [float(row[1]) for row in rows]
+    z = zscore(values, window=window) if window is not None else None
+    z_obs = min(len(values), window) if window is not None else len(values)
+    return (
+        current[1],
+        previous[1] if previous else None,
+        source[0],
+        z,
+        z_obs,
+        window,
+        current[0],
+        previous[0] if previous else None,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -181,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("arg", nargs="?", help="additional argument (block/series/signal id)")
     p.add_argument("--db", default=str(DEFAULT_DB))
     p.add_argument(
-        "--trace", action="store_true", help="trace signal inputs → current series values"
+        "--trace", action="store_true", help="trace latest input values, changes, and 5y z-scores"
     )
     a = p.parse_args(argv)
 

@@ -54,8 +54,6 @@ peak_exit_ratio: 0.5
   # COOLING: the flip-flop cost asymmetry only matters at high levels.
 
 # --- Calibration notes --------------------------------------------------------
-# reaccel_low_pct is a backtest candidate (try 2.5 / 3.0 / 3.5); if 3% fails to
-# separate the return implications of the two worlds, move it or change the level
-# basis (candidate: deciles of our own historical 3m-ann distribution, not the
-# paper's YoY).
+# The owner selected 3.0% as the operating threshold; alternatives require
+# outcome-based validation before replacing it.
 # Bad days: the overlay dies with its data (INSUFFICIENT) — never filled with guesses.

@@ -38,6 +38,7 @@ def fetch_observations(
     end: str | None = None,
     realtime_start: str | None = None,
     realtime_end: str | None = None,
+    output_type: int = 1,
     sort: str = "desc",
     limit: int | None = None,
     session: requests.Session | None = None,
@@ -60,7 +61,8 @@ def fetch_observations(
         params["realtime_end"] = realtime_end
     if limit:
         params["limit"] = limit
-
+    if output_type != 1:
+        params["output_type"] = output_type
     wait = THROTTLE_S - (time.monotonic() - _last_call)
     if wait > 0:
         time.sleep(wait)

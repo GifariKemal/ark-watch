@@ -89,6 +89,42 @@ series:
   active: 1
   # Transform: 4wk-MA + slope; part of the weekly ALFRED-revision watch.
 
+- series_id: FRED:CCSA
+  name: "Continued Claims (Insured Unemployment, SA)"
+  block: D
+  tier: 1
+  unit: "persons (claim count, SA)"
+  value_format: fraction
+  freq: W
+  ts_convention: obs_day
+  release_schedule: "Thursday 08:30 ET"
+  expected_start: "1967-01-07"
+  sanity_min: 500000
+  sanity_max: 30000000
+  primary_source: "FRED:CCSA"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "CONTINUING JOBLESS CLAIMS"
+  active: 1
+
+- series_id: FRED:IC4WSA
+  name: "4-Week Moving Average of Initial Claims (SA)"
+  block: D
+  tier: 1
+  unit: "persons (claim count, SA)"
+  value_format: fraction
+  freq: W
+  ts_convention: obs_day
+  release_schedule: "Thursday 08:30 ET"
+  expected_start: "1967-01-28"
+  sanity_min: 100000
+  sanity_max: 7000000
+  primary_source: "FRED:IC4WSA"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "JOBLESS CLAIMS 4 WEEK AVERAGE"
+  active: 1
+
 - series_id: FRED:UNRATE
   name: "Unemployment Rate U-3 (SA)"
   block: D
@@ -107,6 +143,24 @@ series:
   calendar_family: "UNEMPLOYMENT RATE"
   active: 1
   # Sahm-rule input; labor state in the brief.
+
+- series_id: FRED:U6RATE
+  name: "Total Unemployed + Marginally Attached + Part-time for Economic Reasons (U-6, SA)"
+  block: D
+  tier: 1
+  unit: "percent"
+  value_format: pct
+  freq: M
+  ts_convention: month_start
+  release_schedule: "first Friday 08:30 ET (joint with U-3)"
+  expected_start: "1994-01-01"
+  sanity_min: 5.0
+  sanity_max: 30.0
+  primary_source: "FRED:U6RATE"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "U 6 UNEMPLOYMENT RATE"
+  active: 1
 
 # --- NY Fed research expansion 2026-09-19 (Empire State + HPW → block D) ---------
 # ESMS = the most-traded regional mfg survey; SA diffusion CSV (in the allseries
@@ -132,6 +186,7 @@ series:
   secondary_source: null           # NSA file exists — SA is the published headline
   tolerance: null
   active: 1
+  calendar_family: "NY EMPIRE STATE MANUFACTURING INDEX"
   # First regional-mfg read of each month (leads Philly Fed by days); pairs
   # with CAL:ISM_MFG_PMI. 2026-09 = 7.6 vs 2026-08 = 20.6 (live-verified).
 
@@ -282,6 +337,78 @@ series:
   active: 1
   # Transform: Δ3m momentum.
 
+- series_id: FRED:JTSJOL
+  name: "Job Openings: Total Nonfarm (JOLTS, SA)"
+  block: D
+  tier: 1
+  unit: "thousands of persons (SA)"
+  value_format: fraction
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~first week of second month after reference month, 10:00 ET"
+  expected_start: "2000-12-01"
+  sanity_min: 1500
+  sanity_max: 15000
+  primary_source: "FRED:JTSJOL"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "JOLTS JOB OPENINGS"
+  active: 1
+
+- series_id: FRED:USPRIV
+  name: "All Employees, Total Private (SA, thousands)"
+  block: D
+  tier: 1
+  unit: "thousands of persons (SA)"
+  value_format: fraction
+  freq: M
+  ts_convention: month_start
+  release_schedule: "first Friday 08:30 ET (joint with NFP)"
+  expected_start: "1939-01-01"
+  sanity_min: 20000
+  sanity_max: 160000
+  primary_source: "FRED:USPRIV"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "NONFARM PAYROLLS PRIVATE"
+  active: 1
+
+- series_id: FRED:ADPMNUSNERSA
+  name: "ADP Total Nonfarm Private Payroll Employment (SA, persons)"
+  block: D
+  tier: 1
+  unit: "persons (claim count, SA)"
+  value_format: fraction
+  freq: M
+  ts_convention: month_start
+  release_schedule: "monthly; Wednesday before NFP 08:15 ET"
+  expected_start: "2010-01-01"
+  sanity_min: 80000000
+  sanity_max: 160000000
+  primary_source: "FRED:ADPMNUSNERSA"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "ADP EMPLOYMENT CHANGE"
+  active: 1
+
+- series_id: FRED:BOPGSTB
+  name: "U.S. Trade Balance: Goods and Services (BOP basis, millions USD, SA)"
+  block: D
+  tier: 1
+  unit: "millions USD (SA)"
+  value_format: fraction
+  freq: M
+  ts_convention: month_start
+  release_schedule: "monthly; ~first week of second month following reference month 08:30 ET"
+  expected_start: "1992-01-01"
+  sanity_min: -150000
+  sanity_max: 20000
+  primary_source: "FRED:BOPGSTB"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "BALANCE OF TRADE"
+  active: 1
+
 - series_id: FRED:SAHMREALTIME
   name: "Sahm Rule Recession Indicator (real-time vintage)"
   block: D
@@ -398,6 +525,42 @@ series:
   tolerance: null
   active: 1
   # Canonical US 30Y mortgage rate from Freddie Mac Primary Mortgage Market Survey (replaces retired Atlanta Fed CQER).
+
+- series_id: FRED:HSN1F
+  name: "New One Family Houses Sold: United States (SAAR, thousands)"
+  block: D
+  tier: 1
+  unit: "thousand units (SAAR)"
+  value_format: fraction
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~25th of following month 10:00 ET"
+  expected_start: "1963-01-01"
+  sanity_min: 200
+  sanity_max: 1600
+  primary_source: "FRED:HSN1F"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "NEW HOME SALES"
+  active: 1
+
+- series_id: FRED:EXHOSLUSM495S
+  name: "Existing Home Sales (SAAR, thousands of units)"
+  block: D
+  tier: 1
+  unit: "thousand units (SAAR)"
+  value_format: fraction
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~20th of following month 10:00 ET"
+  expected_start: "1968-01-01"
+  sanity_min: 1500
+  sanity_max: 9000
+  primary_source: "FRED:EXHOSLUSM495S"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "EXISTING HOME SALES"
+  active: 1
 
 - series_id: FRED:GACDFSA066MSFRBPHI
   name: "Philly Fed Mfg Survey — General Activity (diffusion index, SA)"
@@ -595,6 +758,60 @@ series:
   active: 1
   # ADDED 2026-09-17: capex-cycle read — durables orders lead investment; the
   # MoM print moves markets monthly while the level history was missing.
+
+- series_id: FRED:ADXTNO
+  name: "Manufacturers' New Orders: Durable Goods Excluding Transportation (millions USD, SA)"
+  block: D
+  tier: 1
+  unit: "millions USD (SA)"
+  value_format: level
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~26th of following month 08:30 ET"
+  expected_start: "1992-02-01"
+  sanity_min: 50000
+  sanity_max: 300000
+  primary_source: "FRED:ADXTNO"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "DURABLE GOODS ORDERS EX TRANSP MOM"
+  active: 1
+
+- series_id: FRED:NEWORDER
+  name: "Manufacturers' New Orders: Nondefense Capital Goods Excluding Aircraft (millions USD, SA)"
+  block: D
+  tier: 1
+  unit: "millions USD (SA)"
+  value_format: level
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~26th of following month 08:30 ET"
+  expected_start: "1992-02-01"
+  sanity_min: 20000
+  sanity_max: 150000
+  primary_source: "FRED:NEWORDER"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "DURABLE GOODS ORDERS EX DEFENSE MOM"
+  active: 1
+
+- series_id: FRED:PCE
+  name: "Personal Consumption Expenditures (SAAR, billions USD)"
+  block: D
+  tier: 1
+  unit: "billions USD (SAAR)"
+  value_format: level
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; end of following month 08:30 ET"
+  expected_start: "1959-01-01"
+  sanity_min: 200
+  sanity_max: 30000
+  primary_source: "FRED:PCE"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "PERSONAL SPENDING MOM"
+  active: 1
 
 - series_id: FRED:CES0500000003
   name: Average Hourly Earnings, All Employees Total Private ($/hour, SA)
@@ -803,6 +1020,204 @@ series:
   active: 1
   calendar_family: "BAKER HUGHES OIL RIG COUNT"
 
+
+- series_id: "CAL:CPI_MOM"
+  name: "CPI Inflation Rate MoM (derived from calendar actuals)"
+  block: C
+  tier: 4
+  unit: "percent"
+  value_format: pct
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~13th of following month 08:30 ET"
+  expected_start: "2021-01-01"
+  sanity_min: -5.0
+  sanity_max: 5.0
+  primary_source: "CAL:CPI_MOM"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "INFLATION RATE MOM"
+  active: 1
+
+- series_id: "CAL:CORE_CPI_MOM"
+  name: "Core CPI Inflation Rate MoM (derived from calendar actuals)"
+  block: C
+  tier: 4
+  unit: "percent"
+  value_format: pct
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~13th of following month 08:30 ET"
+  expected_start: "2021-01-01"
+  sanity_min: -5.0
+  sanity_max: 5.0
+  primary_source: "CAL:CORE_CPI_MOM"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "CORE INFLATION RATE MOM"
+  active: 1
+
+- series_id: "CAL:CORE_PCE_MOM"
+  name: "Core PCE Price Index MoM (derived from calendar actuals)"
+  block: C
+  tier: 4
+  unit: "percent"
+  value_format: pct
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; end of following month 08:30 ET"
+  expected_start: "2021-01-01"
+  sanity_min: -5.0
+  sanity_max: 5.0
+  primary_source: "CAL:CORE_PCE_MOM"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "CORE PCE PRICE INDEX MOM"
+  active: 1
+
+- series_id: "CAL:RETAIL_SALES_YOY"
+  name: "Retail Sales YoY (derived from calendar actuals)"
+  block: D
+  tier: 4
+  unit: "percent"
+  value_format: pct
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~15th of following month 08:30 ET"
+  expected_start: "2021-01-01"
+  sanity_min: -30.0
+  sanity_max: 60.0
+  primary_source: "CAL:RETAIL_SALES_YOY"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "RETAIL SALES YOY"
+  active: 1
+
+- series_id: "CAL:RETAIL_SALES_EX_AUTOS_MOM"
+  name: "Retail Sales ex Autos MoM (derived from calendar actuals)"
+  block: D
+  tier: 4
+  unit: "percent"
+  value_format: pct
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~15th of following month 08:30 ET"
+  expected_start: "2021-01-01"
+  sanity_min: -15.0
+  sanity_max: 25.0
+  primary_source: "CAL:RETAIL_SALES_EX_AUTOS_MOM"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "RETAIL SALES EX AUTOS MOM"
+  active: 1
+
+- series_id: "CAL:RETAIL_SALES_EX_GAS_AUTOS_MOM"
+  name: "Retail Sales ex Gas and Autos MoM (derived from calendar actuals)"
+  block: D
+  tier: 4
+  unit: "percent"
+  value_format: pct
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~15th of following month 08:30 ET"
+  expected_start: "2021-01-01"
+  sanity_min: -15.0
+  sanity_max: 25.0
+  primary_source: "CAL:RETAIL_SALES_EX_GAS_AUTOS_MOM"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "RETAIL SALES EX GAS AUTOS MOM"
+  active: 1
+
+- series_id: "CAL:EXISTING_HOME_SALES_MOM"
+  name: "Existing Home Sales MoM (derived from calendar actuals)"
+  block: D
+  tier: 4
+  unit: "percent"
+  value_format: pct
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~20th of following month 10:00 ET"
+  expected_start: "2021-01-01"
+  sanity_min: -40.0
+  sanity_max: 40.0
+  primary_source: "CAL:EXISTING_HOME_SALES_MOM"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "EXISTING HOME SALES MOM"
+  active: 1
+
+- series_id: "CAL:CPI_LEVEL"
+  name: "Consumer Price Index Level NSA (derived from calendar actuals)"
+  block: C
+  tier: 4
+  unit: "index_1982_84"
+  value_format: level
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~13th of following month 08:30 ET"
+  expected_start: "2021-01-01"
+  sanity_min: 200.0
+  sanity_max: 600.0
+  primary_source: "CAL:CPI_LEVEL"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "CPI"
+  active: 1
+
+- series_id: "CAL:CPI_SA_LEVEL"
+  name: "Consumer Price Index Level SA (derived from calendar actuals)"
+  block: C
+  tier: 4
+  unit: "index_1982_84"
+  value_format: level
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~13th of following month 08:30 ET"
+  expected_start: "2021-01-01"
+  sanity_min: 200.0
+  sanity_max: 600.0
+  primary_source: "CAL:CPI_SA_LEVEL"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "CPI S A"
+  active: 1
+
+- series_id: "CAL:CB_CONSUMER_CONFIDENCE"
+  name: "CB Consumer Confidence Index (derived from calendar actuals)"
+  block: D
+  tier: 4
+  unit: "index"
+  value_format: level
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; last Tuesday of month 10:00 ET"
+  expected_start: "2021-01-01"
+  sanity_min: 50.0
+  sanity_max: 160.0
+  primary_source: "CAL:CB_CONSUMER_CONFIDENCE"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "CB CONSUMER CONFIDENCE"
+  active: 1
+
+- series_id: "CAL:GOODS_TRADE_BALANCE"
+  name: "Goods Trade Balance (derived from calendar actuals)"
+  block: D
+  tier: 4
+  unit: "billions USD"
+  value_format: level
+  freq: M
+  ts_convention: report_month
+  release_schedule: "monthly; ~26th of following month 08:30 ET"
+  expected_start: "2021-01-01"
+  sanity_min: -200.0
+  sanity_max: 50.0
+  primary_source: "CAL:GOODS_TRADE_BALANCE"
+  secondary_source: null
+  tolerance: null
+  calendar_family: "GOODS TRADE BALANCE"
+  active: 1
 - series_id: FRED:PI
   name: "Personal Income (SAAR, billions USD)"
   block: D

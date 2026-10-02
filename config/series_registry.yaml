@@ -80,6 +80,7 @@
   secondary_source: FMP:federalFunds
   tolerance: 0.01                 # 1bp — both sources quote the same effective rate
   active: 1
+  calendar_family: "FED INTEREST RATE DECISION"
   # Fed funds effective rate — realized overnight policy rate; Policy pillar input + FedWatch anchor.
 
 - series_id: FRED:IORB
@@ -1012,7 +1013,6 @@
   tolerance: null
   calendar_family: "PRODUCER PRICE INDEX MOM"   # ROUND-4: was 'PPI MOM' — a
                                                 # 1-row TV orphan; the real 58-release family
-  calendar_family: "PPI MOM"
   active: 1
   # ADDED 2026-09-17: wholesale-inflation level — the pipeline read headline
   # CPI cannot give. FD (SA) chosen over PPIACO (NSA legacy aggregate) so the
@@ -1056,6 +1056,7 @@
                                  # core-PCE pillar = INSUFFICIENT (never fill with
                                  # guesses)
   tolerance: null
+  calendar_family: "CORE PCE PRICE INDEX YOY"
   active: 1
   # Core PCE index — the Fed's target inflation measure; trend confirmation vs the CPI headline.
 

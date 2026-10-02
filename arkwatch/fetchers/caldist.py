@@ -39,6 +39,17 @@ FAMILIES = {
     "EIA_GASOLINE_STOCKS_CHG": ("EIA GASOLINE STOCKS CHANGE", "week_ending", "sum"),
     "EIA_DISTILLATE_STOCKS_CHG": ("EIA DISTILLATE STOCKS CHANGE", "week_ending", "sum"),
     "BAKER_HUGHES_OIL_RIGS": ("BAKER HUGHES OIL RIG COUNT", "release_month", "last"),
+    "CPI_MOM": ("INFLATION RATE MOM", "m_minus_1", "max"),
+    "CORE_CPI_MOM": ("CORE INFLATION RATE MOM", "m_minus_1", "max"),
+    "CORE_PCE_MOM": ("CORE PCE PRICE INDEX MOM", "m_minus_1", "max"),
+    "RETAIL_SALES_YOY": ("RETAIL SALES YOY", "m_minus_1", "max"),
+    "RETAIL_SALES_EX_AUTOS_MOM": ("RETAIL SALES EX AUTOS MOM", "m_minus_1", "max"),
+    "RETAIL_SALES_EX_GAS_AUTOS_MOM": ("RETAIL SALES EX GAS AUTOS MOM", "m_minus_1", "max"),
+    "EXISTING_HOME_SALES_MOM": ("EXISTING HOME SALES MOM", "m_minus_1", "max"),
+    "CPI_LEVEL": ("CPI", "m_minus_1", "max"),
+    "CPI_SA_LEVEL": ("CPI S A", "m_minus_1", "max"),
+    "CB_CONSUMER_CONFIDENCE": ("CB CONSUMER CONFIDENCE", "release_month", "max"),
+    "GOODS_TRADE_BALANCE": ("GOODS TRADE BALANCE", "m_minus_1", "max"),
 }
 
 _MONTHS = {

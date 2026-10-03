@@ -1,4 +1,5 @@
 """Offline tests for the same-month dated-contract energy signals."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -89,9 +90,7 @@ class TestCompute:
         assert out["energy_crack_ho"]["value"] == round(4.7186 * 42 - 93.72, 2)
         assert out["energy_wti_bwd"]["value"] == round(93.72 - 90.12, 2)
         assert out["energy_brent_wti_spot"]["value"] == 23.78
-        n = conn.execute(
-            "SELECT COUNT(*) FROM instrument_prices WHERE symbol='CL2'"
-        ).fetchone()[0]
+        n = conn.execute("SELECT COUNT(*) FROM instrument_prices WHERE symbol='CL2'").fetchone()[0]
         assert n == 1
         conn.close()
 
@@ -119,3 +118,43 @@ class TestCompute:
         monkeypatch.setattr(energy, "_yahoo_dated", mismatched)
         with pytest.raises(energy.EnergyError, match="same-date"):
             energy._curve_legs("X26", "Z26")
+
+
+class TestCrack321:
+    def test_crack_321_formula_in_compute(self, monkeypatch):
+        monkeypatch.setattr(energy, "_front_month", lambda: "X26")
+        legs = {
+            "cl1": {"ts": "2026-09-21", "close": 90.00, "source": "YAHOO"},
+            "rb1": {"ts": "2026-09-21", "close": 3.00, "source": "YAHOO"},
+            "ho1": {"ts": "2026-09-21", "close": 3.50, "source": "YAHOO"},
+            "cl2": {"ts": "2026-09-21", "close": 89.00, "source": "YAHOO"},
+        }
+        monkeypatch.setattr(energy, "_curve_legs", lambda front, second: legs)
+        monkeypatch.setattr(energy, "_spot_pair", lambda conn: ("2026-09-21", 95.0, 90.0))
+
+        conn = db.get_conn(":memory:", allow_init=True)
+        out = energy.compute(conn)
+        conn.close()
+
+        # (2 * 126 + 1 * 147 - 3 * 90) / 3 = (252 + 147 - 270) / 3 = 129 / 3 = 43.0
+        assert "energy_crack_321" in out
+        assert out["energy_crack_321"]["value"] == 43.00
+        assert out["energy_crack_321"]["ts"] == "2026-09-21"
+
+    def test_compute_crack_321_history(self):
+        conn = db.get_conn(":memory:", allow_init=True)
+        conn.execute(
+            "INSERT INTO instrument_prices VALUES ('CL1', '2026-09-21', 'YAHOO', 90.0, 91, 89, 90.0, 1000, 0)"
+        )
+        conn.execute(
+            "INSERT INTO instrument_prices VALUES ('RB1', '2026-09-21', 'YAHOO', 3.0, 3.1, 2.9, 3.0, 1000, 0)"
+        )
+        conn.execute(
+            "INSERT INTO instrument_prices VALUES ('HO1', '2026-09-21', 'YAHOO', 3.5, 3.6, 3.4, 3.5, 1000, 0)"
+        )
+        conn.commit()
+
+        history = energy.compute_crack_321_history(conn, limit=10)
+        assert len(history) == 1
+        assert history[0] == ("2026-09-21", 43.0)
+        conn.close()

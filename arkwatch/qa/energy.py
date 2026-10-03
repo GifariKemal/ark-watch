@@ -4,6 +4,7 @@ Crack/bwd legs must share an expiry month: continuous contracts roll at
 different times per commodity, mixing months around rolls (the 2026-09-21
 crack jump 40.65→47.86). Primary = EODHD dated contracts; fallback = Yahoo
 dated contracts (free, same approach)."""
+
 from __future__ import annotations
 
 import argparse
@@ -16,8 +17,18 @@ DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.
 
 MONTH_CODES = "FGHJKMNQUVXZ"
 MONTH_NAMES = {
-    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
-    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+    "Jan": 1,
+    "Feb": 2,
+    "Mar": 3,
+    "Apr": 4,
+    "May": 5,
+    "Jun": 6,
+    "Jul": 7,
+    "Aug": 8,
+    "Sep": 9,
+    "Oct": 10,
+    "Nov": 11,
+    "Dec": 12,
 }
 
 
@@ -66,8 +77,7 @@ def _eodhd_dated(root: str, code: str) -> dict | None:
         rows = r.json() if r.status_code == 200 else []
         if isinstance(rows, list) and rows:
             last = rows[-1]
-            return {"ts": last["date"][:10], "close": float(last["close"]),
-                    "source": "EODHD"}
+            return {"ts": last["date"][:10], "close": float(last["close"]), "source": "EODHD"}
     except Exception:
         pass
     return None
@@ -80,8 +90,7 @@ def _yahoo_dated(root: str, code: str) -> dict | None:
         bars = yahoo.fetch_daily(f"{root}{code}.NYM")
         if bars:
             last = bars[-1]
-            return {"ts": last["ts"], "close": float(last["close"]),
-                    "source": "YAHOO"}
+            return {"ts": last["ts"], "close": float(last["close"]), "source": "YAHOO"}
     except Exception:
         pass
     return None
@@ -132,14 +141,16 @@ def _spot_pair(conn, days: int = 10) -> tuple[str, float, float]:
 
 def compute(conn) -> dict[str, dict]:
     front = _front_month()
-    second = next_month_code(
-        MONTH_CODES.index(front[0]) + 1, int(front[1:]) + 2000
-    )
+    second = next_month_code(MONTH_CODES.index(front[0]) + 1, int(front[1:]) + 2000)
 
     legs = _curve_legs(front, second)
     cl1, rb1, ho1, cl2 = (legs[k] for k in ("cl1", "rb1", "ho1", "cl2"))
     ts_f = cl1["ts"]
+    crack_321 = round(
+        (2 * (rb1["close"] * 42) + 1 * (ho1["close"] * 42) - 3 * cl1["close"]) / 3.0, 2
+    )
     out: dict[str, dict] = {
+        "energy_crack_321": {"ts": ts_f, "value": crack_321},
         "energy_crack_gas": {"ts": ts_f, "value": round(rb1["close"] * 42 - cl1["close"], 2)},
         "energy_crack_ho": {"ts": ts_f, "value": round(ho1["close"] * 42 - cl1["close"], 2)},
         "energy_wti_bwd": {"ts": ts_f, "value": round(cl1["close"] - cl2["close"], 2)},
@@ -150,8 +161,7 @@ def compute(conn) -> dict[str, dict]:
 
     for sym, leg_info in (("CL1", cl1), ("CL2", cl2)):
         conn.execute(
-            "INSERT OR REPLACE INTO instrument_prices(symbol, ts, source, close)"
-            " VALUES (?,?,?,?)",
+            "INSERT OR REPLACE INTO instrument_prices(symbol, ts, source, close) VALUES (?,?,?,?)",
             (sym, leg_info["ts"], leg_info["source"], leg_info["close"]),
         )
     conn.execute(
@@ -160,6 +170,20 @@ def compute(conn) -> dict[str, dict]:
     )
     conn.commit()
     return out
+
+
+def compute_crack_321_history(conn, limit: int = 1260) -> list[tuple[str, float]]:
+    """Historical daily 3:2:1 crack spread ($/bbl) from instrument_prices."""
+    rows = conn.execute(
+        "SELECT c.ts, round((2 * (r.close * 42) + 1 * (h.close * 42) - 3 * c.close) / 3.0, 2) "
+        "FROM instrument_prices c "
+        "JOIN instrument_prices r ON r.symbol='RB1' AND r.ts=c.ts AND r.source=c.source "
+        "JOIN instrument_prices h ON h.symbol='HO1' AND h.ts=c.ts AND h.source=c.source "
+        "WHERE c.symbol='CL1' AND c.source='YAHOO' "
+        "ORDER BY c.ts DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [(r[0], float(r[1])) for r in rows][::-1]
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -2113,7 +2113,7 @@ series:
   active: 1
   # YoY in the brief; on the ALFRED-revision watchlist.
 
-- series_id: FRED:DCPN3M
+- series_id: FRED:DCPF3M
   name: "Commercial Paper 3M — AA financial (FRBP)"
   block: E
   tier: 0
@@ -2122,16 +2122,32 @@ series:
   freq: D
   ts_convention: daily_et
   release_schedule: "D+1 morning ET (FRBP ±09:30)"
-  expected_start: "1997-01-02"       # FRED API live-verified
-  sanity_min: 0.0                    # historical min = 0.03; nominal rates are never
-                                    # negative in the modern era
-  sanity_max: 8.0                    # historical max = 6.65 (GFC); +margin
+  expected_start: "1997-01-02"
+  sanity_min: 0.0
+  sanity_max: 10.0
+  primary_source: "FRED:DCPF3M"
+  secondary_source: null
+  tolerance: null
+  active: 1
+  # Financial CP 3M rate — bank wholesale funding stress; pairs with DCPN3M.
+
+- series_id: FRED:DCPN3M
+  name: "Commercial Paper 3M — AA nonfinancial (FRBP)"
+  block: E
+  tier: 0
+  unit: "percent"
+  value_format: pct
+  freq: D
+  ts_convention: daily_et
+  release_schedule: "D+1 morning ET (FRBP ±09:30)"
+  expected_start: "1997-01-02"
+  sanity_min: 0.0
+  sanity_max: 10.0
   primary_source: "FRED:DCPN3M"
   secondary_source: null
   tolerance: null
   active: 1
   # Spread DCPN3M−DTB3 = nonbank funding (DTB3 = policy-rates, registry part-1).
-
 - series_id: FRED:COMPOUT
   name: "Commercial Paper Outstanding (NSA)"
   block: E

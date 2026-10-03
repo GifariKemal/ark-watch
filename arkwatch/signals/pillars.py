@@ -225,6 +225,14 @@ def compute_pillars(conn: sqlite3.Connection, *, reader=None) -> dict[str, dict]
 
     # D — Growth
     icsa = reader.values("FRED:ICSA", 300)
+    ccsa = reader.values("FRED:CCSA", 300)
+    d_parts = ["FRED:ICSA", "FRED:GDPNOW"]
+    if ccsa:
+        d_parts.append("FRED:CCSA")
+    neworder = reader.values("FRED:NEWORDER", 120)
+    if neworder:
+        d_parts.append("FRED:NEWORDER")
+
     d_state = state_direction(momentum(icsa, 4), 2000) if icsa else "INSUFFICIENT"
     # falling claims = tight labor = good growth → invert the direction
     if d_state == "FALLING":
@@ -232,30 +240,56 @@ def compute_pillars(conn: sqlite3.Connection, *, reader=None) -> dict[str, dict]
     elif d_state == "RISING":
         d_state = "DECELERATING"
     gdpnow_v = reader.latest("FRED:GDPNOW")
+
+    icsa_z = zscore([-v for v in icsa], window=260) if icsa else None
+    ccsa_z = zscore([-v for v in ccsa], window=260) if ccsa else None
+    if icsa_z is not None and ccsa_z is not None:
+        d_z = round((icsa_z + ccsa_z) / 2.0, 4)
+    elif icsa_z is not None:
+        d_z = icsa_z
+    elif ccsa_z is not None:
+        d_z = ccsa_z
+    else:
+        d_z = None
+
+    detail_parts = []
+    if icsa:
+        detail_parts.append(f"ICSA {icsa[-1] / 1000:.0f}K")
+    if ccsa:
+        detail_parts.append(f"CCSA {ccsa[-1] / 1000:.0f}K")
+    if gdpnow_v:
+        detail_parts.append(f"GDPNow {gdpnow_v[1]:.1f}%")
+    d_detail = " · ".join(detail_parts) if detail_parts else "N/A"
+
     out["D"] = {
-        "parts": ["FRED:ICSA", "FRED:GDPNOW"],
+        "parts": d_parts,
         "label": "Growth",
         "state": d_state,
-        "detail": (
-            f"ICSA {icsa[-1] / 1000:.0f}K · GDPNow {gdpnow_v[1]:.1f}%"
-            if icsa and gdpnow_v
-            else "N/A"
-        ),
-        "z": zscore([-v for v in icsa], window=260) if icsa else None,  # weekly: 5y = 260 obs
+        "detail": d_detail,
+        "z": d_z,
     }
 
     # E — Liquidity
     walcl = reader.values("FRED:WALCL", 300)
+    dcpf3m = reader.values("FRED:DCPF3M", 300)
+    e_parts = ["FRED:WALCL"]
+    if dcpf3m:
+        e_parts.append("FRED:DCPF3M")
     liq_m = momentum(walcl, 4) if len(walcl) > 4 else None  # 4 weeks
     if liq_m is not None:
         e_state = "EXPANDING" if liq_m > 0 else "CONTRACTING"
     else:
         e_state = "INSUFFICIENT"
+
+    e_detail = f"BS ${walcl[-1] / 1_000_000:.2f}T" if walcl else "N/A"
+    if dcpf3m:
+        e_detail += f" · CP {dcpf3m[-1]:.2f}%"
+
     out["E"] = {
-        "parts": ["FRED:WALCL"],
+        "parts": e_parts,
         "label": "Liquidity",
         "state": e_state,
-        "detail": f"BS ${walcl[-1] / 1_000_000:.2f}T" if walcl else "N/A",
+        "detail": e_detail,
         # Use the 4-week change (flow) for the z-score, not the WALCL level:
         # the trending (QT) level pins z near −1.5 constantly, a permanent
         # −0.22 bias in the regime score.
@@ -265,7 +299,6 @@ def compute_pillars(conn: sqlite3.Connection, *, reader=None) -> dict[str, dict]
             else None
         ),  # weekly: 5y = 260 obs
     }
-
     # F — Stress
     hy = reader.values("FRED:BAMLH0A0HYM2", 800)  # 3y window (BAML truncated)
     # VIX is not fetched here: no pillar uses it (the VIX z-score lives in

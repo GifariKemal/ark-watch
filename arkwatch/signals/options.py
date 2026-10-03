@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 # Thresholds come from params_signals.yaml; the literals are only the
 # unreadable-config fallback (watcher _PS pattern). Parsed inside the guard
@@ -422,3 +422,78 @@ def options_brief_line(conn: sqlite3.Connection) -> str | None:
     if pain_segs:
         line += " · " + " · ".join(pain_segs)
     return line
+
+
+def third_friday_of_month(year: int, month: int, calendar_shift: bool = True) -> date:
+    """Calculate the 3rd Friday of the given year/month, shifting to Thursday if exchange holiday."""
+    first_day = date(year, month, 1)
+    first_friday = 1 + (4 - first_day.weekday()) % 7
+    d = date(year, month, first_friday + 14)
+    if calendar_shift:
+        try:
+            import exchange_calendars as xcals
+
+            cal = xcals.get_calendar("XNYS")
+            if not cal.is_session(d.isoformat()):
+                d -= timedelta(days=1)
+        except Exception:
+            pass
+    return d
+
+
+def next_opex(as_of: date | datetime | str | None = None) -> dict:
+    """Returns info about the upcoming US monthly equity/index OPEX date relative to as_of.
+
+    Returns dict: {opex_date, days_to_opex, is_opex_week, is_quad_witching, cycle}
+    """
+    if as_of is None:
+        target_d = datetime.now(UTC).date()
+    elif isinstance(as_of, datetime):
+        target_d = as_of.date()
+    elif isinstance(as_of, str):
+        target_d = date.fromisoformat(as_of[:10])
+    else:
+        target_d = as_of
+
+    y, m = target_d.year, target_d.month
+    cand = third_friday_of_month(y, m)
+    if target_d > cand:
+        y, m = (y, m + 1) if m < 12 else (y + 1, 1)
+        cand = third_friday_of_month(y, m)
+
+    days_diff = (cand - target_d).days
+    monday = cand - timedelta(days=cand.weekday())
+    is_week = monday <= target_d <= cand
+    is_quad = cand.month in (3, 6, 9, 12)
+    quarter = f"Q{cand.month // 3}" if is_quad else "MONTHLY"
+
+    return {
+        "opex_date": cand.isoformat(),
+        "days_to_opex": days_diff,
+        "is_opex_week": is_week,
+        "is_quad_witching": is_quad,
+        "cycle": quarter,
+    }
+
+
+def is_opex_week(as_of: date | datetime | str | None = None) -> bool:
+    """True if target date falls in the Monday..Friday of a monthly OPEX week."""
+    return bool(next_opex(as_of)["is_opex_week"])
+
+
+def opex_calendar(year: int) -> list[dict]:
+    """All 12 monthly OPEX dates for the given year, tagging Quadruple Witching."""
+    out = []
+    for m in range(1, 13):
+        d = third_friday_of_month(year, m)
+        is_quad = m in (3, 6, 9, 12)
+        out.append(
+            {
+                "year": year,
+                "month": m,
+                "opex_date": d.isoformat(),
+                "is_quad_witching": is_quad,
+                "cycle": f"Q{m // 3}" if is_quad else "MONTHLY",
+            }
+        )
+    return out

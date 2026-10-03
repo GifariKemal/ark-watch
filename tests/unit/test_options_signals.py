@@ -16,11 +16,12 @@ trigger tests.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from arkwatch import db
+from arkwatch.signals import options
 from arkwatch.signals.options import (
     OPTIONS_WALL_MIN_OI_PCT,
     options_brief_line,
@@ -458,3 +459,34 @@ def test_store_no_wall_state_none(conn):
     ).fetchone()
     assert r[0] is None
     assert r[1] == "NONE"
+
+
+class TestOpexCalendar:
+    def test_third_friday_calculation(self):
+        tf_oct = options.third_friday_of_month(2026, 10, calendar_shift=False)
+        assert tf_oct == date(2026, 10, 16)
+        assert tf_oct.weekday() == 4
+
+        tf_mar = options.third_friday_of_month(2026, 3, calendar_shift=False)
+        assert tf_mar == date(2026, 3, 20)
+
+    def test_next_opex_detection(self):
+        snap = options.next_opex("2026-10-04")
+        assert snap["opex_date"] == "2026-10-16"
+        assert snap["days_to_opex"] == 12
+        assert snap["is_opex_week"] is False
+        assert snap["is_quad_witching"] is False
+
+        snap_week = options.next_opex("2026-10-12")
+        assert snap_week["is_opex_week"] is True
+        assert snap_week["days_to_opex"] == 4
+
+        snap_dec = options.next_opex("2026-12-01")
+        assert snap_dec["is_quad_witching"] is True
+        assert snap_dec["cycle"] == "Q4"
+
+    def test_opex_calendar_annual_schedule(self):
+        cal = options.opex_calendar(2026)
+        assert len(cal) == 12
+        quads = [c["month"] for c in cal if c["is_quad_witching"]]
+        assert quads == [3, 6, 9, 12]

@@ -99,3 +99,27 @@ def test_store_crypto_signals_persists_to_computed_signals():
     assert len(rows) >= 2
     ids = {r[0] for r in rows}
     assert "crypto_liq_24h_btc" in ids
+
+
+def test_compute_cvd_calculation():
+    conn = _setup_db()
+    now = datetime(2026, 10, 4, 12, 0, 0, tzinfo=UTC)
+
+    conn.executemany(
+        "INSERT INTO crypto_trade_flow_1m"
+        "(minute_utc, instrument, source, trade_count, buy_count, sell_count, buy_contracts, sell_contracts, buy_notional_usd, sell_notional_usd, buy_normalized_count, sell_normalized_count, first_trade_ts, last_trade_ts, first_trade_id, last_trade_id, fetched_at) "
+        "VALUES (?, 'BTC-USDT-SWAP', 'OKX', 10, 6, 4, 1.0, 1.0, ?, ?, 6, 4, 't1', 't2', 'id1', 'id2', ?)",
+        [
+            ((now - timedelta(minutes=2)).isoformat(), 600000.0, 400000.0, now.isoformat()),
+            ((now - timedelta(minutes=1)).isoformat(), 700000.0, 300000.0, now.isoformat()),
+        ],
+    )
+    conn.commit()
+
+    cvd = crypto.compute_cvd(conn, "BTC-USDT-SWAP", window_hours=1, as_of=now)
+    assert cvd is not None
+    assert cvd["total_buy_usd"] == 1300000.0
+    assert cvd["total_sell_usd"] == 700000.0
+    assert cvd["net_delta_usd"] == 600000.0
+    assert cvd["state"] == "AGGRESSIVE_BUYING"
+    assert cvd["points_count"] == 2

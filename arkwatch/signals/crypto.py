@@ -128,7 +128,9 @@ def liquidation_cascade_detector(
     A high-volume long flush (>2.5σ) often marks seller capitulation / swing bottom.
     A high-volume short squeeze (>2.5σ) often marks buyer exhaustion / swing top.
     """
-    current = liquidation_summary(conn, instrument=instrument, window_hours=window_hours, as_of=as_of)
+    current = liquidation_summary(
+        conn, instrument=instrument, window_hours=window_hours, as_of=as_of
+    )
     if not current:
         return None
 
@@ -176,7 +178,7 @@ def liquidation_cascade_detector(
         if current["state"] == "LONG_FLUSH":
             signal = "LIQUIDATION_CAPITULATION"  # oversold exhaustion setup
         elif current["state"] == "SHORT_SQUEEZE":
-            signal = "SHORT_EXHAUSTION"          # overbought exhaustion setup
+            signal = "SHORT_EXHAUSTION"  # overbought exhaustion setup
         else:
             signal = "HIGH_VOLUME_FLUSH"
     else:
@@ -190,6 +192,87 @@ def liquidation_cascade_detector(
         "z_score": round(z, 2),
         "signal": signal,
         "summary": current,
+    }
+
+
+def compute_cvd(
+    conn: sqlite3.Connection,
+    instrument: str = "BTC-USDT-SWAP",
+    *,
+    window_hours: int = 24,
+    as_of: datetime | str | None = None,
+) -> dict | None:
+    """Compute Cumulative Volume Delta (CVD) from 1-minute taker trade flow."""
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='crypto_trade_flow_1m'"
+    ).fetchone()
+    if not row:
+        return None
+
+    if as_of is None:
+        target_dt = datetime.now(UTC)
+    elif isinstance(as_of, str):
+        target_dt = datetime.fromisoformat(as_of)
+    else:
+        target_dt = as_of
+
+    since = (target_dt - timedelta(hours=window_hours)).isoformat(timespec="seconds")
+    until = target_dt.isoformat(timespec="seconds")
+
+    query = """
+        SELECT minute_utc,
+               COALESCE(buy_notional_usd, 0.0),
+               COALESCE(sell_notional_usd, 0.0)
+        FROM crypto_trade_flow_1m
+        WHERE instrument = ? AND minute_utc >= ? AND minute_utc <= ?
+        ORDER BY minute_utc ASC
+    """
+    rows = conn.execute(query, (instrument, since, until)).fetchall()
+    if not rows:
+        return None
+
+    total_buy = 0.0
+    total_sell = 0.0
+    running_cvd = 0.0
+    series = []
+
+    for minute, buy, sell in rows:
+        b = float(buy)
+        s = float(sell)
+        delta = b - s
+        running_cvd += delta
+        total_buy += b
+        total_sell += s
+        series.append(
+            {
+                "minute": minute,
+                "delta_usd": round(delta, 2),
+                "cvd_usd": round(running_cvd, 2),
+            }
+        )
+
+    total_vol = total_buy + total_sell
+    buy_ratio = total_buy / total_vol if total_vol > 0 else 0.5
+    net_delta = total_buy - total_sell
+
+    if buy_ratio > 0.55:
+        state = "AGGRESSIVE_BUYING"
+    elif buy_ratio < 0.45:
+        state = "AGGRESSIVE_SELLING"
+    else:
+        state = "BALANCED"
+
+    return {
+        "instrument": instrument,
+        "window_hours": window_hours,
+        "as_of": until,
+        "total_buy_usd": round(total_buy, 2),
+        "total_sell_usd": round(total_sell, 2),
+        "total_volume_usd": round(total_vol, 2),
+        "net_delta_usd": round(net_delta, 2),
+        "buy_ratio": round(buy_ratio, 4),
+        "state": state,
+        "points_count": len(series),
     }
 
 
@@ -233,6 +316,22 @@ def store_crypto_signals(conn: sqlite3.Connection) -> int:
                     cascade["z_score"] if cascade["z_score"] is not None else 0.0,
                     cascade["signal"],
                     json.dumps(cascade),
+                )
+            )
+
+        # 3. 24h CVD
+        cvd = compute_cvd(conn, instrument=inst, window_hours=24, as_of=now)
+        if cvd:
+            sig_name = f"crypto_cvd_24h_{inst[:3].lower()}"
+            rows.append(
+                (
+                    sig_name,
+                    ts_date,
+                    "crypto",
+                    now_iso,
+                    cvd["net_delta_usd"],
+                    cvd["state"],
+                    json.dumps(cvd),
                 )
             )
 

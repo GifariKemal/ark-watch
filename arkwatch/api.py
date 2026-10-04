@@ -83,19 +83,21 @@ def get_crypto_intelligence(
     db_path: str | Path | None = None,
     instrument: str = "BTC-USDT-SWAP",
 ) -> dict:
-    """Retrieve crypto market intelligence: 24h & 1h forced liquidations, imbalance ratio, and cascade alerts."""
-    from .signals.crypto import liquidation_cascade_detector, liquidation_summary
+    """Retrieve crypto market intelligence: 24h & 1h forced liquidations, imbalance ratio, cascade alerts, and CVD."""
+    from .signals.crypto import compute_cvd, liquidation_cascade_detector, liquidation_summary
 
     with _get_connection(conn, db_path) as c:
         sum_24h = liquidation_summary(c, instrument=instrument, window_hours=24)
         sum_1h = liquidation_summary(c, instrument=instrument, window_hours=1)
         cascade = liquidation_cascade_detector(c, instrument=instrument, window_hours=1)
+        cvd = compute_cvd(c, instrument=instrument, window_hours=24)
 
         return {
             "instrument": instrument,
             "summary_24h": sum_24h,
             "summary_1h": sum_1h,
             "cascade_detector": cascade,
+            "cvd_24h": cvd,
         }
 
 
@@ -137,6 +139,63 @@ def get_options_intelligence(
             "opex": opex_info,
             "annual_opex_schedule": opex_calendar(year),
         }
+
+
+def get_futures_flow_intelligence(
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+    product: str | None = None,
+) -> dict:
+    """Retrieve CME futures flow matrix (ΔPrice × ΔOpen Interest) regimes across products."""
+    from .signals.futures_flow import all_futures_flow_matrix, futures_flow_matrix
+
+    with _get_connection(conn, db_path) as c:
+        if product:
+            res = futures_flow_matrix(c, product)
+            return {product.upper(): res} if res else {}
+        return all_futures_flow_matrix(c)
+
+
+def get_session_intraday_intelligence(
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+    symbol: str = "SPY",
+) -> dict | None:
+    """Retrieve intraday session VWAP and 5-minute ATR volatility expansion."""
+    from .signals.intraday import session_intraday_intelligence
+
+    with _get_connection(conn, db_path) as c:
+        return session_intraday_intelligence(c, symbol=symbol)
+
+
+def get_etf_flows_intelligence(
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+    asset: str | None = None,
+) -> dict:
+    """Retrieve physical and spot ETF cumulative flow momentum (GOLD, SILVER, BTC, ETH)."""
+    from .signals.etf_flows import all_etf_flow_momentum, etf_flow_momentum
+
+    with _get_connection(conn, db_path) as c:
+        if asset:
+            res = etf_flow_momentum(c, asset)
+            return {asset.upper(): res} if res else {}
+        return all_etf_flow_momentum(c)
+
+
+def get_news_velocity_intelligence(
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+    topic: str | None = None,
+) -> dict:
+    """Retrieve market news flow velocity and breaking catalyst spike alerts."""
+    from .signals.news import all_news_velocity, news_velocity
+
+    with _get_connection(conn, db_path) as c:
+        if topic:
+            res = news_velocity(c, topic)
+            return {topic.upper(): res} if res else {}
+        return all_news_velocity(c)
 
 
 def get_market_news(
@@ -270,5 +329,33 @@ def on_demand_refresh(target: str, db_path: str | Path | None = None) -> dict:
             "ok": sum(1 for a in audits if a.status == "OK"),
             "drifted": sum(1 for a in audits if a.status == "DRIFTED"),
         }
+
+    if target == "futures-flow":
+        from .signals.futures_flow import store_futures_flow_signals
+
+        with _get_connection(None, path) as c:
+            n = store_futures_flow_signals(c)
+        return {"target": target, "status": "OK", "signals_updated": n}
+
+    if target == "intraday":
+        from .signals.intraday import store_intraday_signals
+
+        with _get_connection(None, path) as c:
+            n = store_intraday_signals(c)
+        return {"target": target, "status": "OK", "signals_updated": n}
+
+    if target == "etf-flows":
+        from .signals.etf_flows import store_etf_flow_signals
+
+        with _get_connection(None, path) as c:
+            n = store_etf_flow_signals(c)
+        return {"target": target, "status": "OK", "signals_updated": n}
+
+    if target == "news-velocity":
+        from .signals.news import store_news_signals
+
+        with _get_connection(None, path) as c:
+            n = store_news_signals(c)
+        return {"target": target, "status": "OK", "signals_updated": n}
 
     return {"target": target, "status": "ERROR", "error": f"unknown refresh target '{target}'"}

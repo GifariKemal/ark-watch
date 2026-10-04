@@ -86,3 +86,39 @@ def test_on_demand_refresh_unknown_target():
     res = api.on_demand_refresh("invalid-target")
     assert res["status"] == "ERROR"
     assert "unknown refresh target" in res["error"]
+
+
+def test_new_intelligence_getters():
+    conn = _setup_test_db()
+    ff = api.get_futures_flow_intelligence(conn)
+    assert isinstance(ff, dict)
+
+    etf = api.get_etf_flows_intelligence(conn)
+    assert isinstance(etf, dict)
+
+    nv = api.get_news_velocity_intelligence(conn)
+    assert isinstance(nv, dict)
+
+    intra = api.get_session_intraday_intelligence(conn, symbol="SPY")
+    assert intra is None or "vwap_state" in intra
+
+
+def test_on_demand_refresh_targets(tmp_path):
+    db_file = tmp_path / "test.db"
+    conn = db.get_conn(db_file, allow_init=True)
+    conn.close()
+
+    r1 = api.on_demand_refresh("crypto", db_path=db_file)
+    assert r1["status"] == "OK"
+
+    r2 = api.on_demand_refresh("calibrate", db_path=db_file)
+    assert r2["status"] == "OK"
+
+    r3 = api.on_demand_refresh("futures-flow", db_path=db_file)
+    assert r3["status"] == "OK"
+
+    r4 = api.on_demand_refresh("etf-flows", db_path=db_file)
+    assert r4["status"] == "OK"
+
+    r5 = api.on_demand_refresh("news-velocity", db_path=db_file)
+    assert r5["status"] == "OK"

@@ -48,6 +48,12 @@ TRACKED = {
     "XLU": "XLU",
     "SMH": "SMH",
     "SOXX": "SOXX",
+    "GC1": "GC=F",
+    "SI1": "SI=F",
+    "HG1": "HG=F",
+    "EURUSD": "EURUSD=X",
+    "GBPUSD": "GBPUSD=X",
+    "USDJPY": "USDJPY=X",
 }
 EODHD = {
     "NQ1": "NQ.COMM",
@@ -60,11 +66,20 @@ EODHD = {
     "TNX": "TNX.INDX",
 }
 FMP = {symbol: ticker for symbol, ticker in TRACKED.items() if ticker.isalpha()}
-FMP.update({"BTCUSD": "BTCUSD", "ETHUSD": "ETHUSD"})
+FMP.update(
+    {
+        "BTCUSD": "BTCUSD",
+        "ETHUSD": "ETHUSD",
+        "EURUSD": "EURUSD",
+        "GBPUSD": "GBPUSD",
+        "USDJPY": "USDJPY",
+    }
+)
 SECTORS = ("XLK", "XLY", "XLC", "XLF", "XLV", "XLI", "XLB", "XLE", "XLP", "XLRE", "XLU")
 EQUITY_SYMBOLS = frozenset({"SPY", "RSP", *SECTORS})
 CALENDAR_BY_SYMBOL = {
-    **dict.fromkeys(("NQ1", "ES1", "YM1", "CL1"), "CMES"),
+    **dict.fromkeys(("NQ1", "ES1", "YM1", "CL1", "GC1", "SI1", "HG1"), "CMES"),
+    **dict.fromkeys(("EURUSD", "GBPUSD", "USDJPY"), "CMES"),
     "BZ1": "XLON",
     "DXY": "IEPA",
     "TNX": "XNYS",

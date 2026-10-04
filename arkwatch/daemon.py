@@ -70,6 +70,7 @@ SCHEDULE = [
     # truth, upsert repairs fetch-day stamps)
     (21, 15, "sunday", "f4 backfill-first", "First-print vintage heal (ALFRED truth)"),
     (21, 30, "sunday", "f4 replay", "Point-in-time regime replay refresh"),
+    (21, 50, "sunday", "calibrate", "Golden anchors quarterly calibration & drift audit"),
     # ROUND-11: the dot plot refreshes 4x/year with SEP meetings — a quarterly
     # cadence job re-fetches all vintages (idempotent; the web is the source)
     (5, 0, "sunday", "backfill --source sep", "FOMC dot plot refresh (quarterly cadence)"),
@@ -406,7 +407,7 @@ def run_loop():
                 last_news_bucket = news_bucket
                 _run_job("market-news", "Cross-source catalyst news")
                 _run_job("breadth", "S&P 500 constituent breadth")
-
+                _run_job("crypto", "Crypto liquidation analytics")
             # Rotate logs at the UTC date change (the filename convention is
             # UTC). CYCLE-counting drifted: a daemon started at 20:18 rotated
             # at 20:18 daily, so yesterday's filename kept receiving today's

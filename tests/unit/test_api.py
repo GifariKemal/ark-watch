@@ -1,0 +1,88 @@
+"""Unit tests for the unified Python API and data access layer (arkwatch/api.py)."""
+
+from __future__ import annotations
+
+import sqlite3
+from datetime import UTC, datetime
+
+from arkwatch import api, db
+
+
+def _setup_test_db() -> sqlite3.Connection:
+    return db.get_conn(":memory:", allow_init=True)
+
+
+def test_get_regime_snapshot():
+    conn = _setup_test_db()
+    snap = api.get_regime_snapshot(conn)
+    assert "regime_score" in snap
+    assert "label" in snap
+    assert snap["label"] in ("RISK-ON", "RISK-OFF", "NEUTRAL")
+    assert "quadrant" in snap
+    assert "dollar_smile" in snap
+    assert "pillars" in snap
+    assert set(snap["pillars"].keys()) == set("ABCDEF")
+
+
+def test_get_crypto_intelligence():
+    conn = _setup_test_db()
+    intel = api.get_crypto_intelligence(conn, instrument="BTC-USDT-SWAP")
+    assert intel["instrument"] == "BTC-USDT-SWAP"
+    assert "summary_24h" in intel
+    assert "summary_1h" in intel
+    assert "cascade_detector" in intel
+
+
+def test_get_options_intelligence():
+    conn = _setup_test_db()
+    intel = api.get_options_intelligence(conn)
+    assert "gold" in intel
+    assert "btc" in intel
+    assert "opex" in intel
+    assert "annual_opex_schedule" in intel
+    assert intel["opex"]["is_opex_week"] in (True, False)
+    assert len(intel["annual_opex_schedule"]) == 12
+
+
+def test_get_energy_intelligence():
+    conn = _setup_test_db()
+    intel = api.get_energy_intelligence(conn)
+    assert "signals" in intel
+    assert "crack_321_history" in intel
+
+
+def test_get_market_news_and_calendar():
+    conn = _setup_test_db()
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+
+    # Seed test market_news
+    conn.execute(
+        "INSERT INTO market_news(news_id, published_at_utc, source, title, url, summary, symbols_json, cluster_id, relevance, novelty, fetched_at) "
+        "VALUES ('n-1', ?, 'FMP', 'Fed signals rate pause', 'https://example.com/1', 'Summary', '[\"SPY\"]', 'c-1', 0.8, 1.0, ?)",
+        (now, now),
+    )
+
+    # Seed test events
+    conn.execute(
+        "INSERT INTO events(event_uid, ts_utc, country, name, normalized_name, importance, actual, consensus, previous, indicator_key) "
+        "VALUES ('ev-1', ?, 'US', 'CPI MoM', 'CPI MOM', 'high', 0.2, 0.3, 0.2, 'CPI')",
+        (now,),
+    )
+    conn.commit()
+
+    news = api.get_market_news(conn, limit=5)
+    assert len(news) == 1
+    assert news[0]["title"] == "Fed signals rate pause"
+    assert news[0]["source"] == "FMP"
+    assert news[0]["symbols"] == ["SPY"]
+
+    cal = api.get_economic_calendar(conn, days_forward=1, days_backward=1)
+    assert len(cal) == 1
+    assert cal[0]["name"] == "CPI MoM"
+    assert cal[0]["actual"] == 0.2
+
+
+def test_on_demand_refresh_unknown_target():
+    res = api.on_demand_refresh("invalid-target")
+    assert res["status"] == "ERROR"
+    assert "unknown refresh target" in res["error"]

@@ -50,6 +50,20 @@ def main() -> int:
         from .qa.okx_liquidations import main as liquidations_main
 
         return liquidations_main(sys.argv[2:])
+    if cmd == "crypto":
+        import argparse
+
+        from . import db
+        from .signals.crypto import store_crypto_signals
+
+        p = argparse.ArgumentParser(prog="arkwatch crypto")
+        p.add_argument("--db", default=str(_DEFAULT_DB))
+        a = p.parse_args(sys.argv[2:])
+        conn = db.get_conn(a.db, allow_init=True)
+        n = store_crypto_signals(conn)
+        conn.close()
+        print(f"=== crypto signals: {n} signals stored ===")
+        return 0
     if cmd == "harvest":
         from .qa.harvest import main as harvest_main
 

@@ -14,18 +14,15 @@ from .. import db as _db
 from .backup import BACKUP_DIR
 
 TABLES = ("gdelt_mentions", "gdelt_gkg", "gdelt_events")
-WEEK_DAYS = 7
+RETENTION_DAYS = 8
 
 
-def _cutoff(now: datetime) -> str:
+def _cutoff(now: datetime, days: int = RETENTION_DAYS) -> str:
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     utc_now = now.astimezone(UTC)
-    days_since_sunday = (utc_now.weekday() + 1) % WEEK_DAYS
-    start_of_week = (utc_now - timedelta(days=days_since_sunday)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    return start_of_week.isoformat(timespec="seconds")
+    cutoff_dt = (utc_now - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return cutoff_dt.isoformat(timespec="seconds")
 
 
 def _summary(conn: sqlite3.Connection, table: str, cutoff: str) -> dict[str, int]:
@@ -138,7 +135,7 @@ def clean(
         result = {
             "applied": apply,
             "cutoff_utc": cutoff,
-            "window": "current_utc_week",
+            "window": f"{RETENTION_DAYS}_days",
             "tables": {table: _summary(conn, table, cutoff) for table in TABLES},
             "protected_events": _protected_events(conn, cutoff),
             "fetch_log_candidates": _old_fetch_log_rows(conn),
@@ -182,6 +179,13 @@ def clean(
                 cursor = conn.execute(f"DELETE FROM {table} WHERE fetched_at < ?{extra}", params)
                 deleted[table] = cursor.rowcount
             fetch_log = conn.execute("DELETE FROM fetch_log WHERE ts < datetime('now', '-180 day')")
+            # Purge market_news and payloads older than retention window
+            news_del = conn.execute("DELETE FROM market_news WHERE published_at_utc < ?", (cutoff,))
+            payload_del = conn.execute(
+                "DELETE FROM market_news_payloads WHERE fetched_at < ?", (cutoff,)
+            )
+            deleted["market_news"] = news_del.rowcount
+            deleted["market_news_payloads"] = payload_del.rowcount
             remaining = {table: _summary(conn, table, cutoff)["rows"] for table in TABLES}
             if any(remaining.values()):
                 raise RuntimeError(f"GDELT retention postcondition failed: {remaining}")

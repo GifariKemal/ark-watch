@@ -7,13 +7,12 @@ from arkwatch.qa import gdelt_retention
 from arkwatch.qa.gdelt_retention import _cutoff, clean
 
 
-def test_cutoff_is_start_of_current_utc_week():
+def test_cutoff_is_8_days_lookback():
     saturday = datetime(2026, 9, 26, 7, 12, tzinfo=UTC)
     sunday = datetime(2026, 9, 27, 7, 12, tzinfo=UTC)
 
-    assert _cutoff(saturday) == "2026-09-20T00:00:00+00:00"
-    assert _cutoff(sunday) == "2026-09-27T00:00:00+00:00"
-
+    assert _cutoff(saturday) == "2026-09-18T00:00:00+00:00"
+    assert _cutoff(sunday) == "2026-09-19T00:00:00+00:00"
 
 def _seed(path, fetched_at):
     conn = db.get_conn(path, allow_init=True)
@@ -50,12 +49,12 @@ def _seed(path, fetched_at):
 def test_gdelt_retention_preview_is_read_only_and_protects_referenced_events(tmp_path):
     path = tmp_path / "arkwatch.db"
     now = datetime(2026, 9, 27, 7, tzinfo=UTC)
-    _seed(path, ["2026-09-26T23:59:59+00:00", "2026-09-27T00:00:00+00:00"])
+    _seed(path, ["2026-09-18T23:59:59+00:00", "2026-09-27T00:00:00+00:00"])
 
     result = clean(path, now=now)
 
     assert result["applied"] is False
-    assert result["cutoff_utc"] == "2026-09-27T00:00:00+00:00"
+    assert result["cutoff_utc"] == "2026-09-19T00:00:00+00:00"
     assert result["tables"]["gdelt_mentions"]["rows"] == 1
     assert result["tables"]["gdelt_gkg"]["rows"] == 1
     assert result["tables"]["gdelt_events"]["rows"] == 1
@@ -83,6 +82,8 @@ def test_gdelt_retention_apply_removes_temporary_backup_after_verified_cleanup(
         "gdelt_mentions": 1,
         "gdelt_gkg": 1,
         "gdelt_events": 1,
+        "market_news": 0,
+        "market_news_payloads": 0,
     }
     assert result["remaining"] == {table: 0 for table in gdelt_retention.TABLES}
     assert result["quick_check"] == "ok"

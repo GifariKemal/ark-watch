@@ -73,11 +73,18 @@ def test_fetch_tree_news_sample_json(monkeypatch):
 
 
 def test_network_errors_return_empty_gracefully(monkeypatch):
-    def fake_fail(_req, **_kw):
+    def fake_fail(*_args, **_kw):
         raise URLError("Connection refused")
 
     monkeypatch.setattr(rss_news.urllib.request, "urlopen", fake_fail)
     monkeypatch.setattr(tree_news.urllib.request, "urlopen", fake_fail)
+
+    try:
+        from curl_cffi import requests as creq
+
+        monkeypatch.setattr(creq.Session, "get", fake_fail)
+    except Exception:
+        pass
 
     assert rss_news.fetch_rss_feed("FED", "https://example.com") == []
     assert rss_news.fetch_all_rss_feeds() == []

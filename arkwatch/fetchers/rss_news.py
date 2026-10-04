@@ -15,8 +15,13 @@ from datetime import UTC, datetime
 
 FEEDS = {
     "FED": "https://www.federalreserve.gov/feeds/press_all.xml",
-    "YAHOO": "https://finance.yahoo.com/news/rssindex",
+    "ECB": "https://www.ecb.europa.eu/rss/press.html",
+    "SEC": "https://www.sec.gov/news/pressreleases.rss",
+    "FOREXLIVE": "https://www.forexlive.com/feed/news",
+    "OILPRICE": "https://oilprice.com/rss/main",
+    "MARKETWATCH": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
     "CNBC": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "YAHOO": "https://finance.yahoo.com/news/rssindex",
 }
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) arkwatch/0.1"
@@ -45,12 +50,24 @@ def _parse_pub_date(pub_text: str | None) -> str:
 
 def fetch_rss_feed(source_name: str, url: str, timeout: int = 10) -> list[dict]:
     """Fetch and parse an RSS feed, returning standardized news dictionaries."""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    data = None
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            data = response.read()
+        from curl_cffi import requests as creq
+
+        s = creq.Session(impersonate="chrome")
+        r = s.get(url, timeout=timeout)
+        if r.status_code == 200:
+            data = r.content
     except Exception:
-        return []
+        pass
+
+    if data is None:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                data = response.read()
+        except Exception:
+            return []
 
     if not data:
         return []
@@ -78,7 +95,25 @@ def fetch_rss_feed(source_name: str, url: str, timeout: int = 10) -> list[dict]:
                 "url": link,
                 "summary": desc[:2000],
                 "published": pub,
-                "symbols": ["$FED"] if source_name.upper() == "FED" else [],
+                "symbols": (
+                    ["$FED"]
+                    if source_name.upper() == "FED"
+                    else (
+                        ["$EUR", "$ECB"]
+                        if source_name.upper() == "ECB"
+                        else (
+                            ["$SEC"]
+                            if source_name.upper() == "SEC"
+                            else (
+                                ["CL1", "BZ1"]
+                                if source_name.upper() == "OILPRICE"
+                                else (
+                                    ["$DXY", "$MACRO"] if source_name.upper() == "FOREXLIVE" else []
+                                )
+                            )
+                        )
+                    )
+                ),
                 "provider_payload": {
                     "source": source_name,
                     "title": title,

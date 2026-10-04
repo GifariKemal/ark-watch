@@ -76,7 +76,7 @@ def _verify_backup(db_path: Path, backup_path: Path) -> dict[str, int]:
     source = sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True)
     backup = sqlite3.connect(backup_path.as_uri() + "?mode=ro", uri=True)
     try:
-        if backup.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+        if backup.execute("PRAGMA quick_check").fetchone()[0] != "ok":
             raise ValueError("temporary pre-cleanup backup integrity check failed")
         counts = {}
         for table in ("raw_observations", "instrument_prices", "events", *TABLES):

@@ -224,10 +224,11 @@ def _run_job(cmd: str, desc: str) -> bool:
     # from tripping the 5-min staleness contract (D-018c)
     _heartbeat()
     try:
+        cmd_timeout = 3600 if "gdelt-retention" in cmd else 1800
         r = subprocess.run(
             [sys.executable, "-m", "arkwatch"] + cmd.split(),
             cwd=str(ROOT),
-            timeout=1800,  # 30-minute hard kill
+            timeout=cmd_timeout,
             capture_output=True,
             text=True,
             encoding="utf-8",

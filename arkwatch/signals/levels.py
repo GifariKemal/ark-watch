@@ -12,11 +12,20 @@ from 5-minute intraday bars (intraday_bars) with 100% auditable provenance:
 
 from __future__ import annotations
 
-import math
 import sqlite3
 from collections import defaultdict
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
+
+from .amt import (
+    analyze_initial_balance,
+    classify_profile_shape,
+    compute_composite_value_area,
+    compute_tpo_profile,
+    compute_value_area,
+    evaluate_auction_extremes,
+    evaluate_time_acceptance,
+)
 
 US_CASH_OPEN_UTC_SUMMER = time(13, 30)  # 09:30 ET during EDT
 US_CASH_OPEN_UTC_WINTER = time(14, 30)  # 09:30 ET during EST
@@ -57,93 +66,6 @@ def _get_cme_week_id(dt: datetime) -> str:
         effective_dt = dt + timedelta(days=1)
     y, w, _ = effective_dt.isocalendar()
     return f"{y}-W{w:02d}"
-
-
-def compute_value_area(
-    bars: list[tuple[str, float, float, float, float, float]],
-    *,
-    num_bins: int = 50,
-    va_volume_ratio: float = 0.70,
-) -> dict[str, Any]:
-    """Compute Point of Control (POC), VAH, and VAL using discrete volume profile binning."""
-    if not bars:
-        return {
-            "poc": None,
-            "vah": None,
-            "val": None,
-            "total_volume": 0.0,
-            "bars_count": 0,
-        }
-
-    highs = [b[2] for b in bars if b[2] is not None]
-    lows = [b[3] for b in bars if b[3] is not None]
-    if not highs or not lows:
-        return {
-            "poc": None,
-            "vah": None,
-            "val": None,
-            "total_volume": 0.0,
-            "bars_count": 0,
-        }
-
-    min_p = min(lows)
-    max_p = max(highs)
-    if max_p <= min_p:
-        return {
-            "poc": round(min_p, 4),
-            "vah": round(min_p, 4),
-            "val": round(min_p, 4),
-            "total_volume": sum(b[5] for b in bars),
-            "bars_count": len(bars),
-        }
-
-    bin_size = (max_p - min_p) / float(num_bins)
-    volume_by_bin = [0.0] * num_bins
-    total_vol = 0.0
-
-    for _ts, _o, h, low_val, _c, v in bars:
-        vol = max(1.0, float(v) if v is not None else 1.0)
-        total_vol += vol
-
-        start_idx = max(0, min(num_bins - 1, int(math.floor((low_val - min_p) / bin_size))))
-        end_idx = max(0, min(num_bins - 1, int(math.floor((h - min_p) / bin_size))))
-        covered_bins = end_idx - start_idx + 1
-        vol_per_bin = vol / float(covered_bins)
-        for idx in range(start_idx, end_idx + 1):
-            volume_by_bin[idx] += vol_per_bin
-
-    poc_idx = max(range(num_bins), key=lambda i: volume_by_bin[i])
-    poc_price = min_p + (poc_idx + 0.5) * bin_size
-
-    target_vol = total_vol * va_volume_ratio
-    current_vol = volume_by_bin[poc_idx]
-    upper_idx = poc_idx
-    lower_idx = poc_idx
-
-    while current_vol < target_vol and (upper_idx < num_bins - 1 or lower_idx > 0):
-        next_upper_vol = volume_by_bin[upper_idx + 1] if upper_idx + 1 < num_bins else -1.0
-        next_lower_vol = volume_by_bin[lower_idx - 1] if lower_idx - 1 >= 0 else -1.0
-
-        if next_upper_vol >= next_lower_vol and next_upper_vol >= 0.0:
-            upper_idx += 1
-            current_vol += next_upper_vol
-        elif next_lower_vol > 0.0:
-            lower_idx -= 1
-            current_vol += next_lower_vol
-        else:
-            break
-
-    vah_price = min_p + (upper_idx + 1.0) * bin_size
-    val_price = min_p + lower_idx * bin_size
-
-    return {
-        "poc": round(poc_price, 4),
-        "vah": round(vah_price, 4),
-        "val": round(val_price, 4),
-        "total_volume": round(total_vol, 2),
-        "bars_count": len(bars),
-        "bin_size": round(bin_size, 4),
-    }
 
 
 def compute_session_reference_levels(
@@ -284,6 +206,23 @@ def compute_session_reference_levels(
         else "NORMAL_DISPERSED"
     )
 
+    # AMT Advanced Profiling Integration
+    tpo_data = compute_tpo_profile(prior_bars, num_bins=40, rth_open_utc=cash_open_time)
+    ib_data = analyze_initial_balance(curr_bars, cash_open_time)
+    shape_data = classify_profile_shape(
+        va_profile["poc"] or last_price,
+        va_profile["vah"] or last_price,
+        va_profile["val"] or last_price,
+        pdh,
+        pdl,
+    )
+    extremes_data = evaluate_auction_extremes(prior_bars, atr_proxy)
+    cva_2d = compute_composite_value_area(session_bars, num_sessions=2)
+    time_acc = evaluate_time_acceptance(
+        [b[4] for b in curr_bars],
+        va_profile["vah"] or last_price,
+        va_profile["val"] or last_price,
+    )
     return {
         "symbol": sym,
         "as_of": target_dt.isoformat(timespec="seconds"),
@@ -305,6 +244,12 @@ def compute_session_reference_levels(
             "OR15_LOW": round(or15_low, 4) if or15_low is not None else None,
             "OR30_HIGH": round(or30_high, 4) if or30_high is not None else None,
             "OR30_LOW": round(or30_low, 4) if or30_low is not None else None,
+            "TPO_POC": tpo_data["tpo_poc"],
+            "TPO_VAH": tpo_data["tpo_vah"],
+            "TPO_VAL": tpo_data["tpo_val"],
+            "CVA_2D_POC": cva_2d["c_poc"] if cva_2d else None,
+            "CVA_2D_VAH": cva_2d["c_vah"] if cva_2d else None,
+            "CVA_2D_VAL": cva_2d["c_val"] if cva_2d else None,
             "WEEKLY_VWAP": weekly_vwap,
             "WEEKLY_VAH": weekly_va["vah"],
             "WEEKLY_POC": weekly_va["poc"],
@@ -332,6 +277,13 @@ def compute_session_reference_levels(
             ),
             "confluence_state": confluence_state,
             "confluence_details": confluence_notes,
+            "day_type": ib_data["day_type"],
+            "profile_shape": shape_data["shape"],
+            "profile_meaning": shape_data["meaning"],
+            "time_acceptance_status": time_acc["status"],
+            "time_acceptance_level": time_acc["acceptance_level"],
+            "high_auction_structure": extremes_data["high_structure"],
+            "low_auction_structure": extremes_data["low_structure"],
         },
         "provenance": {
             "source": ",".join(sorted(sources)),

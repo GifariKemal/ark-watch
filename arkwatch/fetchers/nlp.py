@@ -12,6 +12,7 @@ Multi-provider via NLP_PROVIDER env (zai|openai|anthropic|custom):
 
 All overridable: NLP_MODEL, NLP_BASE_URL, NLP_API_KEY.
 """
+
 from __future__ import annotations
 
 import json
@@ -66,15 +67,27 @@ def _openai_content(response: requests.Response) -> str:
 
 def _config() -> dict:
     """Resolve NLP provider config from env (see module docstring)."""
+    if "NLP_PROVIDER" not in os.environ and "ZAI_API_KEY" not in os.environ:
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv()
+        except ImportError:
+            pass
     provider = os.environ.get("NLP_PROVIDER", "zai").lower()
     model = os.environ.get("NLP_MODEL", "")
     base_url = os.environ.get("NLP_BASE_URL", "")
-    api_key = os.environ.get("NLP_API_KEY", "")
-
+    api_key = (
+        os.environ.get("NLP_API_KEY")
+        or os.environ.get("ZAI_API_KEY")
+        or os.environ.get("Z_AI_API_KEY", "")
+    )
     if provider == "zai":
         return {
             "endpoint": base_url or ZAI_ANTHROPIC,
-            "api_key": api_key or os.environ.get("ZAI_API_KEY") or os.environ.get("Z_AI_API_KEY", ""),
+            "api_key": api_key
+            or os.environ.get("ZAI_API_KEY")
+            or os.environ.get("Z_AI_API_KEY", ""),
             "model": model or "glm-5.3",
             "format": "anthropic",
         }
@@ -175,7 +188,7 @@ def analyze_tone(text: str, source_type: str = "minutes") -> dict:
 
     # truncate to ~12k chars for API limits
     body = text[:12000]
-    prompt = f"""Analyze this {source_type.replace('_', ' ')} for monetary policy tone.
+    prompt = f"""Analyze this {source_type.replace("_", " ")} for monetary policy tone.
 
 Rate the overall tone on a scale from -100 (maximally dovish: rate cuts, easing concern) to +100 (maximally hawkish: inflation fighting, tightening bias).
 
@@ -213,7 +226,9 @@ def compare_tones(text_a: str, text_b: str, label_a: str, label_b: str) -> dict:
         "a": {"label": label_a, **ta},
         "b": {"label": label_b, **tb},
         "shift": shift,
-        "direction": "more hawkish" if shift > 5 else ("more dovish" if shift < -5 else "unchanged"),
+        "direction": "more hawkish"
+        if shift > 5
+        else ("more dovish" if shift < -5 else "unchanged"),
         "detail": f"{label_a} {ta.get('score', 0):+.0f} → {label_b} {tb.get('score', 0):+.0f} (shift {shift:+.0f})",
     }
 
@@ -227,7 +242,7 @@ def extract_data_points(text: str, source_type: str = "statement") -> dict:
     if not cfg["api_key"]:
         raise NlpError("NLP API key not set")
 
-    prompt = f"""Extract all specific numeric or data claims from this {source_type.replace('_', ' ')}.
+    prompt = f"""Extract all specific numeric or data claims from this {source_type.replace("_", " ")}.
 For each claim, capture: what it's about, the value/number, and the surrounding context sentence.
 
 Respond as JSON: {{"claims": [{{"what": "<topic>", "value": "<number>", "context": "<sentence>"}}]}}

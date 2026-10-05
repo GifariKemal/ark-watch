@@ -67,6 +67,10 @@ def main() -> int:
     if cmd == "sentiment":
         import argparse
 
+        from dotenv import load_dotenv
+
+        load_dotenv()
+
         from . import db
         from .signals.sentiment import extract_news_intelligence, store_asset_radars
 

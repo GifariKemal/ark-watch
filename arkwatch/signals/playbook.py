@@ -14,10 +14,32 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import Any
 
+from . import cot_signals, options
 from .intraday import session_intraday_intelligence
 from .levels import compute_session_reference_levels
 from .pillars import compute_pillars, compute_regime_score
 from .sentiment import compute_asset_sentiment_radar, compute_intraday_catalyst_radar
+
+OPTIONS_PRODUCT_MAP: dict[str, str] = {
+    "GC1": "OG",
+    "SI1": "SO",
+    "BTCUSD": "BTC",
+    "CL1": "LO",
+    "ES1": "ES",
+}
+
+COT_CONTRACT_MAP: dict[str, str] = {
+    "NQ1": "209742",
+    "ES1": "13874A",
+    "YM1": "124603",
+    "GC1": "088691",
+    "SI1": "084691",
+    "CL1": "067651",
+    "BTCUSD": "133741",
+    "EURUSD": "099741",
+    "GBPUSD": "096742",
+    "USDJPY": "097741",
+}
 
 # Empirical historical parameters from docs/analysis/weekly-scenarios/daily-breakout-report.md
 # and docs/analysis/weekly-context/sections/07-conditional-probability.md
@@ -163,13 +185,80 @@ def generate_trading_playbook(
     fast_cat = compute_intraday_catalyst_radar(conn, sym, window_hours=4, as_of=as_of)
     swing_sent = compute_asset_sentiment_radar(conn, sym, window_days=3, as_of=as_of)
 
-    # 4. Fetch Macro Regime
+    # 4. Fetch Domain 1 (Macro Context)
     try:
         pillars = compute_pillars(conn)
         macro_regime_score = compute_regime_score(pillars)
     except Exception:
         macro_regime_score = 0.0
 
+    real_yield_row = conn.execute(
+        "SELECT value FROM raw_observations WHERE series_id='FRED:DFII10' ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+    real_yield_10y = float(real_yield_row[0]) if real_yield_row else None
+
+    curve_row = conn.execute(
+        "SELECT value FROM raw_observations WHERE series_id='FRED:T10Y2Y' ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+    yield_curve_spread = float(curve_row[0]) if curve_row else None
+
+    # 4b. Fetch Domain 2 (Institutional Flows & Positioning)
+    opt_prod = OPTIONS_PRODUCT_MAP.get(sym)
+    opt_snap = options.options_snapshot(conn, opt_prod) if opt_prod else None
+    opt_pcr = opt_snap.get("pcr") if opt_snap else None
+    opt_top_wall = opt_snap.get("top_wall") if opt_snap else None
+    opt_max_pain = opt_snap.get("max_pain") if opt_snap else None
+
+    cot_code = COT_CONTRACT_MAP.get(sym)
+    cot_z = cot_signals._cot_zscore(conn, cot_code) if cot_code else None
+
+    # 4c. Fetch Domain 4 Intermarket Microstructure (Live 1h Δ)
+    def _get_1h_chg(t_sym: str) -> float:
+        b = conn.execute(
+            "SELECT close FROM intraday_bars WHERE symbol=? ORDER BY bar_ts_utc DESC LIMIT 13",
+            (t_sym,),
+        ).fetchall()
+        if len(b) >= 13 and b[-1][0]:
+            return round(((b[0][0] - b[-1][0]) / b[-1][0]) * 100, 2)
+        return 0.0
+
+    tnx_1h_chg = _get_1h_chg("TNX")
+    dxy_1h_chg = _get_1h_chg("DXY")
+    smh_1h_chg = _get_1h_chg("SMH")
+    spy_1h_chg = _get_1h_chg("SPY")
+    semi_alpha = round(smh_1h_chg - spy_1h_chg, 2)
+
+    # Multi-Domain Confluence & Intermarket Friction Detection
+    friction_warnings = []
+    tailwinds = []
+
+    # Yield Friction on Equities/Tech
+    if sym in ("NQ1", "ES1") and tnx_1h_chg > 0.5:
+        friction_warnings.append(
+            f"YIELD_HEADWIND: 10Y Yield surging (+{tnx_1h_chg}% in 1h), creates valuation drag."
+        )
+    elif sym in ("NQ1", "ES1") and tnx_1h_chg < -0.5:
+        tailwinds.append(
+            f"YIELD_TAILWIND: 10Y Yield dropping ({tnx_1h_chg}% in 1h), provides duration relief."
+        )
+
+    # Dollar Friction on Gold & FX
+    if sym in ("GC1", "SI1", "EURUSD", "GBPUSD") and dxy_1h_chg > 0.15:
+        friction_warnings.append(
+            f"DOLLAR_HEADWIND: US Dollar strengthening (+{dxy_1h_chg}% in 1h)."
+        )
+    elif sym in ("GC1", "SI1", "EURUSD", "GBPUSD") and dxy_1h_chg < -0.15:
+        tailwinds.append(f"DOLLAR_TAILWIND: US Dollar softening ({dxy_1h_chg}% in 1h).")
+
+    # Semiconductor Lead on NQ1
+    if sym == "NQ1" and semi_alpha > 0.3:
+        tailwinds.append(
+            f"SEMI_LEADERSHIP: Chips outperforming market (+{semi_alpha}% alpha), supports tech breakout."
+        )
+    elif sym == "NQ1" and semi_alpha < -0.3:
+        friction_warnings.append(
+            f"SEMI_LAG: Chips lagging market ({semi_alpha}% alpha), cautions tech rally."
+        )
     # 5. Extract Empirical Stats for this symbol
     emp = EMPIRICAL_BREAKOUT_STATS.get(sym, EMPIRICAL_BREAKOUT_STATS.get("NQ1", {}))
     cont_atr = emp.get("high_continuation_median_atr", 0.30)
@@ -379,6 +468,33 @@ def generate_trading_playbook(
             "swing_macro_stance": swing_sent["stance"],
             "swing_macro_score": swing_sent["net_stance_score"],
             "macro_regime_score": round(macro_regime_score, 2),
+        },
+        "multi_domain": {
+            "domain_1_macro": {
+                "macro_regime_score": round(macro_regime_score, 2),
+                "tips_10y_real_yield": real_yield_10y,
+                "yield_curve_spread_t10y2y": yield_curve_spread,
+            },
+            "domain_2_flows": {
+                "options_pcr": round(opt_pcr, 3) if opt_pcr else None,
+                "options_top_wall": opt_top_wall,
+                "options_max_pain": opt_max_pain,
+                "cot_positioning_3y_zscore": round(cot_z, 2) if cot_z is not None else None,
+            },
+            "domain_4_intermarket": {
+                "us_10y_yield_1h_chg_pct": tnx_1h_chg,
+                "dxy_dollar_1h_chg_pct": dxy_1h_chg,
+                "semi_alpha_vs_spy_pct": semi_alpha,
+            },
+            "confluence_status": {
+                "friction_warnings": friction_warnings,
+                "tailwinds": tailwinds,
+                "alignment_state": (
+                    "FRICTION_DETECTED"
+                    if friction_warnings
+                    else ("STRONG_CONFLUENCE" if tailwinds else "NEUTRAL_BALANCED")
+                ),
+            },
         },
         "amt_context": {
             "open_type": open_type,

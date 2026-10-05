@@ -19,12 +19,17 @@ from typing import Any
 
 from .amt import (
     analyze_initial_balance,
+    classify_open_type,
+    classify_participant_activity,
     classify_profile_shape,
-    compute_composite_value_area,
+    classify_value_migration,
+    compute_dynamic_cva,
     compute_tpo_profile,
     compute_value_area,
     evaluate_auction_extremes,
     evaluate_time_acceptance,
+    find_naked_pocs,
+    get_asset_ib_timing,
 )
 
 US_CASH_OPEN_UTC_SUMMER = time(13, 30)  # 09:30 ET during EDT
@@ -141,13 +146,14 @@ def compute_session_reference_levels(
     va_profile = compute_value_area(prior_bars)
 
     # 4. Overnight Session (Asia + London: 18:00 ET to 09:30 ET)
-    cash_open_time = _get_cash_open_time(target_dt)
-    # Bars before 09:30 ET are overnight
+    edt_active = _is_dst_edt(target_dt)
+    ib_open_time, ib_timing_label = get_asset_ib_timing(sym, is_dst=edt_active)
+
     overnight_bars = []
     rth_bars = []
     for b in curr_bars:
         b_dt = datetime.fromisoformat(b[0]).astimezone(UTC)
-        if b_dt.time() < cash_open_time:
+        if b_dt.time() < ib_open_time:
             overnight_bars.append(b)
         else:
             rth_bars.append(b)
@@ -206,9 +212,9 @@ def compute_session_reference_levels(
         else "NORMAL_DISPERSED"
     )
 
-    # AMT Advanced Profiling Integration
-    tpo_data = compute_tpo_profile(prior_bars, num_bins=40, rth_open_utc=cash_open_time)
-    ib_data = analyze_initial_balance(curr_bars, cash_open_time)
+    # AMT 5 Pillars & Advanced Profiling Integration
+    tpo_data = compute_tpo_profile(prior_bars, num_bins=40, rth_open_utc=ib_open_time)
+    ib_data = analyze_initial_balance(curr_bars, ib_open_time)
     shape_data = classify_profile_shape(
         va_profile["poc"] or last_price,
         va_profile["vah"] or last_price,
@@ -217,12 +223,47 @@ def compute_session_reference_levels(
         pdl,
     )
     extremes_data = evaluate_auction_extremes(prior_bars, atr_proxy)
-    cva_2d = compute_composite_value_area(session_bars, num_sessions=2)
     time_acc = evaluate_time_acceptance(
         [b[4] for b in curr_bars],
         va_profile["vah"] or last_price,
         va_profile["val"] or last_price,
     )
+
+    # Pilar 1: The 4 Open Types (James Dalton)
+    open_type_info = classify_open_type(
+        rth_bars if rth_bars else curr_bars[:6],
+        pdh,
+        pdl,
+        va_profile["vah"] or last_price,
+        va_profile["val"] or last_price,
+        atr_proxy,
+    )
+
+    # Pilar 2: Participant Activity (Initiative vs Responsive)
+    participant_info = classify_participant_activity(
+        last_price,
+        va_profile["vah"] or last_price,
+        va_profile["val"] or last_price,
+        latest_bar,
+    )
+
+    # Pilar 3: Value Migration Day-to-Day
+    prior_prior_bars = session_bars.get(sorted_sessions[idx - 2]) if idx >= 2 else None
+    prior_prior_va = compute_value_area(prior_prior_bars) if prior_prior_bars else None
+    value_migration = classify_value_migration(
+        va_profile["vah"],
+        va_profile["val"],
+        va_profile["poc"],
+        prior_prior_va["vah"] if prior_prior_va else None,
+        prior_prior_va["val"] if prior_prior_va else None,
+        prior_prior_va["poc"] if prior_prior_va else None,
+    )
+
+    # Pilar 4: Dynamic N-Day CVA (Contiguous Balance Expansion & 100% Measured Move)
+    dynamic_cva = compute_dynamic_cva(session_bars, min_sessions=2, max_sessions=8)
+
+    # Pilar 5: Naked POCs (Virgin POC Liquidity Magnets)
+    naked_pocs = find_naked_pocs(session_bars, last_price, lookback_sessions=25)
     return {
         "symbol": sym,
         "as_of": target_dt.isoformat(timespec="seconds"),
@@ -247,9 +288,24 @@ def compute_session_reference_levels(
             "TPO_POC": tpo_data["tpo_poc"],
             "TPO_VAH": tpo_data["tpo_vah"],
             "TPO_VAL": tpo_data["tpo_val"],
-            "CVA_2D_POC": cva_2d["c_poc"] if cva_2d else None,
-            "CVA_2D_VAH": cva_2d["c_vah"] if cva_2d else None,
-            "CVA_2D_VAL": cva_2d["c_val"] if cva_2d else None,
+            "DYNAMIC_CVA_NAME": dynamic_cva["composite_name"] if dynamic_cva else None,
+            "DYNAMIC_CVA_POC": dynamic_cva["c_poc"] if dynamic_cva else None,
+            "DYNAMIC_CVA_VAH": dynamic_cva["c_vah"] if dynamic_cva else None,
+            "DYNAMIC_CVA_VAL": dynamic_cva["c_val"] if dynamic_cva else None,
+            "CVA_MEASURED_MOVE_LONG": dynamic_cva["dalton_measured_move"]["upside_breakout_target"]
+            if dynamic_cva
+            else None,
+            "CVA_MEASURED_MOVE_SHORT": dynamic_cva["dalton_measured_move"][
+                "downside_breakout_target"
+            ]
+            if dynamic_cva
+            else None,
+            "NAKED_POC_ABOVE": naked_pocs["nearest_naked_poc_above"]["poc"]
+            if naked_pocs.get("nearest_naked_poc_above")
+            else None,
+            "NAKED_POC_BELOW": naked_pocs["nearest_naked_poc_below"]["poc"]
+            if naked_pocs.get("nearest_naked_poc_below")
+            else None,
             "WEEKLY_VWAP": weekly_vwap,
             "WEEKLY_VAH": weekly_va["vah"],
             "WEEKLY_POC": weekly_va["poc"],
@@ -277,7 +333,17 @@ def compute_session_reference_levels(
             ),
             "confluence_state": confluence_state,
             "confluence_details": confluence_notes,
+            "ib_timing_convention": ib_timing_label,
             "day_type": ib_data["day_type"],
+            "open_type": open_type_info["open_type"],
+            "open_conviction": open_type_info["conviction"],
+            "open_rationale": open_type_info["rationale"],
+            "participant_activity": participant_info["activity"],
+            "participant_meaning": participant_info["meaning"],
+            "value_migration": value_migration["relationship"],
+            "value_migration_bias": value_migration["bias"],
+            "dynamic_cva_days": dynamic_cva["composite_days_count"] if dynamic_cva else 1,
+            "naked_pocs_count": naked_pocs["total_naked_pocs"],
             "profile_shape": shape_data["shape"],
             "profile_meaning": shape_data["meaning"],
             "time_acceptance_status": time_acc["status"],

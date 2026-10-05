@@ -387,6 +387,162 @@ def compute_asset_sentiment_radar(
     }
 
 
+def compute_intraday_catalyst_radar(
+    conn: sqlite3.Connection,
+    asset: str,
+    *,
+    window_hours: int = 4,
+    half_life_hours: float = 1.5,
+    as_of: datetime | str | None = None,
+) -> dict[str, Any]:
+    """Compute fast-decaying intraday catalyst radar for active trading session."""
+    norm_asset = _normalize_asset(asset)
+    if not norm_asset:
+        raise ValueError(f"Unknown asset '{asset}', must be one of {TRACKED_ASSETS}")
+
+    if as_of is None:
+        target_dt = datetime.now(UTC)
+    elif isinstance(as_of, str):
+        target_dt = datetime.fromisoformat(as_of).astimezone(UTC)
+    else:
+        target_dt = as_of.astimezone(UTC)
+
+    since_dt = target_dt - timedelta(hours=window_hours)
+    since_str = since_dt.isoformat(timespec="seconds")
+    until_str = target_dt.isoformat(timespec="seconds")
+
+    rows = conn.execute(
+        """
+        SELECT ni.news_id, ni.stance, ni.magnitude, ni.confidence,
+               ni.macro_channel, ni.impact_horizon, ni.evidence_level,
+               ni.evidence_quote, ni.transmission_rationale, ni.published_at_utc,
+               m.source, m.title
+        FROM news_intelligence ni
+        JOIN market_news m ON m.news_id = ni.news_id
+        WHERE ni.asset = ?
+          AND ni.published_at_utc >= ?
+          AND ni.published_at_utc <= ?
+        ORDER BY ni.published_at_utc DESC
+        """,
+        (norm_asset, since_str, until_str),
+    ).fetchall()
+
+    if not rows:
+        return {
+            "asset": norm_asset,
+            "sample_count": 0,
+            "net_stance_score": 0.0,
+            "stance": "NEUTRAL",
+            "confidence": 0.0,
+            "active_catalysts": {},
+            "evidence_breakdown": {"OBSERVED": 0, "SOURCED": 0, "INFERRED": 0},
+            "top_intraday_quotes": [],
+            "as_of": until_str,
+            "provenance": {
+                "window_hours": window_hours,
+                "half_life_hours": half_life_hours,
+                "articles_evaluated": 0,
+                "calculated_at_utc": until_str,
+            },
+        }
+
+    total_weighted_score = 0.0
+    total_weights = 0.0
+    catalyst_weights: dict[str, float] = {}
+    evidence_counts = {"OBSERVED": 0, "SOURCED": 0, "INFERRED": 0}
+    quotes = []
+
+    for r in rows:
+        (
+            news_id,
+            stance,
+            magnitude,
+            confidence,
+            channel,
+            horizon,
+            evidence_level,
+            quote,
+            rationale,
+            pub_utc,
+            source,
+            title,
+        ) = r
+
+        try:
+            pub_dt = datetime.fromisoformat(pub_utc).astimezone(UTC)
+            hours_elapsed = max(0.0, (target_dt - pub_dt).total_seconds() / 3600.0)
+        except Exception:
+            hours_elapsed = 1.0
+
+        time_decay = math.exp(-hours_elapsed / half_life_hours)
+        ev_weight = (
+            1.0 if evidence_level == "OBSERVED" else (0.8 if evidence_level == "SOURCED" else 0.5)
+        )
+        hor_weight = 1.0 if horizon in ("INTRADAY_VOLATILITY", "SWING_MULTIDAY") else 0.7
+        item_weight = time_decay * ev_weight * hor_weight
+
+        direction = 1.0 if stance == "BULLISH" else (-1.0 if stance == "BEARISH" else 0.0)
+        item_score = direction * magnitude * confidence
+        total_weighted_score += item_score * item_weight
+        total_weights += item_weight
+
+        catalyst_weights[channel] = catalyst_weights.get(channel, 0.0) + item_weight
+        if evidence_level in evidence_counts:
+            evidence_counts[evidence_level] += 1
+
+        if quote and len(quotes) < 5:
+            quotes.append(
+                {
+                    "source": source,
+                    "title": title,
+                    "stance": stance,
+                    "quote": quote,
+                    "rationale": rationale,
+                    "published_at": pub_utc,
+                    "minutes_ago": round(hours_elapsed * 60, 1),
+                }
+            )
+
+    net_score = total_weighted_score / total_weights if total_weights > 0 else 0.0
+    net_score = max(-1.0, min(1.0, round(net_score, 3)))
+
+    if net_score >= 0.20:
+        overall_stance = "BULLISH"
+    elif net_score <= -0.20:
+        overall_stance = "BEARISH"
+    else:
+        overall_stance = "NEUTRAL"
+
+    sum_cat = sum(catalyst_weights.values()) or 1.0
+    sorted_catalysts = {
+        k: round(v / sum_cat, 3)
+        for k, v in sorted(catalyst_weights.items(), key=lambda kv: kv[1], reverse=True)
+    }
+
+    avg_confidence = round(
+        sum(r[3] * (1.0 if r[6] == "OBSERVED" else 0.8) for r in rows) / len(rows),
+        2,
+    )
+
+    return {
+        "asset": norm_asset,
+        "sample_count": len(rows),
+        "net_stance_score": net_score,
+        "stance": overall_stance,
+        "confidence": avg_confidence,
+        "active_catalysts": sorted_catalysts,
+        "evidence_breakdown": evidence_counts,
+        "top_intraday_quotes": quotes,
+        "as_of": until_str,
+        "provenance": {
+            "window_hours": window_hours,
+            "half_life_hours": half_life_hours,
+            "articles_evaluated": len(rows),
+            "calculated_at_utc": until_str,
+        },
+    }
+
+
 def compute_all_asset_radars(
     conn: sqlite3.Connection,
     *,

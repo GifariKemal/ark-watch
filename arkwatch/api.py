@@ -11,7 +11,10 @@ Key APIs:
   - get_market_news()
   - get_news_intelligence()
   - get_asset_sentiment_radar()
+  - get_intraday_catalyst_radar()
   - get_all_sentiment_radars()
+  - get_session_levels()
+  - get_trading_playbook()
   - get_economic_calendar()
   - on_demand_refresh()
 """
@@ -330,6 +333,45 @@ def get_all_sentiment_radars(
 
     with _get_connection(conn, db_path) as c:
         return compute_all_asset_radars(c, window_days=window_days)
+
+
+def get_intraday_catalyst_radar(
+    asset: str,
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+    window_hours: int = 4,
+) -> dict:
+    """Retrieve fast-decaying intraday catalyst radar for active trading session."""
+    from .signals.sentiment import compute_intraday_catalyst_radar
+
+    with _get_connection(conn, db_path) as c:
+        return compute_intraday_catalyst_radar(c, asset, window_hours=window_hours)
+
+
+def get_session_levels(
+    symbol: str,
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+    as_of: datetime | str | None = None,
+) -> dict | None:
+    """Retrieve Auction Market Theory reference levels (PDH, PDL, PDC, VAH, VAL, POC, ONH, ONL, OR)."""
+    from .signals.levels import compute_session_reference_levels
+
+    with _get_connection(conn, db_path) as c:
+        return compute_session_reference_levels(c, symbol, as_of=as_of)
+
+
+def get_trading_playbook(
+    symbol: str,
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+    as_of: datetime | str | None = None,
+) -> dict | None:
+    """Retrieve actionable if-then trading playbook with target profits and invalidation levels."""
+    from .signals.playbook import generate_trading_playbook
+
+    with _get_connection(conn, db_path) as c:
+        return generate_trading_playbook(c, symbol, as_of=as_of)
 
 
 def get_economic_calendar(

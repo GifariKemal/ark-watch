@@ -1,0 +1,340 @@
+"""playbook.py — Actionable Trading Playbook & Scenario Outlook Engine.
+
+Synthesizes Auction Market Theory reference levels, intraday price action (VWAP & ATR),
+fast news catalyst stances, and macro regime score into actionable if-then trading
+scenarios with mathematically grounded target profits and invalidation levels.
+
+Grounds all baseline breakout and trap probabilities on empirical historical studies
+(docs/analysis/) with exact sample counts (N >= 500) and confidence intervals.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from datetime import UTC, datetime
+from typing import Any
+
+from .intraday import session_intraday_intelligence
+from .levels import compute_session_reference_levels
+from .pillars import compute_pillars, compute_regime_score
+from .sentiment import compute_asset_sentiment_radar, compute_intraday_catalyst_radar
+
+# Empirical historical parameters from docs/analysis/weekly-scenarios/daily-breakout-report.md
+# and docs/analysis/weekly-context/sections/07-conditional-probability.md
+EMPIRICAL_BREAKOUT_STATS: dict[str, dict[str, Any]] = {
+    "NQ1": {
+        "source_doc": "docs/analysis/weekly-scenarios/daily-breakout-report.md",
+        "sample_weeks_high": 658,
+        "sample_weeks_low": 521,
+        "high_break_rate_pct": 79.85,
+        "high_false_close_pct": 44.22,
+        "high_false_close_ci95": (40.47, 48.04),
+        "high_continuation_median_atr": 0.3151,
+        "low_break_rate_pct": 63.23,
+        "low_false_close_pct": 52.98,
+        "low_false_close_ci95": (48.68, 57.22),
+        "low_continuation_median_atr": 0.2125,
+    },
+    "ES1": {
+        "source_doc": "docs/analysis/weekly-scenarios/daily-breakout-report.md",
+        "sample_weeks_high": 1130,
+        "sample_weeks_low": 990,
+        "high_break_rate_pct": 77.61,
+        "high_false_close_pct": 46.55,
+        "high_false_close_ci95": (43.66, 49.46),
+        "high_continuation_median_atr": 0.2774,
+        "low_break_rate_pct": 67.99,
+        "low_false_close_pct": 53.03,
+        "low_false_close_ci95": (49.92, 56.12),
+        "low_continuation_median_atr": 0.2246,
+    },
+    "YM1": {
+        "source_doc": "docs/analysis/weekly-scenarios/daily-breakout-report.md",
+        "sample_weeks_high": 691,
+        "sample_weeks_low": 600,
+        "high_break_rate_pct": 78.34,
+        "high_false_close_pct": 49.78,
+        "high_false_close_ci95": (46.07, 53.50),
+        "high_continuation_median_atr": 0.2372,
+        "low_break_rate_pct": 68.03,
+        "low_false_close_pct": 49.33,
+        "low_false_close_ci95": (45.35, 53.33),
+        "low_continuation_median_atr": 0.2454,
+    },
+    "GC1": {
+        "source_doc": "docs/analysis/weekly-scenarios/daily-breakout-report.md",
+        "sample_weeks_high": 1708,
+        "sample_weeks_low": 1621,
+        "high_break_rate_pct": 70.90,
+        "high_false_close_pct": 33.55,
+        "high_false_close_ci95": (31.35, 35.82),
+        "high_continuation_median_atr": 0.2690,
+        "low_break_rate_pct": 67.29,
+        "low_false_close_pct": 27.70,
+        "low_false_close_ci95": (25.58, 29.93),
+        "low_continuation_median_atr": 0.2173,
+    },
+    "BTCUSD": {
+        "source_doc": "docs/analysis/weekly-scenarios/daily-breakout-report.md",
+        "sample_weeks_high": 627,
+        "sample_weeks_low": 545,
+        "high_break_rate_pct": 74.38,
+        "high_false_close_pct": 49.12,
+        "high_false_close_ci95": (45.23, 53.03),
+        "high_continuation_median_atr": 0.4220,
+        "low_break_rate_pct": 64.65,
+        "low_false_close_pct": 54.31,
+        "low_false_close_ci95": (50.11, 58.45),
+        "low_continuation_median_atr": 0.2366,
+    },
+    "EURUSD": {
+        "source_doc": "docs/analysis/weekly-scenarios/daily-breakout-report.md",
+        "sample_weeks_high": 893,
+        "sample_weeks_low": 861,
+        "high_break_rate_pct": 70.37,
+        "high_false_close_pct": 43.67,
+        "high_false_close_ci95": (40.45, 46.95),
+        "high_continuation_median_atr": 0.2056,
+        "low_break_rate_pct": 67.85,
+        "low_false_close_pct": 44.72,
+        "low_false_close_ci95": (41.43, 48.05),
+        "low_continuation_median_atr": 0.2276,
+    },
+    "GBPUSD": {
+        "source_doc": "docs/analysis/weekly-scenarios/daily-breakout-report.md",
+        "sample_weeks_high": 925,
+        "sample_weeks_low": 853,
+        "high_break_rate_pct": 72.89,
+        "high_false_close_pct": 54.49,
+        "high_false_close_ci95": (51.27, 57.67),
+        "high_continuation_median_atr": 0.2152,
+        "low_break_rate_pct": 67.22,
+        "low_false_close_pct": 56.74,
+        "low_false_close_ci95": (53.39, 60.03),
+        "low_continuation_median_atr": 0.2284,
+    },
+}
+
+
+def generate_trading_playbook(
+    conn: sqlite3.Connection,
+    symbol: str,
+    *,
+    as_of: datetime | str | None = None,
+) -> dict[str, Any] | None:
+    """Generate an actionable probabilistic trading playbook with target profits and invalidation levels."""
+    sym = symbol.strip().upper()
+
+    # 1. Fetch Session Reference Levels (Auction Market Theory)
+    ref = compute_session_reference_levels(conn, sym, as_of=as_of)
+    if not ref:
+        return None
+
+    levels = ref["levels"]
+    last_price = ref["last_price"]
+    pdh = levels["PDH"]
+    pdl = levels["PDL"]
+    pdc = levels.get("PDC", last_price)
+    vah = levels["VAH"]
+    val = levels["VAL"]
+    poc = levels["POC"]
+
+    # 2. Fetch Intraday Price Action (VWAP and ATR)
+    pa = session_intraday_intelligence(conn, sym, as_of=as_of)
+    vwap = pa.get("vwap") if pa else None
+    atr_14 = pa.get("atr_14") if pa else None
+    if atr_14 is None or atr_14 <= 0.0:
+        atr_14 = max(0.001, (pdh - pdl) * 0.5)
+
+    volatility_ratio = pa.get("volatility_ratio", 1.0) if pa else 1.0
+    vwap_state = pa.get("vwap_state", "NEUTRAL") if pa else "NEUTRAL"
+
+    # 3. Fetch Fast Intraday Catalyst & Macro Swing Sentiment
+    fast_cat = compute_intraday_catalyst_radar(conn, sym, window_hours=4, as_of=as_of)
+    swing_sent = compute_asset_sentiment_radar(conn, sym, window_days=3, as_of=as_of)
+
+    # 4. Fetch Macro Regime
+    try:
+        pillars = compute_pillars(conn)
+        macro_regime_score = compute_regime_score(pillars)
+    except Exception:
+        macro_regime_score = 0.0
+
+    # 5. Extract Empirical Stats for this symbol
+    emp = EMPIRICAL_BREAKOUT_STATS.get(sym, EMPIRICAL_BREAKOUT_STATS.get("NQ1", {}))
+    cont_atr = emp.get("high_continuation_median_atr", 0.30)
+    high_false_close_pct = emp.get("high_false_close_pct", 45.0)
+    low_false_close_pct = emp.get("low_false_close_pct", 50.0)
+
+    # 6. Build Actionable Scenarios
+    scenarios = []
+
+    # SCENARIO 1: Trend Expansion / Value Acceptance (Long or Short)
+    if fast_cat["net_stance_score"] >= 0.15 and (vwap is None or last_price >= vwap):
+        # Long expansion bias
+        target_p = round(max(pdh, last_price + (cont_atr * atr_14)), 2)
+        inval_p = round(
+            min(val if val else last_price, vwap if vwap else last_price - (0.5 * atr_14)), 2
+        )
+        scenarios.append(
+            {
+                "id": "SCENARIO_EXPANSION_LONG",
+                "title": "Trend Expansion Long (Catalyst Momentum + Value Acceptance)",
+                "direction": "LONG",
+                "trigger_condition": (
+                    f"5m candle closes and holds above VAH ({vah}) with price staying above Session VWAP ({vwap})"
+                ),
+                "target_profit": target_p,
+                "invalidation_level": inval_p,
+                "risk_reward_ratio": (
+                    round((target_p - last_price) / max(0.01, (last_price - inval_p)), 2)
+                    if last_price > inval_p
+                    else 1.5
+                ),
+                "invalidation_rationale": "Loss of Session VWAP or close back inside Value Area rejects continuation.",
+                "empirical_support": {
+                    "continuation_median_atr": cont_atr,
+                    "target_derivation": f"max(PDH, last_price + {cont_atr} * ATR_14)",
+                    "sample_weeks": emp.get("sample_weeks_high"),
+                    "source": emp.get("source_doc"),
+                },
+            }
+        )
+    elif fast_cat["net_stance_score"] <= -0.15 and (vwap is None or last_price <= vwap):
+        # Short expansion bias
+        target_p = round(min(pdl, last_price - (cont_atr * atr_14)), 2)
+        inval_p = round(
+            max(vah if vah else last_price, vwap if vwap else last_price + (0.5 * atr_14)), 2
+        )
+        scenarios.append(
+            {
+                "id": "SCENARIO_EXPANSION_SHORT",
+                "title": "Trend Expansion Short (Dovish/Bearish Catalyst + Value Acceptance)",
+                "direction": "SHORT",
+                "trigger_condition": (
+                    f"5m candle closes and holds below VAL ({val}) with price staying below Session VWAP ({vwap})"
+                ),
+                "target_profit": target_p,
+                "invalidation_level": inval_p,
+                "risk_reward_ratio": (
+                    round((last_price - target_p) / max(0.01, (inval_p - last_price)), 2)
+                    if inval_p > last_price
+                    else 1.5
+                ),
+                "invalidation_rationale": "Reclaim of Session VWAP or close back inside Value Area invalidates short.",
+                "empirical_support": {
+                    "continuation_median_atr": emp.get("low_continuation_median_atr", cont_atr),
+                    "target_derivation": f"min(PDL, last_price - {cont_atr} * ATR_14)",
+                    "sample_weeks": emp.get("sample_weeks_low"),
+                    "source": emp.get("source_doc"),
+                },
+            }
+        )
+
+    # SCENARIO 2: Liquidity Sweep / Failed Auction (Trap Setup)
+    # If price tested near PDH or above PDH
+    if last_price >= pdh * 0.998:
+        sweep_inval = round(pdh + (0.20 * atr_14), 2)
+        sweep_target = round(poc if poc else pdc, 2)
+        scenarios.append(
+            {
+                "id": "SCENARIO_PDH_SWEEP_REVERSAL",
+                "title": "PDH Liquidity Sweep / Bull Trap Reversal",
+                "direction": "SHORT",
+                "trigger_condition": (
+                    f"Price spikes above PDH ({pdh}) but fails to sustain; 5m/15m candle closes back below {pdh}"
+                ),
+                "target_profit": sweep_target,
+                "invalidation_level": sweep_inval,
+                "risk_reward_ratio": (
+                    round((last_price - sweep_target) / max(0.01, (sweep_inval - last_price)), 2)
+                    if sweep_inval > last_price
+                    else 2.0
+                ),
+                "invalidation_rationale": f"Price accepts and sustains above {sweep_inval} (PDH + 0.20*ATR) proves breakout.",
+                "empirical_support": {
+                    "empirical_false_close_rate_pct": high_false_close_pct,
+                    "confidence_interval_95": emp.get("high_false_close_ci95"),
+                    "sample_weeks": emp.get("sample_weeks_high"),
+                    "mechanism": "Nearly half (44%-54%) of high breakouts fail to close outside prior range",
+                    "source": emp.get("source_doc"),
+                },
+            }
+        )
+    # If price tested near PDL or below PDL
+    elif last_price <= pdl * 1.002:
+        sweep_inval = round(pdl - (0.20 * atr_14), 2)
+        sweep_target = round(poc if poc else pdc, 2)
+        scenarios.append(
+            {
+                "id": "SCENARIO_PDL_SWEEP_REVERSAL",
+                "title": "PDL Liquidity Sweep / Bear Trap Reversal",
+                "direction": "LONG",
+                "trigger_condition": (
+                    f"Price pierces below PDL ({pdl}) but reclaims level; 5m/15m candle closes back above {pdl}"
+                ),
+                "target_profit": sweep_target,
+                "invalidation_level": sweep_inval,
+                "risk_reward_ratio": (
+                    round((sweep_target - last_price) / max(0.01, (last_price - sweep_inval)), 2)
+                    if last_price > sweep_inval
+                    else 2.0
+                ),
+                "invalidation_rationale": f"Price breaks below {sweep_inval} (PDL - 0.20*ATR) confirms breakdown.",
+                "empirical_support": {
+                    "empirical_false_close_rate_pct": low_false_close_pct,
+                    "confidence_interval_95": emp.get("low_false_close_ci95"),
+                    "sample_weeks": emp.get("sample_weeks_low"),
+                    "mechanism": "Observed low false close frequency across historical database",
+                    "source": emp.get("source_doc"),
+                },
+            }
+        )
+
+    # SCENARIO 3: Rotational Digestion inside Value Area
+    if not scenarios:
+        scenarios.append(
+            {
+                "id": "SCENARIO_ROTATIONAL_VALUE",
+                "title": "Rotational Digestion Inside Value Area",
+                "direction": "NEUTRAL_RANGE",
+                "trigger_condition": f"Price remains bracketed between VAL ({val}) and VAH ({vah})",
+                "target_profit": round(poc, 2) if poc else last_price,
+                "invalidation_level": round(vah, 2) if vah else last_price,
+                "risk_reward_ratio": 1.0,
+                "invalidation_rationale": "Sustained bar close outside VAH or VAL transitions market into trend state.",
+                "empirical_support": {
+                    "mechanism": "Auction Market Theory 70% volume containment",
+                    "source": "AMT Market Profile",
+                },
+            }
+        )
+
+    now_utc = datetime.now(UTC).isoformat(timespec="seconds")
+    return {
+        "symbol": sym,
+        "as_of": now_utc,
+        "last_price": round(last_price, 4),
+        "reference_levels": levels,
+        "price_action": {
+            "vwap": round(vwap, 4) if vwap else None,
+            "atr_14": round(atr_14, 4),
+            "vwap_state": vwap_state,
+            "volatility_ratio": round(volatility_ratio, 2),
+        },
+        "catalysts": {
+            "intraday_fast_stance": fast_cat["stance"],
+            "intraday_fast_score": fast_cat["net_stance_score"],
+            "active_channels": fast_cat.get("active_catalysts", {}),
+            "top_quotes": fast_cat.get("top_intraday_quotes", [])[:2],
+            "swing_macro_stance": swing_sent["stance"],
+            "swing_macro_score": swing_sent["net_stance_score"],
+            "macro_regime_score": round(macro_regime_score, 2),
+        },
+        "scenarios": scenarios,
+        "provenance": {
+            "levels_derived_from": ref["provenance"],
+            "empirical_dataset": emp.get("source_doc"),
+            "calculated_at_utc": now_utc,
+        },
+    }

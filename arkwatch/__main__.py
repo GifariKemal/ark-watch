@@ -84,6 +84,52 @@ def main() -> int:
         conn.close()
         print(f"=== sentiment: extracted {n} articles, updated {len(radars)} asset radars ===")
         return 0
+    if cmd == "playbook":
+        import argparse
+        import json
+
+        from dotenv import load_dotenv
+
+        load_dotenv()
+
+        from . import db
+        from .signals.playbook import generate_trading_playbook
+
+        p = argparse.ArgumentParser(prog="arkwatch playbook")
+        p.add_argument("symbol", nargs="?", default="NQ1", help="symbol to generate playbook for")
+        p.add_argument("--db", default=str(_DEFAULT_DB))
+        a = p.parse_args(sys.argv[2:])
+        conn = db.get_conn(a.db, allow_init=True)
+        res = generate_trading_playbook(conn, a.symbol)
+        conn.close()
+        if not res:
+            print(f"No intraday bars found for {a.symbol}")
+            return 1
+        print(json.dumps(res, indent=2))
+        return 0
+    if cmd == "levels":
+        import argparse
+        import json
+
+        from dotenv import load_dotenv
+
+        load_dotenv()
+
+        from . import db
+        from .signals.levels import compute_session_reference_levels
+
+        p = argparse.ArgumentParser(prog="arkwatch levels")
+        p.add_argument("symbol", nargs="?", default="NQ1", help="symbol to compute levels for")
+        p.add_argument("--db", default=str(_DEFAULT_DB))
+        a = p.parse_args(sys.argv[2:])
+        conn = db.get_conn(a.db, allow_init=True)
+        res = compute_session_reference_levels(conn, a.symbol)
+        conn.close()
+        if not res:
+            print(f"No intraday bars found for {a.symbol}")
+            return 1
+        print(json.dumps(res, indent=2))
+        return 0
     if cmd == "harvest":
         from .qa.harvest import main as harvest_main
 

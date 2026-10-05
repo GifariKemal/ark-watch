@@ -269,7 +269,8 @@ def test_generate_trading_playbook_scenarios_and_api(tmp_path):
     assert "multi_domain" in pb
     assert "domain_1_macro" in pb["multi_domain"]
     assert "domain_2_flows" in pb["multi_domain"]
-    assert "domain_4_intermarket" in pb["multi_domain"]
+    assert "domain_3_news_events" in pb["multi_domain"]
+    assert "domain_4_intermarket_breadth" in pb["multi_domain"]
     assert "scenarios" in pb
     assert len(pb["scenarios"]) >= 1
     scenario = pb["scenarios"][0]

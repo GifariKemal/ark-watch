@@ -11,10 +11,10 @@ Grounds all baseline breakout and trap probabilities on empirical historical stu
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from . import cot_signals, options
+from . import cot_signals, options, vixterm
 from .intraday import session_intraday_intelligence
 from .levels import compute_session_reference_levels
 from .pillars import compute_pillars, compute_regime_score
@@ -147,6 +147,12 @@ def generate_trading_playbook(
     """Generate an actionable probabilistic trading playbook with target profits and invalidation levels."""
     sym = symbol.strip().upper()
 
+    if as_of is None:
+        target_dt = datetime.now(UTC)
+    elif isinstance(as_of, str):
+        target_dt = datetime.fromisoformat(as_of).astimezone(UTC)
+    else:
+        target_dt = as_of.astimezone(UTC)
     # 1. Fetch Session Reference Levels (Auction Market Theory)
     ref = compute_session_reference_levels(conn, sym, as_of=as_of)
     if not ref:
@@ -185,7 +191,7 @@ def generate_trading_playbook(
     fast_cat = compute_intraday_catalyst_radar(conn, sym, window_hours=4, as_of=as_of)
     swing_sent = compute_asset_sentiment_radar(conn, sym, window_days=3, as_of=as_of)
 
-    # 4. Fetch Domain 1 (Macro Context)
+    # 4. Fetch Domain 1 (Macro Engine Context)
     try:
         pillars = compute_pillars(conn)
         macro_regime_score = compute_regime_score(pillars)
@@ -202,6 +208,11 @@ def generate_trading_playbook(
     ).fetchone()
     yield_curve_spread = float(curve_row[0]) if curve_row else None
 
+    # VIX Term Structure (Contango vs Backwardation)
+    vix_res = vixterm.vix9d_ratio(conn)
+    vix_state = vix_res.get("state", "NORMAL") if vix_res else "NORMAL"
+    vix_ratio = vix_res.get("ratio") if vix_res else None
+
     # 4b. Fetch Domain 2 (Institutional Flows & Positioning)
     opt_prod = OPTIONS_PRODUCT_MAP.get(sym)
     opt_snap = options.options_snapshot(conn, opt_prod) if opt_prod else None
@@ -209,10 +220,48 @@ def generate_trading_playbook(
     opt_top_wall = opt_snap.get("top_wall") if opt_snap else None
     opt_max_pain = opt_snap.get("max_pain") if opt_snap else None
 
+    # Monthly OPEX Pinning Risk
+    opex_info = options.next_opex(as_of=target_dt)
+    is_opex_week = opex_info.get("is_opex_week", False)
+    days_to_opex = opex_info.get("days_to_opex", 99)
+
     cot_code = COT_CONTRACT_MAP.get(sym)
     cot_z = cot_signals._cot_zscore(conn, cot_code) if cot_code else None
 
-    # 4c. Fetch Domain 4 Intermarket Microstructure (Live 1h Δ)
+    # Crypto Derivatives (Open Interest for BTC/ETH)
+    crypto_oi_usd = None
+    if sym in ("BTCUSD", "ETHUSD"):
+        c_inst = "BTC-USDT-SWAP" if sym == "BTCUSD" else "ETH-USDT-SWAP"
+        c_oi_row = conn.execute(
+            "SELECT value FROM crypto_derivatives WHERE instrument=? AND metric='open_interest_usd' ORDER BY ts_utc DESC LIMIT 1",
+            (c_inst,),
+        ).fetchone()
+        crypto_oi_usd = float(c_oi_row[0]) if c_oi_row else None
+
+    # 4c. Fetch Domain 3 (High-Impact Event Risk in next 24h)
+    next_event_row = conn.execute(
+        """
+        SELECT name, ts_utc, country FROM events
+        WHERE (importance = 'HIGH' OR importance = 'high' OR importance = '3')
+          AND ts_utc >= ? AND ts_utc <= ?
+        ORDER BY ts_utc ASC LIMIT 1
+        """,
+        (
+            target_dt.isoformat(timespec="seconds"),
+            (target_dt + timedelta(hours=24)).isoformat(timespec="seconds"),
+        ),
+    ).fetchone()
+    hours_to_event = (
+        max(
+            0.0,
+            (datetime.fromisoformat(next_event_row[1]).astimezone(UTC) - target_dt).total_seconds()
+            / 3600.0,
+        )
+        if next_event_row
+        else None
+    )
+
+    # 4d. Fetch Domain 4 Intermarket Microstructure & Market Breadth
     def _get_1h_chg(t_sym: str) -> float:
         b = conn.execute(
             "SELECT close FROM intraday_bars WHERE symbol=? ORDER BY bar_ts_utc DESC LIMIT 13",
@@ -228,10 +277,45 @@ def generate_trading_playbook(
     spy_1h_chg = _get_1h_chg("SPY")
     semi_alpha = round(smh_1h_chg - spy_1h_chg, 2)
 
-    # Multi-Domain Confluence & Intermarket Friction Detection
+    # S&P 500 Constituent Breadth
+    mb_row = conn.execute(
+        "SELECT advances, declines FROM market_breadth ORDER BY ts_utc DESC LIMIT 1"
+    ).fetchone()
+    adv_ratio = round((mb_row[0] / max(1, mb_row[0] + mb_row[1])) * 100, 1) if mb_row else None
+
+    # Multi-Domain Confluence, Friction & Gate Restrictions
     friction_warnings = []
     tailwinds = []
+    event_restriction = False
 
+    # Event Risk Gate
+    if next_event_row and hours_to_event is not None and hours_to_event <= 3.0:
+        event_restriction = True
+        friction_warnings.append(
+            f"EVENT_RISK_HALT: High-impact '{next_event_row[0]}' in {round(hours_to_event, 1)}h. Pre-event breakout trades restricted."
+        )
+
+    # Volatility Circuit Breaker
+    if vix_state == "BACKWARDATION":
+        friction_warnings.append(
+            f"VOLATILITY_CIRCUIT_BREAKER: VIX term structure in Backwardation (9d/spot={vix_ratio}). Longs require defensive sizing."
+        )
+
+    # OPEX Pinning Alert
+    if is_opex_week:
+        friction_warnings.append(
+            f"OPEX_PINNING_ALERT: Monthly OPEX week ({days_to_opex}d to expiry). Magnetized to Max Pain ({opt_max_pain})."
+        )
+
+    # Market Breadth Divergence on Equities
+    if sym in ("NQ1", "ES1") and adv_ratio is not None and adv_ratio < 40.0:
+        friction_warnings.append(
+            f"BREADTH_DIVERGENCE: Market breadth weak ({adv_ratio}% advancing). Rally lacks broad constituent backing."
+        )
+    elif sym in ("NQ1", "ES1") and adv_ratio is not None and adv_ratio > 65.0:
+        tailwinds.append(
+            f"BREADTH_CONFIRMATION: Broad market participation ({adv_ratio}% advancing). Confirms index strength."
+        )
     # Yield Friction on Equities/Tech
     if sym in ("NQ1", "ES1") and tnx_1h_chg > 0.5:
         friction_warnings.append(
@@ -474,25 +558,48 @@ def generate_trading_playbook(
                 "macro_regime_score": round(macro_regime_score, 2),
                 "tips_10y_real_yield": real_yield_10y,
                 "yield_curve_spread_t10y2y": yield_curve_spread,
+                "vix_term_structure_state": vix_state,
+                "vix_9d_spot_ratio": vix_ratio,
             },
             "domain_2_flows": {
                 "options_pcr": round(opt_pcr, 3) if opt_pcr else None,
                 "options_top_wall": opt_top_wall,
                 "options_max_pain": opt_max_pain,
+                "is_opex_week": is_opex_week,
+                "days_to_opex": days_to_opex,
                 "cot_positioning_3y_zscore": round(cot_z, 2) if cot_z is not None else None,
+                "crypto_open_interest_usd": crypto_oi_usd,
             },
-            "domain_4_intermarket": {
+            "domain_3_news_events": {
+                "fast_catalyst_stance": fast_cat["stance"],
+                "fast_catalyst_score": fast_cat["net_stance_score"],
+                "upcoming_high_impact_event": next_event_row[0] if next_event_row else None,
+                "hours_to_next_event": round(hours_to_event, 1)
+                if hours_to_event is not None
+                else None,
+            },
+            "domain_4_intermarket_breadth": {
                 "us_10y_yield_1h_chg_pct": tnx_1h_chg,
                 "dxy_dollar_1h_chg_pct": dxy_1h_chg,
                 "semi_alpha_vs_spy_pct": semi_alpha,
+                "sp500_advancing_breadth_pct": adv_ratio,
             },
             "confluence_status": {
                 "friction_warnings": friction_warnings,
                 "tailwinds": tailwinds,
+                "event_risk_halt": event_restriction,
                 "alignment_state": (
-                    "FRICTION_DETECTED"
-                    if friction_warnings
-                    else ("STRONG_CONFLUENCE" if tailwinds else "NEUTRAL_BALANCED")
+                    "EVENT_HALT_REQUIRED"
+                    if event_restriction
+                    else (
+                        "VOLATILITY_RESTRICTION"
+                        if vix_state == "BACKWARDATION"
+                        else (
+                            "FRICTION_DETECTED"
+                            if friction_warnings
+                            else ("STRONG_CONFLUENCE" if tailwinds else "NEUTRAL_BALANCED")
+                        )
+                    )
                 ),
             },
         },

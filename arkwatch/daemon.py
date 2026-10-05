@@ -42,7 +42,13 @@ SCHEDULE = [
     # fiscaldata publishes DTS ~afternoon ET → a 06:10 WIB run catches yesterday;
     # sits after the 06:00 registry harvest (owns FISCAL:DEBT_*) and before the
     # 07:00 brief
-    (6, 10, "daily", "fiscalx", "Fiscaldata expansion: auctions + DTS transactions + interest expense/rates"),
+    (
+        6,
+        10,
+        "daily",
+        "fiscalx",
+        "Fiscaldata expansion: auctions + DTS transactions + interest expense/rates",
+    ),
     (6, 20, "daily", "instruments sweep", "Last 7 days of prices"),
     # energy channel 2026-09-21: curve signals after the price sweep (CL2
     # month-resolution + cracks + Brent-WTI spot spread)
@@ -53,7 +59,13 @@ SCHEDULE = [
     # pd BEFORE the 07:00 brief (same slot, list order = launch order): the survey
     # release lands Wed night ET = Thu ~06:00 WIB, so the brief sees fresh data
     (7, 0, "thursday", "nyfed pd", "Primary Dealer Positions Survey (release Wed night ET)"),
-    (7, 0, "daily", "brief", "Generate brief + outbox (skip if Saturday edition already published)"),
+    (
+        7,
+        0,
+        "daily",
+        "brief",
+        "Generate brief + outbox (skip if Saturday edition already published)",
+    ),
     (7, 5, "daily", "send", "Send brief via Telegram (PAUSED holder — see _run_job guard)"),
     (7, 15, "daily", "verify", "Truth gate"),
     (8, 15, "daily", "cme", "CME settlements + CVOL + VOI (gray harvester)"),
@@ -68,7 +80,7 @@ SCHEDULE = [
     # replay was frozen at a single 09-02 run while the vintage feed kept
     # writing; backfill-first heals freeze-window first-print holes (ALFRED
     # truth, upsert repairs fetch-day stamps)
-    (21, 15, "sunday", "f4 backfill-first", "First-print vintage heal (ALFRED truth)"),
+    (21, 15, "sunday", "alfred --vintages", "First-print vintage heal via ALFRED API"),
     (21, 30, "sunday", "f4 replay", "Point-in-time regime replay refresh"),
     (21, 50, "sunday", "calibrate", "Golden anchors quarterly calibration & drift audit"),
     # ROUND-11: the dot plot refreshes 4x/year with SEP meetings — a quarterly
@@ -77,14 +89,26 @@ SCHEDULE = [
     # NY Fed research expansion (2026-09-19): HHDC/MCT/LW/GSCPI/HPW rewrite
     # whole histories — the daily window can't see revisions older than its
     # floor, so a weekly full-history re-ingest lands them as vintage rows
-    (5, 10, "sunday", "backfill --source nyfedresearch", "NY Fed research full-history refresh (revisions)"),
+    (
+        5,
+        10,
+        "sunday",
+        "backfill --source nyfedresearch",
+        "NY Fed research full-history refresh (revisions)",
+    ),
     # FRB charge-off/delinquency — same whole-history re-release pattern
     (5, 15, "sunday", "backfill --source frb", "Fed Board charge-off refresh (revisions)"),
     # Fed surveys + reports: SLOOS/Beige Book/SCOOS/FSR/Minutes/Press Conf.
     # Weekly check (quarterly/monthly sources — "unchanged" is the normal
     # outcome ~95% of days; new data triggers fetch + NLP + store).
     # ALSO runs daily: press conf + minutes land on FOMC days, not Sundays.
-    (6, 50, "daily", "fedsurvey", "Fed surveys + FOMC comms (SLOOS/BeigeBook/Minutes/PressConf NLP)"),
+    (
+        6,
+        50,
+        "daily",
+        "fedsurvey",
+        "Fed surveys + FOMC comms (SLOOS/BeigeBook/Minutes/PressConf NLP)",
+    ),
 ]
 # The watcher is a recurring 60-second task, not part of SCHEDULE — the daemon
 # runs it as its own subprocess each cycle
@@ -106,6 +130,7 @@ def _market_news_interval(now: datetime) -> int:
         and (new_york.hour, new_york.minute) < (16, 0)
     )
     return MARKET_ACTIVE_INTERVAL_MINUTES if active else MARKET_NEWS_INTERVAL_MINUTES
+
 
 # D-023 data-first phase (owner 2026-09-13): GENERATION must keep running
 # (the brief pipeline persists five audit-trail store_* families), only the
@@ -257,7 +282,9 @@ def _run_job(cmd: str, desc: str) -> bool:
         fail_lines = [
             ln for ln in err if any(m in ln for m in ("✗", "ERROR", "Error", "Traceback"))
         ]
-        tail = (" | ".join(fail_lines[-2:]) if fail_lines else (err[-1] if err else "no output"))[:200]
+        tail = (" | ".join(fail_lines[-2:]) if fail_lines else (err[-1] if err else "no output"))[
+            :200
+        ]
         logger.error(f"✗ {cmd} ({dt:.0f}s) exit={r.returncode} — {tail}")
         _alert_job_failed(cmd, tail)
         return False
@@ -292,11 +319,7 @@ def _load_state(path: Path | None = None) -> dict[str, str]:
     try:
         raw = _json.loads((path or STATE_PATH).read_text())
         today = datetime.now(WIB).date().isoformat()
-        return {
-            k: v
-            for k, v in raw.items()
-            if k.endswith(f"@{today}") and v == "1"
-        }
+        return {k: v for k, v in raw.items() if k.endswith(f"@{today}") and v == "1"}
     except Exception:
         return {}
 
@@ -336,7 +359,9 @@ def run_loop():
     try:
         _head = _sp.run(
             ["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         ).stdout.strip()
     except Exception:
         _head = "?"
@@ -397,8 +422,13 @@ def run_loop():
                 last_watch = time.monotonic()
                 _run_job("watch", "Alert watcher")
 
-            market_bucket = now_wib.strftime("%Y%m%d%H") + f"{now_wib.minute // MARKET_INTERVAL_MINUTES:02d}"
-            if now_wib.minute % MARKET_INTERVAL_MINUTES == 0 and market_bucket != last_market_bucket:
+            market_bucket = (
+                now_wib.strftime("%Y%m%d%H") + f"{now_wib.minute // MARKET_INTERVAL_MINUTES:02d}"
+            )
+            if (
+                now_wib.minute % MARKET_INTERVAL_MINUTES == 0
+                and market_bucket != last_market_bucket
+            ):
                 last_market_bucket = market_bucket
                 _run_job("market", "Five-minute cross-asset timeline")
 

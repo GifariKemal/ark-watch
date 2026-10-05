@@ -1,5 +1,6 @@
 """geo.py — free geopolitics & food indices: GPR (Caldara-Iacoviello),
 GPRD daily, FAO Food Price Index, Harper Petersen HARPEX."""
+
 from __future__ import annotations
 
 import csv
@@ -9,10 +10,31 @@ import requests
 
 GPR_MONTHLY_URL = "https://www.matteoiacoviello.com/gpr_files/data_gpr_export.xls"
 GPR_DAILY_URL = "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls"
-FAO_CSV_URL = (
+FAO_PAGE_URL = "https://www.fao.org/worldfoodsituation/FoodPricesIndex/en"
+FAO_FALLBACK_URL = (
     "https://www.fao.org/media/docs/worldfoodsituationlibraries/"
-    "default-document-library/food_price_indices_data.csv"
+    "wfs-library/food_price_indices_data.csv?sfvrsn=523ebd2a_84&download=true"
 )
+
+
+def _get_fao_csv_url() -> str:
+    """Resolve the latest active FAO CSV URL from the landing page, with fallback."""
+    import re
+
+    try:
+        r = requests.get(FAO_PAGE_URL, headers=UA, timeout=(10, 15))
+        if r.status_code == 200:
+            m = re.search(r'href="([^"]+food_price_indices_data\.csv[^"]*)"', r.text)
+            if m:
+                url = m.group(1).replace("&amp;", "&")
+                if not url.startswith("http"):
+                    url = f"https://www.fao.org{url}"
+                return url
+    except Exception:
+        pass
+    return FAO_FALLBACK_URL
+
+
 HARPEX_URL = "https://www.harperpetersen.com/harpex"
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0 Safari/537.36"}
 
@@ -33,10 +55,7 @@ def _xls_rows(url: str):
 
     wb = xlrd.open_workbook(file_contents=_get(url))
     ws = wb.sheet_by_index(0)
-    return [
-        [ws.cell_value(r, c) for c in range(ws.ncols)]
-        for r in range(ws.nrows)
-    ]
+    return [[ws.cell_value(r, c) for c in range(ws.ncols)] for r in range(ws.nrows)]
 
 
 def _header_index(rows, must_have):
@@ -65,7 +84,7 @@ def parse_gpr_rows(rows, column="GPR"):
     ci = header.index(column)
     mi = header.index("month")
     out = []
-    for row in rows[hi + 1:]:
+    for row in rows[hi + 1 :]:
         v = _f(row[ci]) if ci < len(row) else None
         serial = _f(row[mi]) if mi < len(row) else None
         if v is None or serial is None:
@@ -89,7 +108,7 @@ def parse_gprd_rows(rows, column="GPRD"):
             di = j
             break
     out = []
-    for row in rows[hi + 1:]:
+    for row in rows[hi + 1 :]:
         v = _f(row[ci]) if ci < len(row) else None
         raw = _f(row[di]) if di < len(row) else None
         if v is None or raw is None or raw < 19000101:
@@ -137,11 +156,13 @@ def fetch_gprd() -> list[dict]:
 
 
 def fetch_fao() -> list[dict]:
-    return parse_fao_csv(_get(FAO_CSV_URL).decode("utf-8"))
+    return parse_fao_csv(_get(_get_fao_csv_url()).decode("utf-8", errors="replace"))
 
 
 def fetch_fao_cereals() -> list[dict]:
-    return parse_fao_csv(_get(FAO_CSV_URL).decode("utf-8"), column="Cereals")
+    return parse_fao_csv(
+        _get(_get_fao_csv_url()).decode("utf-8", errors="replace"), column="Cereals"
+    )
 
 
 def fetch_harpex() -> list[dict]:

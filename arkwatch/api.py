@@ -366,12 +366,26 @@ def get_trading_playbook(
     conn: sqlite3.Connection | None = None,
     db_path: str | Path | None = None,
     as_of: datetime | str | None = None,
+    cfd_basis_offset: float = 0.0,
 ) -> dict | None:
     """Retrieve actionable if-then trading playbook with target profits and invalidation levels."""
     from .signals.playbook import generate_trading_playbook
 
     with _get_connection(conn, db_path) as c:
-        return generate_trading_playbook(c, symbol, as_of=as_of)
+        return generate_trading_playbook(c, symbol, as_of=as_of, cfd_basis_offset=cfd_basis_offset)
+
+
+def get_playbook_performance(
+    symbol: str | None = None,
+    horizon: str | None = None,
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+) -> dict:
+    """Retrieve historical playbook win/loss performance metrics, profit factor, and MFE/MAE."""
+    from .signals.playbook_tracker import get_playbook_performance_metrics
+
+    with _get_connection(conn, db_path) as c:
+        return get_playbook_performance_metrics(c, symbol=symbol, horizon=horizon)
 
 
 def get_economic_calendar(

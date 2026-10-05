@@ -18,6 +18,11 @@ from . import cot_signals, options, vixterm
 from .intraday import session_intraday_intelligence
 from .levels import compute_session_reference_levels
 from .pillars import compute_pillars, compute_regime_score
+from .playbook_tracker import (
+    evaluate_active_playbooks,
+    get_playbook_performance_metrics,
+    record_playbook_scenarios,
+)
 from .sentiment import compute_asset_sentiment_radar, compute_intraday_catalyst_radar
 
 OPTIONS_PRODUCT_MAP: dict[str, str] = {
@@ -143,6 +148,7 @@ def generate_trading_playbook(
     symbol: str,
     *,
     as_of: datetime | str | None = None,
+    cfd_basis_offset: float = 0.0,
 ) -> dict[str, Any] | None:
     """Generate an actionable probabilistic trading playbook with target profits and invalidation levels."""
     sym = symbol.strip().upper()
@@ -349,50 +355,47 @@ def generate_trading_playbook(
     high_false_close_pct = emp.get("high_false_close_pct", 45.0)
     low_false_close_pct = emp.get("low_false_close_pct", 50.0)
 
-    # 6. Build Actionable Scenarios
-    scenarios = []
+    # 6. Build Actionable Scenarios (Separated into Intraday & Swing Horizons)
+    intraday_scenarios = []
+    swing_scenarios = []
 
-    # Open Type Gate Filtering (Dalton Rule: "Never fade an Open Drive")
     is_bullish_open_drive = open_type == "OPEN_DRIVE_BULLISH"
     is_bearish_open_drive = open_type == "OPEN_DRIVE_BEARISH"
 
-    # SCENARIO 1: Trend Expansion / Value Acceptance (Long or Short)
-    # Target: Dalton CVA 100% Measured Move if available, fallback to continuation median ATR
+    # [A] INTRADAY SCENARIO 1: Intraday Momentum Expansion
     if (fast_cat["net_stance_score"] >= 0.15 or is_bullish_open_drive) and (
         vwap is None or last_price >= vwap
     ):
-        target_p = round(
-            cva_measured_long
-            if (cva_measured_long and cva_measured_long > last_price)
-            else max(pdh, last_price + (cont_atr * atr_14)),
-            2,
+        intra_target = round(max(pdh, last_price + (cont_atr * atr_14)), 2) + cfd_basis_offset
+        intra_inval = (
+            round(min(val if val else last_price, vwap if vwap else last_price - (0.5 * atr_14)), 2)
+            + cfd_basis_offset
         )
-        inval_p = round(
-            min(val if val else last_price, vwap if vwap else last_price - (0.5 * atr_14)), 2
-        )
-        scenarios.append(
+        intraday_scenarios.append(
             {
-                "id": "SCENARIO_EXPANSION_LONG",
-                "title": "Trend Expansion Long (Catalyst Momentum + Value Acceptance)",
+                "id": "SCENARIO_INTRADAY_EXPANSION_LONG",
+                "horizon": "INTRADAY",
+                "title": "Intraday Trend Expansion Long (Catalyst Momentum + Value Acceptance)",
                 "direction": "LONG",
                 "trigger_condition": (
                     f"5m candle closes and holds above VAH ({vah}) with price staying above Session VWAP ({vwap})"
                 ),
-                "target_profit": target_p,
-                "invalidation_level": inval_p,
+                "trigger_price": vah,
+                "target_profit": intra_target,
+                "invalidation_level": intra_inval,
                 "risk_reward_ratio": (
-                    round((target_p - last_price) / max(0.01, (last_price - inval_p)), 2)
-                    if last_price > inval_p
+                    round(
+                        (intra_target - (last_price + cfd_basis_offset))
+                        / max(0.01, ((last_price + cfd_basis_offset) - intra_inval)),
+                        2,
+                    )
+                    if (last_price + cfd_basis_offset) > intra_inval
                     else 1.5
                 ),
                 "invalidation_rationale": "Loss of Session VWAP or close back inside Value Area rejects continuation.",
                 "empirical_support": {
                     "continuation_median_atr": cont_atr,
-                    "target_derivation": (
-                        f"Dalton {cva_name} 100% Measured Move ({target_p})"
-                        if cva_measured_long
-                        else f"max(PDH, last_price + {cont_atr} * ATR_14)"
-                    ),
+                    "target_derivation": f"max(PDH, last_price + {cont_atr} * ATR_14)",
                     "open_type_gate": f"{open_type} ({open_conviction})",
                     "sample_weeks": emp.get("sample_weeks_high"),
                     "source": emp.get("source_doc"),
@@ -402,38 +405,36 @@ def generate_trading_playbook(
     elif (fast_cat["net_stance_score"] <= -0.15 or is_bearish_open_drive) and (
         vwap is None or last_price <= vwap
     ):
-        target_p = round(
-            cva_measured_short
-            if (cva_measured_short and cva_measured_short < last_price)
-            else min(pdl, last_price - (cont_atr * atr_14)),
-            2,
+        intra_target = round(min(pdl, last_price - (cont_atr * atr_14)), 2) + cfd_basis_offset
+        intra_inval = (
+            round(max(vah if vah else last_price, vwap if vwap else last_price + (0.5 * atr_14)), 2)
+            + cfd_basis_offset
         )
-        inval_p = round(
-            max(vah if vah else last_price, vwap if vwap else last_price + (0.5 * atr_14)), 2
-        )
-        scenarios.append(
+        intraday_scenarios.append(
             {
-                "id": "SCENARIO_EXPANSION_SHORT",
-                "title": "Trend Expansion Short (Dovish/Bearish Catalyst + Value Acceptance)",
+                "id": "SCENARIO_INTRADAY_EXPANSION_SHORT",
+                "horizon": "INTRADAY",
+                "title": "Intraday Trend Expansion Short (Dovish/Bearish Catalyst + Value Acceptance)",
                 "direction": "SHORT",
                 "trigger_condition": (
                     f"5m candle closes and holds below VAL ({val}) with price staying below Session VWAP ({vwap})"
                 ),
-                "target_profit": target_p,
-                "invalidation_level": inval_p,
+                "trigger_price": val,
+                "target_profit": intra_target,
+                "invalidation_level": intra_inval,
                 "risk_reward_ratio": (
-                    round((last_price - target_p) / max(0.01, (inval_p - last_price)), 2)
-                    if inval_p > last_price
+                    round(
+                        ((last_price + cfd_basis_offset) - intra_target)
+                        / max(0.01, (intra_inval - (last_price + cfd_basis_offset))),
+                        2,
+                    )
+                    if intra_inval > (last_price + cfd_basis_offset)
                     else 1.5
                 ),
                 "invalidation_rationale": "Reclaim of Session VWAP or close back inside Value Area invalidates short.",
                 "empirical_support": {
                     "continuation_median_atr": emp.get("low_continuation_median_atr", cont_atr),
-                    "target_derivation": (
-                        f"Dalton {cva_name} 100% Measured Move ({target_p})"
-                        if cva_measured_short
-                        else f"min(PDL, last_price - {cont_atr} * ATR_14)"
-                    ),
+                    "target_derivation": f"min(PDL, last_price - {cont_atr} * ATR_14)",
                     "open_type_gate": f"{open_type} ({open_conviction})",
                     "sample_weeks": emp.get("sample_weeks_low"),
                     "source": emp.get("source_doc"),
@@ -441,25 +442,32 @@ def generate_trading_playbook(
             }
         )
 
-    # SCENARIO 2: Liquidity Sweep / Failed Auction (Trap Setup)
-    # If price tested near PDH or above PDH
+    # [B] INTRADAY SCENARIO 2: Liquidity Sweep / Failed Auction (Trap Setup)
     if last_price >= pdh * 0.998 and not is_bullish_open_drive:
-        sweep_inval = round(pdh + (0.20 * atr_14), 2)
-        # Primary target: Unretested Naked POC below, fallback to Prior POC/PDC
-        sweep_target = round(naked_poc_below if naked_poc_below else (poc if poc else pdc), 2)
-        scenarios.append(
+        sweep_inval = round(pdh + (0.20 * atr_14), 2) + cfd_basis_offset
+        sweep_target = (
+            round(naked_poc_below if naked_poc_below else (poc if poc else pdc), 2)
+            + cfd_basis_offset
+        )
+        intraday_scenarios.append(
             {
-                "id": "SCENARIO_PDH_SWEEP_REVERSAL",
+                "id": "SCENARIO_INTRADAY_SWEEP_SHORT",
+                "horizon": "INTRADAY",
                 "title": "PDH Liquidity Sweep / Bull Trap Reversal",
                 "direction": "SHORT",
                 "trigger_condition": (
                     f"Price spikes above PDH ({pdh}) but fails to sustain; 5m/15m candle closes back below {pdh}"
                 ),
+                "trigger_price": pdh,
                 "target_profit": sweep_target,
                 "invalidation_level": sweep_inval,
                 "risk_reward_ratio": (
-                    round((last_price - sweep_target) / max(0.01, (sweep_inval - last_price)), 2)
-                    if sweep_inval > last_price
+                    round(
+                        ((last_price + cfd_basis_offset) - sweep_target)
+                        / max(0.01, (sweep_inval - (last_price + cfd_basis_offset))),
+                        2,
+                    )
+                    if sweep_inval > (last_price + cfd_basis_offset)
                     else 2.0
                 ),
                 "invalidation_rationale": f"Price accepts and sustains above {sweep_inval} (PDH + 0.20*ATR) proves breakout.",
@@ -477,24 +485,31 @@ def generate_trading_playbook(
                 },
             }
         )
-    # If price tested near PDL or below PDL (Gate check: do not fade bearish open drive)
     elif last_price <= pdl * 1.002 and not is_bearish_open_drive:
-        sweep_inval = round(pdl - (0.20 * atr_14), 2)
-        # Primary target: Unretested Naked POC above, fallback to Prior POC/PDC
-        sweep_target = round(naked_poc_above if naked_poc_above else (poc if poc else pdc), 2)
-        scenarios.append(
+        sweep_inval = round(pdl - (0.20 * atr_14), 2) + cfd_basis_offset
+        sweep_target = (
+            round(naked_poc_above if naked_poc_above else (poc if poc else pdc), 2)
+            + cfd_basis_offset
+        )
+        intraday_scenarios.append(
             {
-                "id": "SCENARIO_PDL_SWEEP_REVERSAL",
+                "id": "SCENARIO_INTRADAY_SWEEP_LONG",
+                "horizon": "INTRADAY",
                 "title": "PDL Liquidity Sweep / Bear Trap Reversal",
                 "direction": "LONG",
                 "trigger_condition": (
                     f"Price pierces below PDL ({pdl}) but reclaims level; 5m/15m candle closes back above {pdl}"
                 ),
+                "trigger_price": pdl,
                 "target_profit": sweep_target,
                 "invalidation_level": sweep_inval,
                 "risk_reward_ratio": (
-                    round((sweep_target - last_price) / max(0.01, (last_price - sweep_inval)), 2)
-                    if last_price > sweep_inval
+                    round(
+                        (sweep_target - (last_price + cfd_basis_offset))
+                        / max(0.01, ((last_price + cfd_basis_offset) - sweep_inval)),
+                        2,
+                    )
+                    if (last_price + cfd_basis_offset) > sweep_inval
                     else 2.0
                 ),
                 "invalidation_rationale": f"Price breaks below {sweep_inval} (PDL - 0.20*ATR) confirms breakdown.",
@@ -513,16 +528,18 @@ def generate_trading_playbook(
             }
         )
 
-    # SCENARIO 3: Rotational Digestion inside Value Area
-    if not scenarios:
-        scenarios.append(
+    # [C] INTRADAY SCENARIO 3: Rotational Digestion inside Value Area
+    if not intraday_scenarios:
+        intraday_scenarios.append(
             {
-                "id": "SCENARIO_ROTATIONAL_VALUE",
+                "id": "SCENARIO_INTRADAY_ROTATIONAL_VALUE",
+                "horizon": "INTRADAY",
                 "title": "Rotational Digestion Inside Value Area",
                 "direction": "NEUTRAL_RANGE",
                 "trigger_condition": f"Price remains bracketed between VAL ({val}) and VAH ({vah})",
-                "target_profit": round(poc, 2) if poc else last_price,
-                "invalidation_level": round(vah, 2) if vah else last_price,
+                "trigger_price": poc or last_price,
+                "target_profit": round(poc, 2) if poc else (last_price + cfd_basis_offset),
+                "invalidation_level": round(vah, 2) if vah else (last_price + cfd_basis_offset),
                 "risk_reward_ratio": 1.0,
                 "invalidation_rationale": "Sustained bar close outside VAH or VAL transitions market into trend state.",
                 "empirical_support": {
@@ -532,8 +549,113 @@ def generate_trading_playbook(
             }
         )
 
+    # [D] SWING SCENARIO 1: Multi-Day CVA Balance Expansion (Dalton 100% Measured Move)
+    if cva_measured_long and last_price >= (vah or last_price):
+        swing_scenarios.append(
+            {
+                "id": "SCENARIO_SWING_CVA_EXPANSION_LONG",
+                "horizon": "SWING",
+                "title": f"Multi-Day {cva_name} Breakout Expansion Long",
+                "direction": "LONG",
+                "trigger_condition": f"Daily bar accepts and sustains above Composite VAH ({levels.get('DYNAMIC_CVA_VAH')})",
+                "trigger_price": levels.get("DYNAMIC_CVA_VAH") or last_price,
+                "target_profit": round(cva_measured_long + cfd_basis_offset, 2),
+                "invalidation_level": round(
+                    (levels.get("DYNAMIC_CVA_VAL") or last_price) + cfd_basis_offset, 2
+                ),
+                "risk_reward_ratio": round(
+                    abs(cva_measured_long - last_price)
+                    / max(0.01, abs(last_price - (levels.get("DYNAMIC_CVA_VAL") or last_price))),
+                    2,
+                ),
+                "invalidation_rationale": "Loss of Composite Balance Area low indicates failed breakout.",
+                "empirical_support": {
+                    "rule": "Dalton 100% Measured Move of Balance Range",
+                    "balance_days": ctx.get("dynamic_cva_days", 2),
+                    "source": "Auction Market Theory Balance Progression",
+                },
+            }
+        )
+    elif cva_measured_short and last_price <= (val or last_price):
+        swing_scenarios.append(
+            {
+                "id": "SCENARIO_SWING_CVA_EXPANSION_SHORT",
+                "horizon": "SWING",
+                "title": f"Multi-Day {cva_name} Breakdown Expansion Short",
+                "direction": "SHORT",
+                "trigger_condition": f"Daily bar accepts and sustains below Composite VAL ({levels.get('DYNAMIC_CVA_VAL')})",
+                "trigger_price": levels.get("DYNAMIC_CVA_VAL") or last_price,
+                "target_profit": round(cva_measured_short + cfd_basis_offset, 2),
+                "invalidation_level": round(
+                    (levels.get("DYNAMIC_CVA_VAH") or last_price) + cfd_basis_offset, 2
+                ),
+                "risk_reward_ratio": round(
+                    abs(last_price - cva_measured_short)
+                    / max(0.01, abs((levels.get("DYNAMIC_CVA_VAH") or last_price) - last_price)),
+                    2,
+                ),
+                "invalidation_rationale": "Reclaim of Composite Balance Area high indicates failed breakdown.",
+                "empirical_support": {
+                    "rule": "Dalton 100% Measured Move of Balance Range",
+                    "balance_days": ctx.get("dynamic_cva_days", 2),
+                    "source": "Auction Market Theory Balance Progression",
+                },
+            }
+        )
+
+    # [E] SWING SCENARIO 2: Weekly Value Migration & Naked POC Target
+    if naked_poc_below and value_migration in ("LOWER_VALUE", "OVERLAPPING_LOWER"):
+        swing_scenarios.append(
+            {
+                "id": "SCENARIO_SWING_NAKED_POC_TARGET_SHORT",
+                "horizon": "SWING",
+                "title": f"Swing Value Migration to Naked POC ({naked_poc_below})",
+                "direction": "SHORT",
+                "trigger_condition": f"Value migration remains {value_migration}; price holds below Weekly VWAP ({levels.get('WEEKLY_VWAP')})",
+                "trigger_price": levels.get("WEEKLY_VWAP") or last_price,
+                "target_profit": round(naked_poc_below + cfd_basis_offset, 2),
+                "invalidation_level": round((pdh or last_price) + cfd_basis_offset, 2),
+                "risk_reward_ratio": round(
+                    abs(last_price - naked_poc_below)
+                    / max(0.01, abs((pdh or last_price) - last_price)),
+                    2,
+                ),
+                "invalidation_rationale": "Break above prior session high proves bullish reversal.",
+                "empirical_support": {
+                    "target_type": "Virgin / Naked POC Magnet",
+                    "value_migration": value_migration,
+                    "source": "AMT Markets in Profile Unretested Auction Nodes",
+                },
+            }
+        )
+    elif naked_poc_above and value_migration in ("HIGHER_VALUE", "OVERLAPPING_HIGHER"):
+        swing_scenarios.append(
+            {
+                "id": "SCENARIO_SWING_NAKED_POC_TARGET_LONG",
+                "horizon": "SWING",
+                "title": f"Swing Value Migration to Naked POC ({naked_poc_above})",
+                "direction": "LONG",
+                "trigger_condition": f"Value migration remains {value_migration}; price holds below Weekly VWAP ({levels.get('WEEKLY_VWAP')})",
+                "trigger_price": levels.get("WEEKLY_VWAP") or last_price,
+                "target_profit": round(naked_poc_above + cfd_basis_offset, 2),
+                "invalidation_level": round((pdl or last_price) + cfd_basis_offset, 2),
+                "risk_reward_ratio": round(
+                    abs(naked_poc_above - last_price)
+                    / max(0.01, abs(last_price - (pdl or last_price))),
+                    2,
+                ),
+                "invalidation_rationale": "Break below prior session low proves bearish reversal.",
+                "empirical_support": {
+                    "target_type": "Virgin / Naked POC Magnet",
+                    "value_migration": value_migration,
+                    "source": "AMT Markets in Profile Unretested Auction Nodes",
+                },
+            }
+        )
+
+    all_scenarios = intraday_scenarios + swing_scenarios
     now_utc = datetime.now(UTC).isoformat(timespec="seconds")
-    return {
+    out_dict = {
         "symbol": sym,
         "as_of": now_utc,
         "last_price": round(last_price, 4),
@@ -614,10 +736,20 @@ def generate_trading_playbook(
             "nearest_naked_poc_above": naked_poc_above,
             "nearest_naked_poc_below": naked_poc_below,
         },
-        "scenarios": scenarios,
+        "intraday_playbook": intraday_scenarios,
+        "swing_playbook": swing_scenarios,
+        "scenarios": all_scenarios,
         "provenance": {
             "levels_derived_from": ref["provenance"],
             "empirical_dataset": emp.get("source_doc"),
+            "cfd_basis_offset": cfd_basis_offset,
             "calculated_at_utc": now_utc,
         },
     }
+
+    # Record scenarios into playbook_scenarios tracker table
+    record_playbook_scenarios(conn, out_dict, cfd_basis_offset=cfd_basis_offset)
+    evaluate_active_playbooks(conn, as_of=target_dt)
+    out_dict["performance_tracker"] = get_playbook_performance_metrics(conn, symbol=sym)
+
+    return out_dict

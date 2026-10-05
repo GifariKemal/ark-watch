@@ -97,14 +97,38 @@ def main() -> int:
 
         p = argparse.ArgumentParser(prog="arkwatch playbook")
         p.add_argument("symbol", nargs="?", default="NQ1", help="symbol to generate playbook for")
+        p.add_argument(
+            "--cfd-offset", type=float, default=0.0, help="offset in points to match CFD quotes"
+        )
         p.add_argument("--db", default=str(_DEFAULT_DB))
         a = p.parse_args(sys.argv[2:])
         conn = db.get_conn(a.db, allow_init=True)
-        res = generate_trading_playbook(conn, a.symbol)
+        res = generate_trading_playbook(conn, a.symbol, cfd_basis_offset=a.cfd_offset)
         conn.close()
         if not res:
             print(f"No intraday bars found for {a.symbol}")
             return 1
+        print(json.dumps(res, indent=2))
+        return 0
+    if cmd == "tracker":
+        import argparse
+        import json
+
+        from dotenv import load_dotenv
+
+        load_dotenv()
+
+        from . import db
+        from .signals.playbook_tracker import get_playbook_performance_metrics
+
+        p = argparse.ArgumentParser(prog="arkwatch tracker")
+        p.add_argument("symbol", nargs="?", default=None, help="filter by symbol")
+        p.add_argument("--horizon", choices=["INTRADAY", "SWING"], default=None)
+        p.add_argument("--db", default=str(_DEFAULT_DB))
+        a = p.parse_args(sys.argv[2:])
+        conn = db.get_conn(a.db, allow_init=True)
+        res = get_playbook_performance_metrics(conn, symbol=a.symbol, horizon=a.horizon)
+        conn.close()
         print(json.dumps(res, indent=2))
         return 0
     if cmd == "levels":

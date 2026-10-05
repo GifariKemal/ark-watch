@@ -16,7 +16,7 @@ import sqlite3
 from datetime import UTC
 from pathlib import Path
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 
 SCHEMA_V1 = """
 CREATE TABLE series_registry (
@@ -585,6 +585,36 @@ WHERE events.surprise_z IS NOT NULL
 CREATE INDEX IF NOT EXISTS idx_news_intel_asset_time ON news_intelligence(asset, published_at_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_news_intel_channel ON news_intelligence(macro_channel);
 CREATE INDEX IF NOT EXISTS idx_news_intel_news_id ON news_intelligence(news_id);
+""",
+    32: """CREATE TABLE IF NOT EXISTS playbook_scenarios (
+  scenario_uid TEXT PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  horizon TEXT NOT NULL CHECK(horizon IN ('INTRADAY', 'SWING')),
+  direction TEXT NOT NULL CHECK(direction IN ('LONG', 'SHORT', 'NEUTRAL_RANGE')),
+  scenario_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  trigger_condition TEXT NOT NULL,
+  trigger_price REAL,
+  target_profit REAL NOT NULL,
+  invalidation_level REAL NOT NULL,
+  risk_reward_ratio REAL NOT NULL,
+  created_at_utc TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('PENDING_TRIGGER', 'ACTIVE', 'HIT_TARGET_WIN', 'HIT_STOP_LOSS', 'CANCELLED_EXPIRED')),
+  triggered_at_utc TEXT,
+  resolved_at_utc TEXT,
+  entry_price REAL,
+  exit_price REAL,
+  mfe_points REAL DEFAULT 0.0,
+  mae_points REAL DEFAULT 0.0,
+  pnl_points REAL DEFAULT 0.0,
+  r_multiple REAL DEFAULT 0.0,
+  cfd_basis_offset REAL DEFAULT 0.0,
+  payload_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_playbook_symbol_state ON playbook_scenarios(symbol, state);
+CREATE INDEX IF NOT EXISTS idx_playbook_created ON playbook_scenarios(created_at_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_playbook_session ON playbook_scenarios(session_id);
 """,
 }
 

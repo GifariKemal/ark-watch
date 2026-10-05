@@ -405,13 +405,13 @@ def _safe_error(ex: Exception) -> str:
     return type(ex).__name__
 
 
-def _store(conn, symbol: str, source: str, rows: list[dict]) -> int:
+def _store(conn, symbol: str, source: str, rows: list[dict], interval: str = INTERVAL) -> int:
     now = datetime.now(UTC).isoformat(timespec="seconds")
     values = [
         (
             symbol,
             r["bar_ts_utc"],
-            INTERVAL,
+            interval,
             source,
             r.get("open"),
             r.get("high"),
@@ -686,7 +686,12 @@ def _breadth(conn, now: datetime | None = None) -> int:
 
 
 def run(
-    db_path: str = str(DEFAULT_DB), *, only: str | None = None, force_fallback: bool = False
+    db_path: str = str(DEFAULT_DB),
+    *,
+    only: str | None = None,
+    force_fallback: bool = False,
+    interval: str = "5m",
+    collect_1m: bool = True,
 ) -> dict[str, int]:
     conn = _db.get_conn(db_path, allow_init=True)
     result = {}
@@ -709,12 +714,18 @@ def run(
         )
         if rows and primary_freshness.status in ("FRESH", "CLOSED", "WAITING"):
             result[symbol] = _record_bars(conn, symbol, "YAHOO", rows, primary_freshness)
+            if collect_1m:
+                try:
+                    rows_1m = yahoo.fetch_intraday(ticker, interval="1m", range_="1d")
+                    if rows_1m:
+                        _store(conn, symbol, "YAHOO", rows_1m, interval="1m")
+                except Exception:
+                    pass
             continue
-        if primary_error:
             log_collection(
                 conn, "market", f"{symbol}:YAHOO:5m", None, 0, err=primary_error, status="ERROR"
             )
-        elif not rows:
+        if not rows:
             log_collection(conn, "market", f"{symbol}:YAHOO:5m", None, 0, status="EMPTY")
         else:
             _record_bars(conn, symbol, "YAHOO", rows, primary_freshness)
@@ -757,8 +768,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--only", choices=sorted(TRACKED))
     parser.add_argument("--force-fallback", action="store_true")
+    parser.add_argument("--interval", choices=["5m", "1m"], default="5m")
+    parser.add_argument("--no-1m", action="store_true", help="skip 1m collection")
     args = parser.parse_args(argv)
-    result = run(args.db, only=args.only, force_fallback=args.force_fallback)
+    result = run(
+        args.db,
+        only=args.only,
+        force_fallback=args.force_fallback,
+        interval=args.interval,
+        collect_1m=not args.no_1m,
+    )
     failed = [name for name, value in result.items() if value < 0]
     print(f"=== market timeline: {len(result) - len(failed)} completed, {len(failed)} failed ===")
     return 1 if failed else 0

@@ -1,11 +1,13 @@
-"""levels.py — Auction Market Theory (AMT) and session liquidity reference levels.
+"""levels.py — Auction Market Theory (AMT) and CME Globex session reference levels.
 
-Extracts high-precision institutional reference levels and Value Area profiling
+Extracts high-precision institutional reference levels and Multi-Anchor Value Area profiling
 from 5-minute intraday bars (intraday_bars) with 100% auditable provenance:
-  - Prior Day Reference: PDH (High), PDL (Low), PDC (Close)
-  - Overnight Reference: ONH (High), ONL (Low)
-  - Opening Range (OR): OR15 (15m range), OR30 (30m range)
-  - Market Profile: POC (Point of Control), VAH (Value Area High), VAL (Value Area Low)
+  - Prior Day Reference (T-1): PDH (High), PDL (Low), PDC (Close)
+  - Prior Day Value Area (T-1): VAH, VAL, POC (70% volume distribution)
+  - Overnight Session (Asia/London): ONH (High), ONL (Low) from 18:00 ET to 09:30 ET
+  - Opening Range (OR): OR15 (15m range), OR30 (30m range) after 09:30 ET cash open
+  - Developing Weekly Multi-Anchor: Weekly VWAP, Weekly VAH, Weekly VAL, Weekly POC
+  - Confluence Analysis: Detection of Weekly VWAP + Prior Day VAH/VAL compression zones
 """
 
 from __future__ import annotations
@@ -13,25 +15,48 @@ from __future__ import annotations
 import math
 import sqlite3
 from collections import defaultdict
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
 US_CASH_OPEN_UTC_SUMMER = time(13, 30)  # 09:30 ET during EDT
 US_CASH_OPEN_UTC_WINTER = time(14, 30)  # 09:30 ET during EST
 
 
+def _is_dst_edt(dt: datetime) -> bool:
+    """Check if date falls within US Daylight Saving Time (EDT, UTC-4)."""
+    m = dt.month
+    if 4 <= m <= 10:
+        return True
+    if m == 3 and dt.day >= 8:
+        return True
+    return bool(m == 11 and dt.day <= 7 and dt.weekday() != 6)
+
+
 def _get_cash_open_time(dt: datetime) -> time:
     """Determine US cash open in UTC based on DST (EDT vs EST)."""
-    # EDT runs roughly second Sunday of March to first Sunday of November
-    # A standard approximate check: March 8 to November 1 is EDT (UTC 13:30)
-    month = dt.month
-    if 4 <= month <= 10:
-        return US_CASH_OPEN_UTC_SUMMER
-    if month == 3 and dt.day >= 8:
-        return US_CASH_OPEN_UTC_SUMMER
-    if month == 11 and dt.day <= 7 and dt.weekday() != 6:
-        return US_CASH_OPEN_UTC_SUMMER
-    return US_CASH_OPEN_UTC_WINTER
+    return US_CASH_OPEN_UTC_SUMMER if _is_dst_edt(dt) else US_CASH_OPEN_UTC_WINTER
+
+
+def _get_cme_session_id(dt: datetime) -> str:
+    """Map UTC timestamp to CME Trading Session Date (18:00 ET yesterday to 17:00 ET today)."""
+    edt = _is_dst_edt(dt)
+    shift_hour = 22 if edt else 23  # 18:00 ET in UTC
+    if dt.hour >= shift_hour:
+        # Bars starting at 18:00 ET belong to the next calendar trading day
+        session_dt = dt.date() + timedelta(days=1)
+        return session_dt.isoformat()
+    return dt.date().isoformat()
+
+
+def _get_cme_week_id(dt: datetime) -> str:
+    """Map UTC timestamp to CME Trading Week (Sunday 18:00 ET to Friday 17:00 ET)."""
+    edt = _is_dst_edt(dt)
+    shift_hour = 22 if edt else 23
+    effective_dt = dt
+    if dt.weekday() == 6 and dt.hour >= shift_hour:
+        effective_dt = dt + timedelta(days=1)
+    y, w, _ = effective_dt.isocalendar()
+    return f"{y}-W{w:02d}"
 
 
 def compute_value_area(
@@ -40,16 +65,7 @@ def compute_value_area(
     num_bins: int = 50,
     va_volume_ratio: float = 0.70,
 ) -> dict[str, Any]:
-    """Compute Point of Control (POC), VAH, and VAL using discrete volume profile binning.
-
-    Args:
-        bars: list of (bar_ts_utc, open, high, low, close, volume)
-        num_bins: number of discrete price levels
-        va_volume_ratio: cumulative volume fraction for value area (default 0.70 = 70%)
-
-    Returns:
-        dict with poc, vah, val, total_volume, and bin distribution.
-    """
+    """Compute Point of Control (POC), VAH, and VAL using discrete volume profile binning."""
     if not bars:
         return {
             "poc": None,
@@ -86,29 +102,19 @@ def compute_value_area(
     total_vol = 0.0
 
     for _ts, _o, h, low_val, _c, v in bars:
-        if v is None or v <= 0.0:
-            v = 1.0  # Equal volume proxy if volume is missing/zero
-        total_vol += v
+        vol = max(1.0, float(v) if v is not None else 1.0)
+        total_vol += vol
 
-        # Allocate volume across bins covered by [low, high]
         start_idx = max(0, min(num_bins - 1, int(math.floor((low_val - min_p) / bin_size))))
         end_idx = max(0, min(num_bins - 1, int(math.floor((h - min_p) / bin_size))))
         covered_bins = end_idx - start_idx + 1
-        vol_per_bin = v / float(covered_bins)
+        vol_per_bin = vol / float(covered_bins)
         for idx in range(start_idx, end_idx + 1):
             volume_by_bin[idx] += vol_per_bin
 
-    # Find POC (bin with maximum volume)
-    max_vol = -1.0
-    poc_idx = 0
-    for i, vol in enumerate(volume_by_bin):
-        if vol > max_vol:
-            max_vol = vol
-            poc_idx = i
-
+    poc_idx = max(range(num_bins), key=lambda i: volume_by_bin[i])
     poc_price = min_p + (poc_idx + 0.5) * bin_size
 
-    # Expand outward from POC to capture 70% of total volume (Auction Market Theory)
     target_vol = total_vol * va_volume_ratio
     current_vol = volume_by_bin[poc_idx]
     upper_idx = poc_idx
@@ -146,7 +152,7 @@ def compute_session_reference_levels(
     *,
     as_of: datetime | str | None = None,
 ) -> dict[str, Any] | None:
-    """Compute Prior Day Levels, Overnight Levels, Opening Range, and Value Area for a symbol."""
+    """Compute Prior Session (T-1) Levels, Overnight Range, Developing Weekly Multi-Anchor, and Confluence."""
     sym = symbol.strip().upper()
 
     if as_of is None:
@@ -156,7 +162,7 @@ def compute_session_reference_levels(
     else:
         target_dt = as_of.astimezone(UTC)
 
-    # Query latest available intraday bars for this symbol up to target_dt
+    # 1. Query all historical intraday bars up to target_dt
     rows = conn.execute(
         """
         SELECT bar_ts_utc, open, high, low, close, COALESCE(volume, 0.0), source
@@ -171,71 +177,119 @@ def compute_session_reference_levels(
     if not rows:
         return None
 
-    # Group bars by calendar date (YYYY-MM-DD)
-    bars_by_date: dict[str, list[tuple[str, float, float, float, float, float]]] = defaultdict(list)
+    # 2. Segment bars by CME Trading Session ID and Trading Week ID
+    session_bars: dict[str, list[tuple[str, float, float, float, float, float]]] = defaultdict(list)
+    week_bars: dict[str, list[tuple[str, float, float, float, float, float]]] = defaultdict(list)
     sources = set()
 
     for r in rows:
         ts_str, o, h, low_val, c, v, src = r
-        d_str = ts_str[:10]
-        bars_by_date[d_str].append((ts_str, float(o), float(h), float(low_val), float(c), float(v)))
+        bar_dt = datetime.fromisoformat(ts_str).astimezone(UTC)
+        s_id = _get_cme_session_id(bar_dt)
+        w_id = _get_cme_week_id(bar_dt)
+        bar_tuple = (ts_str, float(o), float(h), float(low_val), float(c), float(v))
+        session_bars[s_id].append(bar_tuple)
+        week_bars[w_id].append(bar_tuple)
         sources.add(src)
 
-    all_dates = sorted(bars_by_date.keys())
-    if not all_dates:
+    sorted_sessions = sorted(session_bars.keys())
+    if not sorted_sessions:
         return None
 
-    # Determine prior day and current day
-    curr_date = all_dates[-1]
-    prior_date = all_dates[-2] if len(all_dates) >= 2 else curr_date
+    curr_session_id = _get_cme_session_id(target_dt)
+    curr_week_id = _get_cme_week_id(target_dt)
 
-    prior_bars = bars_by_date[prior_date]
-    curr_bars = bars_by_date[curr_date]
+    # Determine prior completed session
+    if curr_session_id in sorted_sessions:
+        idx = sorted_sessions.index(curr_session_id)
+        prior_session_id = sorted_sessions[idx - 1] if idx > 0 else sorted_sessions[0]
+    else:
+        prior_session_id = sorted_sessions[-1]
+        curr_session_id = prior_session_id
 
-    # 1. Prior Day Levels (PDH, PDL, PDC)
+    prior_bars = session_bars[prior_session_id]
+    curr_bars = session_bars.get(curr_session_id, [rows[-1]])
+
+    # 3. Prior Session (T-1) Reference Levels
     pdh = max(b[2] for b in prior_bars)
     pdl = min(b[3] for b in prior_bars)
-    pdc = prior_bars[-1][4]  # close of last bar
+    pdc = prior_bars[-1][4]
 
-    # 2. Market Profile on Prior Day (VAH, VAL, POC)
+    # Prior Session Value Area
     va_profile = compute_value_area(prior_bars)
 
-    # 3. Overnight Range (ONH, ONL) for current session
-    # Defined as bars from 00:00 UTC up to US cash open (13:30 / 14:30 UTC)
+    # 4. Overnight Session (Asia + London: 18:00 ET to 09:30 ET)
     cash_open_time = _get_cash_open_time(target_dt)
-    cash_open_cutoff = f"{curr_date}T{cash_open_time.isoformat()}"
+    # Bars before 09:30 ET are overnight
+    overnight_bars = []
+    rth_bars = []
+    for b in curr_bars:
+        b_dt = datetime.fromisoformat(b[0]).astimezone(UTC)
+        if b_dt.time() < cash_open_time:
+            overnight_bars.append(b)
+        else:
+            rth_bars.append(b)
 
-    overnight_bars = [b for b in curr_bars if b[0] < cash_open_cutoff]
-    if overnight_bars:
-        onh = max(b[2] for b in overnight_bars)
-        onl = min(b[3] for b in overnight_bars)
-        on_bars_count = len(overnight_bars)
-    else:
-        onh = None
-        onl = None
-        on_bars_count = 0
+    onh = max((b[2] for b in overnight_bars), default=None)
+    onl = min((b[3] for b in overnight_bars), default=None)
 
-    # 4. Opening Range (OR15 and OR30)
-    # Defined as first 15m and 30m after cash open
-    rth_bars = [b for b in curr_bars if b[0] >= cash_open_cutoff]
-    or15_bars = rth_bars[:3]  # 3 x 5m = 15m
-    or30_bars = rth_bars[:6]  # 6 x 5m = 30m
-
+    # 5. Opening Range (OR15 and OR30)
+    or15_bars = rth_bars[:3]
+    or30_bars = rth_bars[:6]
     or15_high = max((b[2] for b in or15_bars), default=None)
     or15_low = min((b[3] for b in or15_bars), default=None)
     or30_high = max((b[2] for b in or30_bars), default=None)
     or30_low = min((b[3] for b in or30_bars), default=None)
 
-    # Latest live price
+    # 6. Developing Weekly Multi-Anchor (Weekly VWAP & Weekly Value Area)
+    cur_week_bars = week_bars.get(curr_week_id, curr_bars)
+    cum_pv = sum(((b[2] + b[3] + b[4]) / 3.0) * max(1.0, b[5]) for b in cur_week_bars)
+    cum_v = sum(max(1.0, b[5]) for b in cur_week_bars)
+    weekly_vwap = round(cum_pv / cum_v, 4) if cum_v > 0 else None
+    weekly_va = compute_value_area(cur_week_bars)
+
+    # 7. Latest Price and Confluence Analysis
     latest_bar = curr_bars[-1]
     last_price = latest_bar[4]
     last_bar_ts = latest_bar[0]
 
+    # Calculate ATR proxy to measure distance
+    daily_range = pdh - pdl
+    atr_proxy = max(0.001, daily_range)
+
+    confluence_notes = []
+    vah_price = va_profile["vah"]
+    val_price = va_profile["val"]
+
+    # Confluence Check: Weekly VWAP within 0.20 ATR of Prior Day VAH or VAL
+    is_confluence_vah = (
+        weekly_vwap is not None
+        and vah_price is not None
+        and abs(weekly_vwap - vah_price) <= (0.20 * atr_proxy)
+    )
+    is_confluence_val = (
+        weekly_vwap is not None
+        and val_price is not None
+        and abs(weekly_vwap - val_price) <= (0.20 * atr_proxy)
+    )
+
+    if is_confluence_vah:
+        confluence_notes.append("WEEKLY_VWAP_CONFLUENCE_WITH_VAH (Compression Breakout Zone)")
+    if is_confluence_val:
+        confluence_notes.append("WEEKLY_VWAP_CONFLUENCE_WITH_VAL (Compression Breakout Zone)")
+
+    confluence_state = (
+        "COMPRESSION_BREAKOUT_ZONE"
+        if (is_confluence_vah or is_confluence_val)
+        else "NORMAL_DISPERSED"
+    )
+
     return {
         "symbol": sym,
         "as_of": target_dt.isoformat(timespec="seconds"),
-        "reference_date_prior": prior_date,
-        "active_date_current": curr_date,
+        "reference_session_prior": prior_session_id,
+        "active_session_current": curr_session_id,
+        "active_week": curr_week_id,
         "last_price": round(last_price, 4),
         "last_bar_utc": last_bar_ts,
         "levels": {
@@ -251,6 +305,10 @@ def compute_session_reference_levels(
             "OR15_LOW": round(or15_low, 4) if or15_low is not None else None,
             "OR30_HIGH": round(or30_high, 4) if or30_high is not None else None,
             "OR30_LOW": round(or30_low, 4) if or30_low is not None else None,
+            "WEEKLY_VWAP": weekly_vwap,
+            "WEEKLY_VAH": weekly_va["vah"],
+            "WEEKLY_POC": weekly_va["poc"],
+            "WEEKLY_VAL": weekly_va["val"],
         },
         "auction_context": {
             "price_vs_prior_value": (
@@ -267,15 +325,24 @@ def compute_session_reference_levels(
                 if last_price > pdh
                 else ("BELOW_PDL" if last_price < pdl else "INSIDE_DAY")
             ),
+            "price_vs_weekly_vwap": (
+                "ABOVE_WEEKLY_VWAP"
+                if weekly_vwap and last_price >= weekly_vwap
+                else "BELOW_WEEKLY_VWAP"
+            ),
+            "confluence_state": confluence_state,
+            "confluence_details": confluence_notes,
         },
         "provenance": {
             "source": ",".join(sorted(sources)),
-            "prior_day_bars_evaluated": len(prior_bars),
-            "current_day_bars_evaluated": len(curr_bars),
-            "overnight_bars_evaluated": on_bars_count,
-            "opening_range_bars_evaluated": len(or15_bars),
-            "prior_day_total_volume": va_profile["total_volume"],
-            "method": "AMT_discrete_volume_bins_70pct",
+            "session_convention": "CME_Globex_18ET_to_17ET",
+            "prior_session_bars_evaluated": len(prior_bars),
+            "current_session_bars_evaluated": len(curr_bars),
+            "overnight_bars_evaluated": len(overnight_bars),
+            "rth_bars_evaluated": len(rth_bars),
+            "weekly_bars_accumulated": len(cur_week_bars),
+            "prior_session_total_volume": va_profile["total_volume"],
+            "method": "AMT_discrete_volume_bins_70pct_and_cumulative_weekly_vwap",
             "calculated_at_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         },
     }

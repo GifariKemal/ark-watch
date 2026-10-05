@@ -121,11 +121,11 @@ def test_compute_session_reference_levels(tmp_path):
 
     # Check provenance
     prov = ref["provenance"]
-    assert prov["prior_day_bars_evaluated"] == 3
-    assert prov["current_day_bars_evaluated"] == 2
+    assert prov["prior_session_bars_evaluated"] == 3
+    assert prov["current_session_bars_evaluated"] == 2
     assert prov["overnight_bars_evaluated"] == 1
-    assert prov["method"] == "AMT_discrete_volume_bins_70pct"
-
+    assert "weekly_bars_accumulated" in prov
+    assert prov["session_convention"] == "CME_Globex_18ET_to_17ET"
     conn.close()
 
 

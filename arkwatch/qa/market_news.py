@@ -453,6 +453,7 @@ def _gdelt_gkg(rows: list[list[str]]) -> list[tuple]:
 def run(db_path: str) -> dict[str, int]:
     conn = _db.get_conn(db_path, allow_init=True)
     out: dict[str, int] = {}
+    from ..fetchers.cryptopanic import fetch_cryptopanic_posts
     from ..fetchers.rss_news import fetch_all_rss_feeds
     from ..fetchers.tree_news import fetch_tree_news
 
@@ -461,6 +462,7 @@ def run(db_path: str) -> dict[str, int]:
         ("EODHD", _eodhd),
         ("TREE_NEWS", fetch_tree_news),
         ("RSS_FEEDS", fetch_all_rss_feeds),
+        ("CRYPTOPANIC", fetch_cryptopanic_posts),
     )
     for name, fetch in sources:
         try:
@@ -475,7 +477,10 @@ def run(db_path: str) -> dict[str, int]:
                 uid = hashlib.sha256(f"{row['source']}|{url}|{title}".encode()).hexdigest()
                 relevance = (
                     1.0
-                    if "fed" in str(row["source"]).lower()
+                    if any(
+                        auth in str(row["source"]).lower()
+                        for auth in ("fed", "ecb", "boe", "treasury", "sec")
+                    )
                     else min(
                         1.0,
                         0.2

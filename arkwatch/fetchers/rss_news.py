@@ -16,9 +16,12 @@ from datetime import UTC, datetime
 FEEDS = {
     "FED": "https://www.federalreserve.gov/feeds/press_all.xml",
     "ECB": "https://www.ecb.europa.eu/rss/press.html",
+    "BOE": "https://www.bankofengland.co.uk/rss/news",
+    "TREASURY": "https://home.treasury.gov/rss.xml",
     "SEC": "https://www.sec.gov/news/pressreleases.rss",
     "FOREXLIVE": "https://www.forexlive.com/feed/news",
     "OILPRICE": "https://oilprice.com/rss/main",
+    "COINTELEGRAPH": "https://cointelegraph.com/rss",
     "MARKETWATCH": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
     "CNBC": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
     "YAHOO": "https://finance.yahoo.com/news/rssindex",
@@ -46,6 +49,27 @@ def _parse_pub_date(pub_text: str | None) -> str:
         pass
 
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _tag_symbols(source_name: str) -> list[str]:
+    src = source_name.upper()
+    if src == "FED":
+        return ["$FED"]
+    if src == "ECB":
+        return ["$EUR", "$ECB"]
+    if src == "BOE":
+        return ["$GBP", "$BOE"]
+    if src == "TREASURY":
+        return ["$USD", "$TREASURY"]
+    if src == "SEC":
+        return ["$SEC"]
+    if src == "OILPRICE":
+        return ["CL1", "BZ1"]
+    if src == "FOREXLIVE":
+        return ["$DXY", "$MACRO"]
+    if src == "COINTELEGRAPH":
+        return ["$BTC", "$ETH"]
+    return []
 
 
 def fetch_rss_feed(source_name: str, url: str, timeout: int = 10) -> list[dict]:
@@ -95,25 +119,7 @@ def fetch_rss_feed(source_name: str, url: str, timeout: int = 10) -> list[dict]:
                 "url": link,
                 "summary": desc[:2000],
                 "published": pub,
-                "symbols": (
-                    ["$FED"]
-                    if source_name.upper() == "FED"
-                    else (
-                        ["$EUR", "$ECB"]
-                        if source_name.upper() == "ECB"
-                        else (
-                            ["$SEC"]
-                            if source_name.upper() == "SEC"
-                            else (
-                                ["CL1", "BZ1"]
-                                if source_name.upper() == "OILPRICE"
-                                else (
-                                    ["$DXY", "$MACRO"] if source_name.upper() == "FOREXLIVE" else []
-                                )
-                            )
-                        )
-                    )
-                ),
+                "symbols": _tag_symbols(source_name),
                 "provider_payload": {
                     "source": source_name,
                     "title": title,

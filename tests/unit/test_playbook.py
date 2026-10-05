@@ -264,16 +264,17 @@ def test_generate_trading_playbook_scenarios_and_api(tmp_path):
     assert pb["symbol"] == "NQ1"
     assert "reference_levels" in pb
     assert "catalysts" in pb
+    assert "amt_context" in pb
+    assert "open_type" in pb["amt_context"]
     assert "scenarios" in pb
     assert len(pb["scenarios"]) >= 1
-
     scenario = pb["scenarios"][0]
     assert "trigger_condition" in scenario
     assert "target_profit" in scenario
     assert "invalidation_level" in scenario
     assert "empirical_support" in scenario
     assert "source" in scenario["empirical_support"]
-
+    assert "open_type_gate" in scenario["empirical_support"]
     # Verify levels API
     lev = api.get_session_levels("NQ1", db_path=db_file, as_of=now)
     assert lev is not None

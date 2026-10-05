@@ -138,7 +138,17 @@ def generate_trading_playbook(
     vah = levels["VAH"]
     val = levels["VAL"]
     poc = levels["POC"]
+    cva_measured_long = levels.get("CVA_MEASURED_MOVE_LONG")
+    cva_measured_short = levels.get("CVA_MEASURED_MOVE_SHORT")
+    cva_name = levels.get("DYNAMIC_CVA_NAME")
+    naked_poc_above = levels.get("NAKED_POC_ABOVE")
+    naked_poc_below = levels.get("NAKED_POC_BELOW")
 
+    ctx = ref["auction_context"]
+    open_type = ctx.get("open_type", "OPEN_IN_VALUE")
+    open_conviction = ctx.get("open_conviction", "MODERATE_CONVICTION")
+    participant_activity = ctx.get("participant_activity", "ROTATIONAL_AUCTION")
+    value_migration = ctx.get("value_migration", "INSIDE_VALUE")
     # 2. Fetch Intraday Price Action (VWAP and ATR)
     pa = session_intraday_intelligence(conn, sym, as_of=as_of)
     vwap = pa.get("vwap") if pa else None
@@ -169,10 +179,21 @@ def generate_trading_playbook(
     # 6. Build Actionable Scenarios
     scenarios = []
 
+    # Open Type Gate Filtering (Dalton Rule: "Never fade an Open Drive")
+    is_bullish_open_drive = open_type == "OPEN_DRIVE_BULLISH"
+    is_bearish_open_drive = open_type == "OPEN_DRIVE_BEARISH"
+
     # SCENARIO 1: Trend Expansion / Value Acceptance (Long or Short)
-    if fast_cat["net_stance_score"] >= 0.15 and (vwap is None or last_price >= vwap):
-        # Long expansion bias
-        target_p = round(max(pdh, last_price + (cont_atr * atr_14)), 2)
+    # Target: Dalton CVA 100% Measured Move if available, fallback to continuation median ATR
+    if (fast_cat["net_stance_score"] >= 0.15 or is_bullish_open_drive) and (
+        vwap is None or last_price >= vwap
+    ):
+        target_p = round(
+            cva_measured_long
+            if (cva_measured_long and cva_measured_long > last_price)
+            else max(pdh, last_price + (cont_atr * atr_14)),
+            2,
+        )
         inval_p = round(
             min(val if val else last_price, vwap if vwap else last_price - (0.5 * atr_14)), 2
         )
@@ -194,15 +215,26 @@ def generate_trading_playbook(
                 "invalidation_rationale": "Loss of Session VWAP or close back inside Value Area rejects continuation.",
                 "empirical_support": {
                     "continuation_median_atr": cont_atr,
-                    "target_derivation": f"max(PDH, last_price + {cont_atr} * ATR_14)",
+                    "target_derivation": (
+                        f"Dalton {cva_name} 100% Measured Move ({target_p})"
+                        if cva_measured_long
+                        else f"max(PDH, last_price + {cont_atr} * ATR_14)"
+                    ),
+                    "open_type_gate": f"{open_type} ({open_conviction})",
                     "sample_weeks": emp.get("sample_weeks_high"),
                     "source": emp.get("source_doc"),
                 },
             }
         )
-    elif fast_cat["net_stance_score"] <= -0.15 and (vwap is None or last_price <= vwap):
-        # Short expansion bias
-        target_p = round(min(pdl, last_price - (cont_atr * atr_14)), 2)
+    elif (fast_cat["net_stance_score"] <= -0.15 or is_bearish_open_drive) and (
+        vwap is None or last_price <= vwap
+    ):
+        target_p = round(
+            cva_measured_short
+            if (cva_measured_short and cva_measured_short < last_price)
+            else min(pdl, last_price - (cont_atr * atr_14)),
+            2,
+        )
         inval_p = round(
             max(vah if vah else last_price, vwap if vwap else last_price + (0.5 * atr_14)), 2
         )
@@ -224,7 +256,12 @@ def generate_trading_playbook(
                 "invalidation_rationale": "Reclaim of Session VWAP or close back inside Value Area invalidates short.",
                 "empirical_support": {
                     "continuation_median_atr": emp.get("low_continuation_median_atr", cont_atr),
-                    "target_derivation": f"min(PDL, last_price - {cont_atr} * ATR_14)",
+                    "target_derivation": (
+                        f"Dalton {cva_name} 100% Measured Move ({target_p})"
+                        if cva_measured_short
+                        else f"min(PDL, last_price - {cont_atr} * ATR_14)"
+                    ),
+                    "open_type_gate": f"{open_type} ({open_conviction})",
                     "sample_weeks": emp.get("sample_weeks_low"),
                     "source": emp.get("source_doc"),
                 },
@@ -233,9 +270,10 @@ def generate_trading_playbook(
 
     # SCENARIO 2: Liquidity Sweep / Failed Auction (Trap Setup)
     # If price tested near PDH or above PDH
-    if last_price >= pdh * 0.998:
+    if last_price >= pdh * 0.998 and not is_bullish_open_drive:
         sweep_inval = round(pdh + (0.20 * atr_14), 2)
-        sweep_target = round(poc if poc else pdc, 2)
+        # Primary target: Unretested Naked POC below, fallback to Prior POC/PDC
+        sweep_target = round(naked_poc_below if naked_poc_below else (poc if poc else pdc), 2)
         scenarios.append(
             {
                 "id": "SCENARIO_PDH_SWEEP_REVERSAL",
@@ -254,6 +292,11 @@ def generate_trading_playbook(
                 "invalidation_rationale": f"Price accepts and sustains above {sweep_inval} (PDH + 0.20*ATR) proves breakout.",
                 "empirical_support": {
                     "empirical_false_close_rate_pct": high_false_close_pct,
+                    "target_magnet": (
+                        f"Unretested Naked POC at {naked_poc_below}"
+                        if naked_poc_below
+                        else "Prior POC"
+                    ),
                     "confidence_interval_95": emp.get("high_false_close_ci95"),
                     "sample_weeks": emp.get("sample_weeks_high"),
                     "mechanism": "Nearly half (44%-54%) of high breakouts fail to close outside prior range",
@@ -261,10 +304,11 @@ def generate_trading_playbook(
                 },
             }
         )
-    # If price tested near PDL or below PDL
-    elif last_price <= pdl * 1.002:
+    # If price tested near PDL or below PDL (Gate check: do not fade bearish open drive)
+    elif last_price <= pdl * 1.002 and not is_bearish_open_drive:
         sweep_inval = round(pdl - (0.20 * atr_14), 2)
-        sweep_target = round(poc if poc else pdc, 2)
+        # Primary target: Unretested Naked POC above, fallback to Prior POC/PDC
+        sweep_target = round(naked_poc_above if naked_poc_above else (poc if poc else pdc), 2)
         scenarios.append(
             {
                 "id": "SCENARIO_PDL_SWEEP_REVERSAL",
@@ -283,6 +327,11 @@ def generate_trading_playbook(
                 "invalidation_rationale": f"Price breaks below {sweep_inval} (PDL - 0.20*ATR) confirms breakdown.",
                 "empirical_support": {
                     "empirical_false_close_rate_pct": low_false_close_pct,
+                    "target_magnet": (
+                        f"Unretested Naked POC at {naked_poc_above}"
+                        if naked_poc_above
+                        else "Prior POC"
+                    ),
                     "confidence_interval_95": emp.get("low_false_close_ci95"),
                     "sample_weeks": emp.get("sample_weeks_low"),
                     "mechanism": "Observed low false close frequency across historical database",
@@ -330,6 +379,17 @@ def generate_trading_playbook(
             "swing_macro_stance": swing_sent["stance"],
             "swing_macro_score": swing_sent["net_stance_score"],
             "macro_regime_score": round(macro_regime_score, 2),
+        },
+        "amt_context": {
+            "open_type": open_type,
+            "open_conviction": open_conviction,
+            "participant_activity": participant_activity,
+            "value_migration": value_migration,
+            "cva_name": cva_name,
+            "cva_measured_move_long": cva_measured_long,
+            "cva_measured_move_short": cva_measured_short,
+            "nearest_naked_poc_above": naked_poc_above,
+            "nearest_naked_poc_below": naked_poc_below,
         },
         "scenarios": scenarios,
         "provenance": {

@@ -131,6 +131,27 @@ def main() -> int:
         conn.close()
         print(json.dumps(res, indent=2))
         return 0
+    if cmd == "scanner":
+        import argparse
+        import json
+
+        from dotenv import load_dotenv
+
+        load_dotenv()
+
+        from . import db
+        from .signals.playbook_tracker import scan_market_opportunities
+
+        p = argparse.ArgumentParser(prog="arkwatch scanner")
+        p.add_argument("--min-rr", type=float, default=1.5, help="minimum risk-to-reward ratio")
+        p.add_argument("--db", default=str(_DEFAULT_DB))
+        a = p.parse_args(sys.argv[2:])
+        conn = db.get_conn(a.db, allow_init=True)
+        opps = scan_market_opportunities(conn, min_rr=a.min_rr)
+        conn.close()
+        print(f"=== OPPORTUNITY SCANNER: {len(opps)} HIGH-CONVICTION SETUPS FOUND ===")
+        print(json.dumps(opps, indent=2))
+        return 0
     if cmd == "levels":
         import argparse
         import json

@@ -388,6 +388,33 @@ def get_playbook_performance(
         return get_playbook_performance_metrics(c, symbol=symbol, horizon=horizon)
 
 
+def scan_opportunities(
+    symbols: list[str] | tuple[str, ...] | None = None,
+    as_of: datetime | str | None = None,
+    min_rr: float = 1.5,
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    """Continuous Opportunity Scanner: Scans the tracked book and returns active/imminent trade opportunities."""
+    from .signals.playbook_tracker import scan_market_opportunities
+
+    with _get_connection(conn, db_path) as c:
+        return scan_market_opportunities(c, symbols=symbols, as_of=as_of, min_rr=min_rr)
+
+
+def evaluate_counterfactuals(
+    as_of: datetime | str | None = None,
+    forward_hours: int = 2,
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+) -> dict:
+    """Audit whether past stop-losses and early exits were justified (Saved Capital vs Whipsaw Stop)."""
+    from .signals.playbook_tracker import evaluate_counterfactual_outcomes
+
+    with _get_connection(conn, db_path) as c:
+        return evaluate_counterfactual_outcomes(c, as_of=as_of, forward_hours=forward_hours)
+
+
 def get_economic_calendar(
     conn: sqlite3.Connection | None = None,
     db_path: str | Path | None = None,

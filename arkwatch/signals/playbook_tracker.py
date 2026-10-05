@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 
@@ -379,3 +379,203 @@ def get_playbook_performance_metrics(
         "avg_mfe": avg_mfe,
         "avg_mae": avg_mae,
     }
+
+
+def evaluate_counterfactual_outcomes(
+    conn: sqlite3.Connection,
+    *,
+    as_of: datetime | str | None = None,
+    forward_hours: int = 2,
+) -> dict[str, int]:
+    """Evaluate subsequent 2h-4h price behavior after exit to audit whether stop-loss/invalidation was justified."""
+    if as_of is None:
+        target_dt = datetime.now(UTC)
+    elif isinstance(as_of, str):
+        target_dt = datetime.fromisoformat(as_of).astimezone(UTC)
+    else:
+        target_dt = as_of.astimezone(UTC)
+
+    target_ts = target_dt.isoformat(timespec="seconds")
+
+    # Find resolved trades
+    rows = conn.execute(
+        """
+        SELECT scenario_uid, symbol, direction, target_profit, invalidation_level,
+               entry_price, exit_price, state, resolved_at_utc, payload_json
+        FROM playbook_scenarios
+        WHERE state IN ('HIT_TARGET_WIN', 'HIT_STOP_LOSS')
+          AND resolved_at_utc IS NOT NULL
+        """
+    ).fetchall()
+
+    stats = {
+        "audited": 0,
+        "good_stop_loss": 0,
+        "whipsaw_stop": 0,
+        "clean_win": 0,
+        "runner_continuation": 0,
+    }
+
+    for r in rows:
+        uid, sym, direction, target_p, inval_p, entry_p, exit_p, state, resolved_ts, payload_str = r
+        try:
+            payload = json.loads(payload_str)
+        except Exception:
+            payload = {}
+
+        # Skip if already audited
+        if "counterfactual_audit" in payload:
+            continue
+
+        # Fetch bars in forward window after resolution
+        resolved_dt = datetime.fromisoformat(resolved_ts).astimezone(UTC)
+        window_end_dt = resolved_dt + timedelta(hours=forward_hours)
+        # Only audit if window has elapsed
+        if target_dt < window_end_dt:
+            continue
+
+        cf_bars = conn.execute(
+            """
+            SELECT bar_ts_utc, open, high, low, close
+            FROM intraday_bars
+            WHERE symbol = ?
+              AND bar_ts_utc >= ?
+              AND bar_ts_utc <= ?
+            ORDER BY bar_ts_utc ASC
+            """,
+            (sym, resolved_ts, window_end_dt.isoformat(timespec="seconds")),
+        ).fetchall()
+
+        if len(cf_bars) < 6:
+            continue
+
+        cf_high = max(b[2] for b in cf_bars)
+        cf_low = min(b[3] for b in cf_bars)
+        cf_close = cf_bars[-1][4]
+        risk_dist = abs(entry_p - inval_p) if (entry_p and inval_p) else 10.0
+
+        verdict = "NEUTRAL_CONSOLIDATION"
+        reason = "Price hovered near exit level during post-trade window."
+
+        if state == "HIT_STOP_LOSS":
+            if direction == "LONG":
+                # Did price drop further after stop loss?
+                if cf_low < exit_p - (0.25 * risk_dist):
+                    verdict = "GOOD_STOP_LOSS (Capital Saved)"
+                    reason = f"Price continued to decline to {round(cf_low, 2)} after stop-loss. Cut-loss prevented deeper drawdown."
+                    stats["good_stop_loss"] += 1
+                # Did price reverse back and hit the original target?
+                elif cf_high >= target_p:
+                    verdict = "WHIPSAW_STOP (Bad Stop Placement)"
+                    reason = f"Price reversed after stop-out and reached target profit ({target_p}). Stop loss was placed too tightly on a wick."
+                    stats["whipsaw_stop"] += 1
+            elif direction == "SHORT":
+                if cf_high > exit_p + (0.25 * risk_dist):
+                    verdict = "GOOD_STOP_LOSS (Capital Saved)"
+                    reason = f"Price continued to rally to {round(cf_high, 2)} after stop-loss. Cut-loss prevented deeper drawdown."
+                    stats["good_stop_loss"] += 1
+                elif cf_low <= target_p:
+                    verdict = "WHIPSAW_STOP (Bad Stop Placement)"
+                    reason = f"Price reversed after stop-out and reached target profit ({target_p}). Stop loss was placed too tightly on a wick."
+                    stats["whipsaw_stop"] += 1
+
+        elif state == "HIT_TARGET_WIN":
+            if direction == "LONG":
+                if cf_high > target_p + (0.50 * risk_dist):
+                    verdict = "RUNNER_CONTINUATION (Extended Win)"
+                    reason = f"Price continued advancing to {round(cf_high, 2)} after target hit. Setup had additional continuation potential."
+                    stats["runner_continuation"] += 1
+                else:
+                    verdict = "CLEAN_WIN (Optimal Exit)"
+                    reason = (
+                        "Target profit was hit at the auction extreme before price consolidated."
+                    )
+                    stats["clean_win"] += 1
+            elif direction == "SHORT":
+                if cf_low < target_p - (0.50 * risk_dist):
+                    verdict = "RUNNER_CONTINUATION (Extended Win)"
+                    reason = f"Price continued dropping to {round(cf_low, 2)} after target hit. Setup had additional continuation potential."
+                    stats["runner_continuation"] += 1
+                else:
+                    verdict = "CLEAN_WIN (Optimal Exit)"
+                    reason = (
+                        "Target profit was hit at the auction extreme before price consolidated."
+                    )
+                    stats["clean_win"] += 1
+
+        payload["counterfactual_audit"] = {
+            "verdict": verdict,
+            "reason": reason,
+            "post_exit_high": round(cf_high, 4),
+            "post_exit_low": round(cf_low, 4),
+            "post_exit_close": round(cf_close, 4),
+            "forward_bars_evaluated": len(cf_bars),
+            "audited_at_utc": target_ts,
+        }
+
+        conn.execute(
+            "UPDATE playbook_scenarios SET payload_json = ? WHERE scenario_uid = ?",
+            (json.dumps(payload), uid),
+        )
+        stats["audited"] += 1
+
+    conn.commit()
+    return stats
+
+
+def scan_market_opportunities(
+    conn: sqlite3.Connection,
+    *,
+    symbols: list[str] | tuple[str, ...] | None = None,
+    as_of: datetime | str | None = None,
+    min_rr: float = 1.5,
+) -> list[dict[str, Any]]:
+    """Continuous Opportunity Scanner: Scans the tracked book and returns active/imminent trade opportunities."""
+    from .playbook import generate_trading_playbook
+
+    target_symbols = symbols or ("NQ1", "ES1", "YM1", "GC1", "CL1", "BTCUSD", "ETHUSD", "EURUSD")
+    opportunities = []
+
+    for sym in target_symbols:
+        pb = generate_trading_playbook(conn, sym, as_of=as_of)
+        if not pb:
+            continue
+
+        scenarios = pb.get("scenarios", [])
+        last_price = pb.get("last_price", 0.0)
+        confluence_status = pb.get("multi_domain", {}).get("confluence_status", {})
+        alignment_state = confluence_status.get("alignment_state", "NEUTRAL_BALANCED")
+        amt_ctx = pb.get("amt_context", {})
+
+        # Filter out halt states
+        if alignment_state == "EVENT_HALT_REQUIRED":
+            continue
+
+        for sc in scenarios:
+            # Skip pure chop rotations unless explicitly high R:R
+            if sc.get("direction") == "NEUTRAL_RANGE":
+                continue
+
+            rr = float(sc.get("risk_reward_ratio", 1.0))
+            if rr < min_rr:
+                continue
+
+            opportunities.append(
+                {
+                    "symbol": sym,
+                    "horizon": sc.get("horizon", "INTRADAY"),
+                    "direction": sc.get("direction"),
+                    "scenario_title": sc.get("title"),
+                    "last_price": last_price,
+                    "trigger_price": sc.get("trigger_price"),
+                    "target_profit": sc.get("target_profit"),
+                    "invalidation_level": sc.get("invalidation_level"),
+                    "risk_reward_ratio": rr,
+                    "open_type": amt_ctx.get("open_type"),
+                    "alignment_state": alignment_state,
+                    "catalyst_stance": pb.get("catalysts", {}).get("intraday_fast_stance"),
+                }
+            )
+
+    # Sort opportunities by Risk-Reward ratio descending
+    return sorted(opportunities, key=lambda x: x["risk_reward_ratio"], reverse=True)

@@ -104,9 +104,9 @@ def test_evaluate_active_playbooks_win_lifecycle(tmp_path):
     assert row[0] == "HIT_TARGET_WIN"
     assert row[1] == 31150.0  # entry
     assert row[2] == 31300.0  # target exit
-    assert row[3] == 150.0    # pnl: 31300 - 31150
-    assert row[4] > 0.0       # positive R-multiple
-    assert row[5] == 200.0    # MFE: 31350 - 31150 = 200 pts
+    assert row[3] == 150.0  # pnl: 31300 - 31150
+    assert row[4] > 0.0  # positive R-multiple
+    assert row[5] == 200.0  # MFE: 31350 - 31150 = 200 pts
 
     # Test performance metrics
     perf = playbook_tracker.get_playbook_performance_metrics(conn, symbol="NQ1")
@@ -174,5 +174,86 @@ def test_evaluate_active_playbooks_loss_lifecycle(tmp_path):
     assert row[0] == "HIT_STOP_LOSS"
     assert row[1] < 0.0  # negative pnl
     assert row[2] == 2.3  # MAE: 90.8 - 88.5 = 2.3
+
+
+def test_evaluate_counterfactual_outcomes(tmp_path):
+    db_file = tmp_path / "arkwatch.db"
+    conn = db.get_conn(db_file, allow_init=True)
+    t0 = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    t0_iso = t0.isoformat(timespec="seconds")
+
+    # Create stopped-out trade
+    playbook_payload = {
+        "symbol": "NQ1",
+        "as_of": t0_iso,
+        "last_price": 31000.0,
+        "reference_levels": {"active_session_current": "2026-10-05"},
+        "scenarios": [
+            {
+                "id": "SCENARIO_LONG_STOPPED",
+                "horizon": "INTRADAY",
+                "title": "Long Stopped",
+                "direction": "LONG",
+                "trigger_condition": "above 31050",
+                "trigger_price": 31050.0,
+                "target_profit": 31300.0,
+                "invalidation_level": 30950.0,
+                "risk_reward_ratio": 2.5,
+            }
+        ],
+    }
+    uids = playbook_tracker.record_playbook_scenarios(conn, playbook_payload)
+
+    # Activation bar at 14:05 (31060), Stop hit bar at 14:10 (30940)
+    t1 = (t0 + timedelta(minutes=5)).isoformat(timespec="seconds")
+    t2 = (t0 + timedelta(minutes=10)).isoformat(timespec="seconds")
+    conn.executemany(
+        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [
+            ("NQ1", t1, "5m", "YAHOO", 31040.0, 31070.0, 31030.0, 31060.0, 100.0, t1),
+            ("NQ1", t2, "5m", "YAHOO", 31060.0, 31060.0, 30940.0, 30940.0, 200.0, t2),
+        ],
+    )
+    conn.commit()
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=t2)
+
+    # Add forward bars 2 hours later where price crashes to 30700 (proving stop loss saved capital)
+    forward_bars = [
+        (
+            "NQ1",
+            (t0 + timedelta(hours=1, minutes=m)).isoformat(timespec="seconds"),
+            "5m",
+            "YAHOO",
+            30900.0,
+            30910.0,
+            30700.0,
+            30720.0,
+            100.0,
+            "now",
+        )
+        for m in range(0, 60, 5)
+    ]
+    conn.executemany(
+        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        forward_bars,
+    )
+    conn.commit()
+
+    # Run counterfactual audit 2.5h later
+    t_audit = t0 + timedelta(hours=2, minutes=30)
+    cf_stats = playbook_tracker.evaluate_counterfactual_outcomes(
+        conn, as_of=t_audit, forward_hours=2
+    )
+    assert cf_stats["audited"] == 1
+    assert cf_stats["good_stop_loss"] == 1
+
+    import json
+
+    row = conn.execute(
+        "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uids[0],)
+    ).fetchone()
+    data = json.loads(row[0])
+    assert "counterfactual_audit" in data
+    assert "GOOD_STOP_LOSS" in data["counterfactual_audit"]["verdict"]
 
     conn.close()

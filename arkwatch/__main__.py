@@ -64,6 +64,22 @@ def main() -> int:
         conn.close()
         print(f"=== crypto signals: {n} signals stored ===")
         return 0
+    if cmd == "sentiment":
+        import argparse
+
+        from . import db
+        from .signals.sentiment import extract_news_intelligence, store_asset_radars
+
+        p = argparse.ArgumentParser(prog="arkwatch sentiment")
+        p.add_argument("--db", default=str(_DEFAULT_DB))
+        p.add_argument("--limit", type=int, default=15)
+        a = p.parse_args(sys.argv[2:])
+        conn = db.get_conn(a.db, allow_init=True)
+        n = extract_news_intelligence(conn, limit=a.limit)
+        radars = store_asset_radars(conn)
+        conn.close()
+        print(f"=== sentiment: extracted {n} articles, updated {len(radars)} asset radars ===")
+        return 0
     if cmd == "harvest":
         from .qa.harvest import main as harvest_main
 

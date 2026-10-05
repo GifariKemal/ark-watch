@@ -9,6 +9,9 @@ Key APIs:
   - get_energy_intelligence()
   - get_options_intelligence()
   - get_market_news()
+  - get_news_intelligence()
+  - get_asset_sentiment_radar()
+  - get_all_sentiment_radars()
   - get_economic_calendar()
   - on_demand_refresh()
 """
@@ -248,6 +251,87 @@ def get_market_news(
         return out
 
 
+def get_news_intelligence(
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+    asset: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Retrieve structured multi-dimensional macro stances with evidence quotes."""
+    with _get_connection(conn, db_path) as c:
+        if asset:
+            from .signals.sentiment import _normalize_asset
+
+            norm = _normalize_asset(asset) or asset.upper()
+            query = (
+                "SELECT ni.news_id, ni.asset, ni.stance, ni.magnitude, ni.confidence, "
+                "ni.macro_channel, ni.impact_horizon, ni.evidence_level, "
+                "ni.evidence_quote, ni.transmission_rationale, ni.published_at_utc, "
+                "m.source, m.title, m.url "
+                "FROM news_intelligence ni "
+                "JOIN market_news m ON m.news_id = ni.news_id "
+                "WHERE ni.asset = ? "
+                "ORDER BY ni.published_at_utc DESC LIMIT ?"
+            )
+            rows = c.execute(query, (norm, limit)).fetchall()
+        else:
+            query = (
+                "SELECT ni.news_id, ni.asset, ni.stance, ni.magnitude, ni.confidence, "
+                "ni.macro_channel, ni.impact_horizon, ni.evidence_level, "
+                "ni.evidence_quote, ni.transmission_rationale, ni.published_at_utc, "
+                "m.source, m.title, m.url "
+                "FROM news_intelligence ni "
+                "JOIN market_news m ON m.news_id = ni.news_id "
+                "ORDER BY ni.published_at_utc DESC LIMIT ?"
+            )
+            rows = c.execute(query, (limit,)).fetchall()
+
+        return [
+            {
+                "news_id": r[0],
+                "asset": r[1],
+                "stance": r[2],
+                "magnitude": float(r[3]),
+                "confidence": float(r[4]),
+                "macro_channel": r[5],
+                "impact_horizon": r[6],
+                "evidence_level": r[7],
+                "evidence_quote": r[8],
+                "transmission_rationale": r[9],
+                "published_at_utc": r[10],
+                "source": r[11],
+                "title": r[12],
+                "url": r[13],
+            }
+            for r in rows
+        ]
+
+
+def get_asset_sentiment_radar(
+    asset: str,
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+    window_days: int = 3,
+) -> dict:
+    """Retrieve time-decayed composite sentiment radar and active catalysts for an asset."""
+    from .signals.sentiment import compute_asset_sentiment_radar
+
+    with _get_connection(conn, db_path) as c:
+        return compute_asset_sentiment_radar(c, asset, window_days=window_days)
+
+
+def get_all_sentiment_radars(
+    conn: sqlite3.Connection | None = None,
+    db_path: str | Path | None = None,
+    window_days: int = 3,
+) -> dict[str, dict]:
+    """Retrieve sentiment radars for all tracked assets in the macro book."""
+    from .signals.sentiment import compute_all_asset_radars
+
+    with _get_connection(conn, db_path) as c:
+        return compute_all_asset_radars(c, window_days=window_days)
+
+
 def get_economic_calendar(
     conn: sqlite3.Connection | None = None,
     db_path: str | Path | None = None,
@@ -287,7 +371,7 @@ def get_economic_calendar(
 def on_demand_refresh(target: str, db_path: str | Path | None = None) -> dict:
     """Trigger an on-demand data refresh or calculation outside the cron schedule.
 
-    Supported targets: 'crypto', 'energy', 'market', 'market-news', 'calibrate'
+    Supported targets: 'crypto', 'energy', 'market', 'market-news', 'sentiment', 'calibrate'
     """
     path = str(db_path or DEFAULT_DB)
 
@@ -357,5 +441,18 @@ def on_demand_refresh(target: str, db_path: str | Path | None = None) -> dict:
         with _get_connection(None, path) as c:
             n = store_news_signals(c)
         return {"target": target, "status": "OK", "signals_updated": n}
+
+    if target == "sentiment":
+        from .signals.sentiment import extract_news_intelligence, store_asset_radars
+
+        with _get_connection(None, path) as c:
+            n = extract_news_intelligence(c, limit=15)
+            radars = store_asset_radars(c)
+        return {
+            "target": target,
+            "status": "OK",
+            "articles_processed": n,
+            "radars_updated": len(radars),
+        }
 
     return {"target": target, "status": "ERROR", "error": f"unknown refresh target '{target}'"}

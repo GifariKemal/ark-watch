@@ -437,6 +437,7 @@ def run_loop():
             if now_wib.minute % news_interval == 0 and news_bucket != last_news_bucket:
                 last_news_bucket = news_bucket
                 _run_job("market-news", "Cross-source catalyst news")
+                _run_job("sentiment", "Multi-asset news intelligence radar")
                 _run_job("breadth", "S&P 500 constituent breadth")
                 _run_job("crypto", "Crypto liquidation analytics")
             # Rotate logs at the UTC date change (the filename convention is

@@ -15,6 +15,7 @@ from .backup import BACKUP_DIR
 
 TABLES = ("gdelt_mentions", "gdelt_gkg", "gdelt_events")
 RETENTION_DAYS = 8
+MARKET_NEWS_RETENTION_DAYS = int(os.environ.get("MARKET_NEWS_RETENTION_DAYS", "90"))
 
 
 def _cutoff(now: datetime, days: int = RETENTION_DAYS) -> str:
@@ -132,13 +133,20 @@ def clean(
     )
     conn.execute("PRAGMA busy_timeout=30000")
     try:
+        news_cutoff = _cutoff(instant, days=MARKET_NEWS_RETENTION_DAYS)
+        news_candidates = conn.execute(
+            "SELECT COUNT(*) FROM market_news WHERE published_at_utc < ?", (news_cutoff,)
+        ).fetchone()[0]
         result = {
             "applied": apply,
             "cutoff_utc": cutoff,
+            "news_cutoff_utc": news_cutoff,
             "window": f"{RETENTION_DAYS}_days",
+            "news_window": f"{MARKET_NEWS_RETENTION_DAYS}_days",
             "tables": {table: _summary(conn, table, cutoff) for table in TABLES},
             "protected_events": _protected_events(conn, cutoff),
             "fetch_log_candidates": _old_fetch_log_rows(conn),
+            "market_news_candidates": news_candidates,
             "db_bytes_before": db_bytes_before,
             "wal_bytes_before": wal_bytes_before,
         }
@@ -149,6 +157,7 @@ def clean(
         if (
             not any(item["rows"] for item in result["tables"].values())
             and not result["fetch_log_candidates"]
+            and not result["market_news_candidates"]
         ):
             result["deleted"] = {table: 0 for table in TABLES}
             result["fetch_log_deleted"] = 0
@@ -179,10 +188,12 @@ def clean(
                 cursor = conn.execute(f"DELETE FROM {table} WHERE fetched_at < ?{extra}", params)
                 deleted[table] = cursor.rowcount
             fetch_log = conn.execute("DELETE FROM fetch_log WHERE ts < datetime('now', '-180 day')")
-            # Purge market_news and payloads older than retention window
-            news_del = conn.execute("DELETE FROM market_news WHERE published_at_utc < ?", (cutoff,))
+            news_cutoff = _cutoff(instant, days=MARKET_NEWS_RETENTION_DAYS)
+            news_del = conn.execute(
+                "DELETE FROM market_news WHERE published_at_utc < ?", (news_cutoff,)
+            )
             payload_del = conn.execute(
-                "DELETE FROM market_news_payloads WHERE fetched_at < ?", (cutoff,)
+                "DELETE FROM market_news_payloads WHERE fetched_at < ?", (news_cutoff,)
             )
             deleted["market_news"] = news_del.rowcount
             deleted["market_news_payloads"] = payload_del.rowcount

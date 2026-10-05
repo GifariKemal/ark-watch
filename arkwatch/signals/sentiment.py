@@ -1,0 +1,431 @@
+"""sentiment.py — LLM-powered multi-asset sentiment radar and macro stance extraction.
+
+Processes curated market news into structured multi-dimensional macro stance records
+per asset, providing auditable evidence quotes and transmission channel analysis
+without black-box opacity.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import sqlite3
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from ..fetchers.nlp import _call, _config, _extract_json
+
+TRACKED_ASSETS = (
+    "NQ1",  # Nasdaq 100 / Tech
+    "ES1",  # S&P 500
+    "YM1",  # Dow Jones
+    "GC1",  # Gold (XAUUSD)
+    "SI1",  # Silver (XAGUSD)
+    "HG1",  # Copper (XCUUSD)
+    "CL1",  # WTI Crude Oil
+    "BZ1",  # Brent Crude Oil
+    "DXY",  # US Dollar Index
+    "EURUSD",  # Euro / US Dollar
+    "USDJPY",  # US Dollar / Yen
+    "BTCUSD",  # Bitcoin
+    "ETHUSD",  # Ethereum
+)
+
+ASSET_ALIASES: dict[str, str] = {
+    "XAU": "GC1",
+    "XAUUSD": "GC1",
+    "GOLD": "GC1",
+    "XAG": "SI1",
+    "XAGUSD": "SI1",
+    "SILVER": "SI1",
+    "XCU": "HG1",
+    "XCUUSD": "HG1",
+    "COPPER": "HG1",
+    "WTI": "CL1",
+    "OIL": "CL1",
+    "CRUDE": "CL1",
+    "BRENT": "BZ1",
+    "NASDAQ": "NQ1",
+    "QQQ": "NQ1",
+    "SP500": "ES1",
+    "SPY": "ES1",
+    "DOW": "YM1",
+    "DIA": "YM1",
+    "DOLLAR": "DXY",
+    "USD": "DXY",
+    "BTC": "BTCUSD",
+    "BITCOIN": "BTCUSD",
+    "ETH": "ETHUSD",
+    "ETHEREUM": "ETHUSD",
+}
+
+AUTHORITY_SOURCES = {"RSS_FED", "RSS_BOE", "RSS_TREASURY", "RSS_SEC", "RSS_OILPRICE"}
+
+EXTRACTION_SYSTEM_PROMPT = """You are a senior US-macro and multi-asset swing trading strategist.
+Analyze financial news for a multi-asset book:
+- US Indices: NQ1 (Nasdaq), ES1 (S&P 500), YM1 (Dow)
+- Metals: GC1/XAU (Gold), SI1 (Silver), HG1 (Copper)
+- Energy: CL1 (WTI), BZ1 (Brent)
+- FX: DXY (US Dollar), EURUSD, USDJPY
+- Crypto: BTCUSD, ETHUSD
+
+Evaluate multi-dimensional transmission:
+1. Impacted assets: which assets in the book are directly or indirectly impacted?
+2. Stance: BULLISH (+1), BEARISH (-1), or NEUTRAL (0).
+3. Magnitude: STRONG (1.0), MODERATE (0.5), WEAK (0.2).
+4. Macro Channel: RATES_POLICY | GROWTH_DEMAND | LIQUIDITY_FINANCIAL | SUPPLY_SHOCK | GEOPOLITICAL_RISK | REGULATORY_LEGAL.
+5. Horizon: INTRADAY_VOLATILITY (hours) | SWING_MULTIDAY (days/weeks) | STRUCTURAL_LONGTERM (months).
+6. Evidence Level: OBSERVED (official data print) | SOURCED (official spokesperson/leadership statement) | INFERRED (analyst opinion/market commentary).
+7. Evidence Quote: exact sentence snippet justifying the conclusion.
+
+Respond ONLY with valid JSON (no markdown):
+{
+  "article_analysis": "one sentence summary of market significance",
+  "primary_channel": "<primary macro channel>",
+  "evidence_level": "OBSERVED|SOURCED|INFERRED",
+  "asset_impacts": [
+    {
+      "asset": "<ticker from book>",
+      "stance": "BULLISH|BEARISH|NEUTRAL",
+      "magnitude": 0.2|0.5|1.0,
+      "confidence": 0.0-1.0,
+      "horizon": "INTRADAY_VOLATILITY|SWING_MULTIDAY|STRUCTURAL_LONGTERM",
+      "transmission_rationale": "brief mechanism explanation",
+      "evidence_quote": "exact quote from text"
+    }
+  ]
+}"""
+
+
+def _normalize_asset(ticker: str) -> str | None:
+    t = ticker.strip().upper()
+    if t in TRACKED_ASSETS:
+        return t
+    return ASSET_ALIASES.get(t)
+
+
+def extract_news_intelligence(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 15,
+    min_relevance: float = 0.40,
+    min_novelty: float = 0.35,
+    cfg: dict[str, Any] | None = None,
+) -> int:
+    """Extract multi-asset structured stances from pending articles in market_news."""
+    if cfg is None:
+        cfg = _config()
+
+    pending = conn.execute(
+        """
+        SELECT m.news_id, m.source, m.title, m.summary, m.published_at_utc
+        FROM market_news m
+        WHERE NOT EXISTS (
+            SELECT 1 FROM news_intelligence ni WHERE ni.news_id = m.news_id
+        )
+        AND (
+            (m.relevance >= ? AND m.novelty >= ?)
+            OR m.source IN ('RSS_FED', 'RSS_BOE', 'RSS_TREASURY', 'RSS_SEC', 'RSS_OILPRICE')
+        )
+        ORDER BY m.published_at_utc DESC
+        LIMIT ?
+        """,
+        (min_relevance, min_novelty, limit),
+    ).fetchall()
+
+    if not pending:
+        return 0
+
+    now_utc = datetime.now(UTC).isoformat(timespec="seconds")
+    processed_count = 0
+
+    for news_id, source, title, summary, pub_utc in pending:
+        user_prompt = f"SOURCE: {source}\nTITLE: {title}\nSUMMARY: {summary or ''}"
+        try:
+            raw_resp = _call(cfg, system=EXTRACTION_SYSTEM_PROMPT, user=user_prompt)
+            payload = _extract_json(raw_resp)
+        except Exception:
+            continue
+
+        if not isinstance(payload, dict):
+            continue
+
+        impacts = payload.get("asset_impacts", [])
+        if not isinstance(impacts, list):
+            continue
+
+        inserted_for_article = 0
+        for imp in impacts:
+            if not isinstance(imp, dict):
+                continue
+            asset_raw = str(imp.get("asset", ""))
+            norm_asset = _normalize_asset(asset_raw)
+            if not norm_asset:
+                continue
+
+            stance = str(imp.get("stance", "NEUTRAL")).upper()
+            if stance not in ("BULLISH", "BEARISH", "NEUTRAL"):
+                stance = "NEUTRAL"
+
+            magnitude = float(imp.get("magnitude", 0.5))
+            magnitude = max(0.1, min(1.0, magnitude))
+
+            confidence = float(imp.get("confidence", 0.7))
+            confidence = max(0.0, min(1.0, confidence))
+
+            channel = str(
+                imp.get("macro_channel") or payload.get("primary_channel") or "GROWTH_DEMAND"
+            ).upper()
+            horizon = str(imp.get("horizon", "SWING_MULTIDAY")).upper()
+
+            evidence_level = str(
+                imp.get("evidence_level") or payload.get("evidence_level") or "INFERRED"
+            ).upper()
+            if evidence_level not in ("OBSERVED", "SOURCED", "INFERRED"):
+                evidence_level = "INFERRED"
+
+            quote = str(imp.get("evidence_quote") or "").strip()
+            rationale = str(imp.get("transmission_rationale") or "").strip()
+
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO news_intelligence (
+                        news_id, asset, stance, magnitude, confidence,
+                        macro_channel, impact_horizon, evidence_level,
+                        evidence_quote, transmission_rationale,
+                        created_at, published_at_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(news_id, asset) DO UPDATE SET
+                        stance=excluded.stance,
+                        magnitude=excluded.magnitude,
+                        confidence=excluded.confidence,
+                        macro_channel=excluded.macro_channel,
+                        impact_horizon=excluded.impact_horizon,
+                        evidence_level=excluded.evidence_level,
+                        evidence_quote=excluded.evidence_quote,
+                        transmission_rationale=excluded.transmission_rationale
+                    """,
+                    (
+                        news_id,
+                        norm_asset,
+                        stance,
+                        magnitude,
+                        confidence,
+                        channel,
+                        horizon,
+                        evidence_level,
+                        quote,
+                        rationale,
+                        now_utc,
+                        pub_utc,
+                    ),
+                )
+                inserted_for_article += 1
+            except sqlite3.Error:
+                pass
+
+        if inserted_for_article > 0:
+            processed_count += 1
+            conn.commit()
+
+    return processed_count
+
+
+def compute_asset_sentiment_radar(
+    conn: sqlite3.Connection,
+    asset: str,
+    *,
+    window_days: int = 3,
+    as_of: datetime | str | None = None,
+) -> dict[str, Any]:
+    """Compute rolling time-decayed sentiment radar and catalyst breakdown for a specific asset."""
+    norm_asset = _normalize_asset(asset)
+    if not norm_asset:
+        raise ValueError(f"Unknown asset '{asset}', must be one of {TRACKED_ASSETS}")
+
+    if as_of is None:
+        target_dt = datetime.now(UTC)
+    elif isinstance(as_of, str):
+        target_dt = datetime.fromisoformat(as_of).astimezone(UTC)
+    else:
+        target_dt = as_of.astimezone(UTC)
+
+    since_dt = target_dt - timedelta(days=window_days)
+    since_str = since_dt.isoformat(timespec="seconds")
+    until_str = target_dt.isoformat(timespec="seconds")
+
+    rows = conn.execute(
+        """
+        SELECT ni.news_id, ni.stance, ni.magnitude, ni.confidence,
+               ni.macro_channel, ni.impact_horizon, ni.evidence_level,
+               ni.evidence_quote, ni.transmission_rationale, ni.published_at_utc,
+               m.source, m.title
+        FROM news_intelligence ni
+        JOIN market_news m ON m.news_id = ni.news_id
+        WHERE ni.asset = ?
+          AND ni.published_at_utc >= ?
+          AND ni.published_at_utc <= ?
+        ORDER BY ni.published_at_utc DESC
+        """,
+        (norm_asset, since_str, until_str),
+    ).fetchall()
+
+    if not rows:
+        return {
+            "asset": norm_asset,
+            "sample_count": 0,
+            "net_stance_score": 0.0,
+            "stance": "NEUTRAL",
+            "confidence": 0.0,
+            "catalysts": {},
+            "evidence_breakdown": {"OBSERVED": 0, "SOURCED": 0, "INFERRED": 0},
+            "top_quotes": [],
+            "as_of": until_str,
+        }
+
+    total_weighted_score = 0.0
+    total_weights = 0.0
+    catalyst_weights: dict[str, float] = {}
+    evidence_counts = {"OBSERVED": 0, "SOURCED": 0, "INFERRED": 0}
+    quotes = []
+
+    for r in rows:
+        (
+            news_id,
+            stance,
+            magnitude,
+            confidence,
+            channel,
+            horizon,
+            evidence_level,
+            quote,
+            rationale,
+            pub_utc,
+            source,
+            title,
+        ) = r
+
+        # Calculate time elapsed in hours for exponential decay (half-life: 48h)
+        try:
+            pub_dt = datetime.fromisoformat(pub_utc).astimezone(UTC)
+            hours_elapsed = max(0.0, (target_dt - pub_dt).total_seconds() / 3600.0)
+        except Exception:
+            hours_elapsed = 24.0
+
+        time_decay = math.exp(-hours_elapsed / 48.0)
+
+        # Evidence reliability weight
+        ev_weight = (
+            1.0 if evidence_level == "OBSERVED" else (0.8 if evidence_level == "SOURCED" else 0.5)
+        )
+
+        # Horizon weight (swing trading prioritizes multiday/structural over intraday noise)
+        hor_weight = 1.0 if horizon in ("SWING_MULTIDAY", "STRUCTURAL_LONGTERM") else 0.6
+
+        # Composite item weight
+        item_weight = time_decay * ev_weight * hor_weight
+
+        # Directional sign
+        direction = 1.0 if stance == "BULLISH" else (-1.0 if stance == "BEARISH" else 0.0)
+
+        item_score = direction * magnitude * confidence
+        total_weighted_score += item_score * item_weight
+        total_weights += item_weight
+
+        # Channel aggregation
+        catalyst_weights[channel] = catalyst_weights.get(channel, 0.0) + item_weight
+
+        # Evidence count
+        if evidence_level in evidence_counts:
+            evidence_counts[evidence_level] += 1
+
+        if quote and len(quotes) < 5:
+            quotes.append(
+                {
+                    "source": source,
+                    "title": title,
+                    "stance": stance,
+                    "quote": quote,
+                    "rationale": rationale,
+                    "published_at": pub_utc,
+                }
+            )
+
+    net_score = total_weighted_score / total_weights if total_weights > 0 else 0.0
+    net_score = max(-1.0, min(1.0, round(net_score, 3)))
+
+    if net_score >= 0.20:
+        overall_stance = "BULLISH"
+    elif net_score <= -0.20:
+        overall_stance = "BEARISH"
+    else:
+        overall_stance = "NEUTRAL"
+
+    # Normalize catalyst shares
+    sum_cat = sum(catalyst_weights.values()) or 1.0
+    sorted_catalysts = {
+        k: round(v / sum_cat, 3)
+        for k, v in sorted(catalyst_weights.items(), key=lambda kv: kv[1], reverse=True)
+    }
+
+    avg_confidence = round(
+        sum(r[3] * (1.0 if r[6] == "OBSERVED" else 0.8) for r in rows) / len(rows),
+        2,
+    )
+
+    return {
+        "asset": norm_asset,
+        "sample_count": len(rows),
+        "net_stance_score": net_score,
+        "stance": overall_stance,
+        "confidence": avg_confidence,
+        "catalysts": sorted_catalysts,
+        "evidence_breakdown": evidence_counts,
+        "top_quotes": quotes,
+        "as_of": until_str,
+    }
+
+
+def compute_all_asset_radars(
+    conn: sqlite3.Connection,
+    *,
+    window_days: int = 3,
+    as_of: datetime | str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Compute sentiment radar for all tracked assets in the portfolio."""
+    return {
+        asset: compute_asset_sentiment_radar(conn, asset, window_days=window_days, as_of=as_of)
+        for asset in TRACKED_ASSETS
+    }
+
+
+def store_asset_radars(
+    conn: sqlite3.Connection,
+    *,
+    window_days: int = 3,
+    as_of: datetime | str | None = None,
+) -> list[str]:
+    """Compute and store sentiment radar signals in computed_signals for all assets."""
+    radars = compute_all_asset_radars(conn, window_days=window_days, as_of=as_of)
+    stored_ids = []
+    now_utc = datetime.now(UTC).isoformat(timespec="seconds")
+
+    for asset, data in radars.items():
+        signal_id = f"news_radar_{asset.lower()}"
+        as_of_str = data["as_of"]
+        score = data["net_stance_score"]
+        status = data["stance"]
+        inputs_json = json.dumps(data)
+
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO computed_signals
+            (signal_id, ts, run_id, computed_at, value, state, inputs_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (signal_id, as_of_str, "sentiment_radar", now_utc, score, status, inputs_json),
+        )
+        stored_ids.append(signal_id)
+    conn.commit()
+    return stored_ids

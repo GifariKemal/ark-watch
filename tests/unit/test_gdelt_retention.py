@@ -14,6 +14,7 @@ def test_cutoff_is_8_days_lookback():
     assert _cutoff(saturday) == "2026-09-18T00:00:00+00:00"
     assert _cutoff(sunday) == "2026-09-19T00:00:00+00:00"
 
+
 def _seed(path, fetched_at):
     conn = db.get_conn(path, allow_init=True)
     conn.executemany(
@@ -163,3 +164,54 @@ def test_gdelt_retention_keeps_temporary_backup_when_postcheck_fails(tmp_path, m
     assert conn.execute("SELECT COUNT(*) FROM gdelt_events").fetchone()[0] == 3
     assert conn.execute("SELECT COUNT(*) FROM gdelt_mentions").fetchone()[0] == 2
     conn.close()
+
+
+def test_market_news_retention_window_is_decoupled(tmp_path, monkeypatch):
+    path = tmp_path / "arkwatch.db"
+    conn = db.get_conn(path, allow_init=True)
+    # Insert market_news: one 15 days ago (older than GDELT 8d, but within 90d), one 100 days ago
+    now = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    t_15d = "2026-09-16T12:00:00+00:00"
+    t_100d = "2026-06-23T12:00:00+00:00"
+    conn.execute(
+        "INSERT INTO market_news (news_id, source, title, url, published_at_utc, symbols_json, cluster_id, relevance, novelty, fetched_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "n-15d",
+            "RSS_FED",
+            "Fed meeting note",
+            "https://fed.gov/15",
+            t_15d,
+            "[]",
+            "c1",
+            1.0,
+            1.0,
+            t_15d,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO market_news (news_id, source, title, url, published_at_utc, symbols_json, cluster_id, relevance, novelty, fetched_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "n-100d",
+            "RSS_FED",
+            "Ancient Fed meeting",
+            "https://fed.gov/100",
+            t_100d,
+            "[]",
+            "c2",
+            1.0,
+            1.0,
+            t_100d,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    clean(path, now=now, apply=True)
+
+    conn = db.get_conn(path)
+    survived = [row[0] for row in conn.execute("SELECT news_id FROM market_news").fetchall()]
+    conn.close()
+    # 15-day-old news survived, 100-day-old news was purged
+    assert survived == ["n-15d"]

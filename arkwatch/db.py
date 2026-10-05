@@ -16,7 +16,7 @@ import sqlite3
 from datetime import UTC
 from pathlib import Path
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 
 SCHEMA_V1 = """
 CREATE TABLE series_registry (
@@ -565,6 +565,26 @@ WHERE events.surprise_z IS NOT NULL
   AND EXISTS (SELECT 1 FROM indicator_sigma_vintages v
               WHERE v.snapshot_id=(SELECT MAX(snapshot_id) FROM indicator_sigma_snapshots)
                 AND v.indicator=events.indicator_key);
+""",
+    31: """CREATE TABLE IF NOT EXISTS news_intelligence (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  news_id TEXT NOT NULL REFERENCES market_news(news_id),
+  asset TEXT NOT NULL,
+  stance TEXT NOT NULL CHECK(stance IN ('BULLISH', 'BEARISH', 'NEUTRAL')),
+  magnitude REAL NOT NULL,
+  confidence REAL NOT NULL,
+  macro_channel TEXT NOT NULL,
+  impact_horizon TEXT NOT NULL,
+  evidence_level TEXT NOT NULL CHECK(evidence_level IN ('OBSERVED', 'SOURCED', 'INFERRED')),
+  evidence_quote TEXT NOT NULL,
+  transmission_rationale TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  published_at_utc TEXT NOT NULL,
+  UNIQUE(news_id, asset)
+);
+CREATE INDEX IF NOT EXISTS idx_news_intel_asset_time ON news_intelligence(asset, published_at_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_news_intel_channel ON news_intelligence(macro_channel);
+CREATE INDEX IF NOT EXISTS idx_news_intel_news_id ON news_intelligence(news_id);
 """,
 }
 

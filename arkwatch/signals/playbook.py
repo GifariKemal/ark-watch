@@ -17,7 +17,7 @@ from typing import Any
 from . import cot_signals, options, vixterm
 from .intraday import session_intraday_intelligence
 from .levels import compute_session_reference_levels
-from .pillars import compute_pillars, compute_quadrant, compute_regime_score
+from .pillars import compute_dollar_smile, compute_pillars, compute_quadrant, compute_regime_score
 from .playbook_tracker import (
     evaluate_active_playbooks,
     get_playbook_performance_metrics,
@@ -248,11 +248,29 @@ def generate_trading_playbook(
     ).fetchone()
     yield_curve_spread = float(curve_row[0]) if curve_row else None
 
+    # Fed Broad Trade-Weighted Dollar & Dollar Smile
+    broad_d_row = conn.execute(
+        "SELECT value FROM raw_observations WHERE series_id='FRED:DTWEXBGS' ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+    broad_dollar_val = float(broad_d_row[0]) if broad_d_row else None
+    try:
+        smile_regime = compute_dollar_smile(conn)
+    except Exception:
+        smile_regime = "UNKNOWN"
+
+    if "STRONG" in smile_regime and sym in ("GC1", "SI1", "EURUSD", "GBPUSD"):
+        friction_warnings.append(
+            f"BROAD_DOLLAR_STRENGTH: Fed Broad Dollar (DTWEXBGS={broad_dollar_val}) at high with Dollar Smile strong."
+        )
+    elif "WEAK" in smile_regime and sym in ("GC1", "CL1"):
+        tailwinds.append(
+            f"GLOBAL_CYCLICAL_DOLLAR_WEAKNESS: Fed Broad Dollar (DTWEXBGS={broad_dollar_val}) weakening provides commodity tailwind."
+        )
+
     # VIX Term Structure (Contango vs Backwardation)
     vix_res = vixterm.vix9d_ratio(conn)
     vix_state = vix_res.get("state", "NORMAL") if vix_res else "NORMAL"
     vix_ratio = vix_res.get("ratio") if vix_res else None
-
     # 4b. Fetch Domain 2 (Institutional Flows & Positioning)
     opt_prod = OPTIONS_PRODUCT_MAP.get(sym)
     opt_snap = options.options_snapshot(conn, opt_prod) if opt_prod else None
@@ -735,6 +753,8 @@ def generate_trading_playbook(
                 "quadrant_asset_alignment": quadrant_alignment,
                 "tips_10y_real_yield": real_yield_10y,
                 "yield_curve_spread_t10y2y": yield_curve_spread,
+                "fed_broad_trade_weighted_dollar": broad_dollar_val,
+                "dollar_smile_regime": smile_regime,
                 "vix_term_structure_state": vix_state,
                 "vix_9d_spot_ratio": vix_ratio,
             },

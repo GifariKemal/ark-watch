@@ -340,3 +340,28 @@ def test_playbook_rich_cot_and_positioning_integration(tmp_path):
     assert "cot_price_positioning_divergence" in flows
     assert "price_oi_quadrant" in flows
     assert "commercial_hedging_pressure" in flows
+
+
+def test_playbook_broad_dollar_and_smile_integration(tmp_path):
+    db_file = tmp_path / "arkwatch.db"
+    conn = db.get_conn(db_file, allow_init=True)
+    now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    now_iso = now.isoformat(timespec="seconds")
+
+    conn.execute(
+        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('DXY', ?, '5m', 'YAHOO', 102.0, 102.3, 101.9, 102.2, 100.0, ?)",
+        (now_iso, now_iso),
+    )
+    conn.execute(
+        "INSERT INTO series_registry (series_id, name, block, tier, unit, value_format, freq, primary_source) VALUES ('FRED:DTWEXBGS', 'Broad Dollar Index', 'A', 1, 'index', 'index', 'D', 'FRED')"
+    )
+    conn.execute(
+        "INSERT INTO raw_observations (series_id, ts, value, source, fetched_at, vintage_ts) VALUES ('FRED:DTWEXBGS', '2026-10-02', 121.38, 'FRED', '2026-10-02T00:00:00Z', 'realtime')"
+    )
+    conn.commit()
+    conn.close()
+
+    pb = api.get_trading_playbook("DXY", db_path=db_file, as_of=now)
+    macro = pb["multi_domain"]["domain_1_macro"]
+    assert "fed_broad_trade_weighted_dollar" in macro
+    assert "dollar_smile_regime" in macro

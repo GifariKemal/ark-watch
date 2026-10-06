@@ -237,3 +237,45 @@ def test_get_asset_ib_timing():
     t_btc, lbl_btc = amt.get_asset_ib_timing("BTCUSD", is_dst=True)
     assert t_btc == time(22, 0)
     assert lbl_btc == "CRYPTO_SESSION_OPEN"
+
+
+def test_tpo_single_prints_and_vpoc_divergence():
+    # Session bars where price drove rapidly through 104-107 in bracket A only, then balanced at 110 in B, C, D
+    bars = [
+        (
+            "2026-10-05T13:30:00Z",
+            100.0,
+            108.0,
+            100.0,
+            107.0,
+            50.0,
+        ),  # Bracket A (fast drive through 104-107)
+        (
+            "2026-10-05T14:00:00Z",
+            108.0,
+            112.0,
+            108.0,
+            110.0,
+            200.0,
+        ),  # Bracket B (balanced around 110)
+        (
+            "2026-10-05T14:30:00Z",
+            109.0,
+            111.0,
+            108.5,
+            110.5,
+            300.0,
+        ),  # Bracket C (heavy volume POC at 110)
+        ("2026-10-05T15:00:00Z", 109.5, 111.5, 109.0, 110.0, 250.0),  # Bracket D
+    ]
+    tpo_res = amt.compute_tpo_profile(bars, num_bins=30)
+    assert "single_prints" in tpo_res
+    assert isinstance(tpo_res["single_prints"], list)
+
+    val_res = amt.evaluate_vpoc_tpoc_relationship(
+        volume_poc=110.0,
+        tpo_poc=104.0,
+        atr=10.0,
+    )
+    assert val_res["relationship"] == "VPOC_ABOVE_TPOC"
+    assert val_res["bias"] == "INSTITUTIONAL_BUY_MIGRATION"

@@ -156,8 +156,8 @@ def compute_tpo_profile(
             "tpo_val": None,
             "total_tpos": 0,
             "brackets": [],
+            "single_prints": [],
         }
-
     highs = [b[2] for b in bars if b[2] is not None]
     lows = [b[3] for b in bars if b[3] is not None]
     if not highs or not lows:
@@ -177,6 +177,7 @@ def compute_tpo_profile(
             "tpo_val": round(min_p, 4),
             "total_tpos": len(bars),
             "brackets": ["A"],
+            "single_prints": [],
         }
 
     bin_size = (max_p - min_p) / float(num_bins)
@@ -209,8 +210,8 @@ def compute_tpo_profile(
             "tpo_val": None,
             "total_tpos": 0,
             "brackets": sorted(used_brackets),
+            "single_prints": [],
         }
-
     poc_idx = max(range(num_bins), key=lambda i: tpo_counts_by_bin[i])
     tpo_poc = min_p + (poc_idx + 0.5) * bin_size
 
@@ -233,6 +234,21 @@ def compute_tpo_profile(
 
     tpo_vah = min_p + (u_idx + 1.0) * bin_size
     tpo_val = min_p + l_idx * bin_size
+    # Detect Single Prints (bins that have exactly 1 bracket letter)
+    single_prints = []
+    for b_i in range(num_bins):
+        letters = bracket_letters_by_bin[b_i]
+        if len(letters) == 1:
+            p_low = round(min_p + b_i * bin_size, 4)
+            p_high = round(min_p + (b_i + 1) * bin_size, 4)
+            single_prints.append(
+                {
+                    "price_low": p_low,
+                    "price_high": p_high,
+                    "price_mid": round((p_low + p_high) / 2.0, 4),
+                    "bracket": list(letters)[0],
+                }
+            )
 
     return {
         "tpo_poc": round(tpo_poc, 4),
@@ -241,6 +257,38 @@ def compute_tpo_profile(
         "total_tpos": total_tpos,
         "brackets": sorted(used_brackets),
         "bin_size": round(bin_size, 4),
+        "single_prints": single_prints,
+    }
+
+
+def evaluate_vpoc_tpoc_relationship(
+    volume_poc: float,
+    tpo_poc: float,
+    atr: float,
+) -> dict[str, Any]:
+    """Evaluate institutional value migration between Volume POC and TPO POC."""
+    diff = volume_poc - tpo_poc
+    threshold = 0.10 * max(0.001, atr)
+
+    if diff > threshold:
+        return {
+            "relationship": "VPOC_ABOVE_TPOC",
+            "bias": "INSTITUTIONAL_BUY_MIGRATION",
+            "meaning": "Volume POC formed above TPO POC: Large capital traded aggressively higher faster than time spent (Accumulation).",
+            "diff_points": round(diff, 4),
+        }
+    if diff < -threshold:
+        return {
+            "relationship": "VPOC_BELOW_TPOC",
+            "bias": "INSTITUTIONAL_SELL_DISTRIBUTION",
+            "meaning": "Volume POC formed below TPO POC: Heavy capital transactions concentrated at lows while price spent time above (Distribution).",
+            "diff_points": round(diff, 4),
+        }
+    return {
+        "relationship": "ALIGNED_TRUE_CONSENSUS",
+        "bias": "EQUILIBRIUM_SUPPORT_RESISTANCE",
+        "meaning": "Volume POC and TPO POC aligned: Market achieved true two-way auction consensus (Maximum magnetic equilibrium).",
+        "diff_points": round(diff, 4),
     }
 
 

@@ -28,6 +28,7 @@ from .amt import (
     compute_value_area,
     evaluate_auction_extremes,
     evaluate_time_acceptance,
+    evaluate_vpoc_tpoc_relationship,
     find_naked_pocs,
     get_asset_ib_timing,
 )
@@ -228,6 +229,11 @@ def compute_session_reference_levels(
         va_profile["vah"] or last_price,
         va_profile["val"] or last_price,
     )
+    vpoc_tpoc_align = evaluate_vpoc_tpoc_relationship(
+        va_profile["poc"] or last_price,
+        tpo_data["tpo_poc"] or last_price,
+        atr_proxy,
+    )
 
     # Pilar 1: The 4 Open Types (James Dalton)
     open_type_info = classify_open_type(
@@ -288,6 +294,7 @@ def compute_session_reference_levels(
             "TPO_POC": tpo_data["tpo_poc"],
             "TPO_VAH": tpo_data["tpo_vah"],
             "TPO_VAL": tpo_data["tpo_val"],
+            "TPO_SINGLE_PRINTS": tpo_data.get("single_prints", []),
             "DYNAMIC_CVA_NAME": dynamic_cva["composite_name"] if dynamic_cva else None,
             "DYNAMIC_CVA_POC": dynamic_cva["c_poc"] if dynamic_cva else None,
             "DYNAMIC_CVA_VAH": dynamic_cva["c_vah"] if dynamic_cva else None,
@@ -334,6 +341,7 @@ def compute_session_reference_levels(
             "confluence_state": confluence_state,
             "confluence_details": confluence_notes,
             "ib_timing_convention": ib_timing_label,
+            "vpoc_tpoc_alignment": vpoc_tpoc_align,
             "day_type": ib_data["day_type"],
             "open_type": open_type_info["open_type"],
             "open_conviction": open_type_info["conviction"],

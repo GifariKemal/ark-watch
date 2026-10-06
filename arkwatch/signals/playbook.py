@@ -221,14 +221,23 @@ def generate_trading_playbook(
     tga_b = (float(wtregen[0]) / 1000.0) if wtregen else 750.0
     rrp_b = (float(rrp[0]) / 1000.0) if rrp else 300.0
     net_liq_b = round(fed_bs_b - tga_b - rrp_b, 2)
+    friction_warnings = []
+    tailwinds = []
 
     quadrant_alignment = "NEUTRAL"
     if "Disinflationary" in dalio_quadrant and sym in ("NQ1", "ES1"):
         quadrant_alignment = "BULLISH_EQUITIES_ALIGNED"
+        tailwinds.append(
+            "DALIO_REGIME: Disinflationary Growth is the optimal Goldilocks macro backdrop for tech multiples."
+        )
     elif "Reflation" in dalio_quadrant and sym in ("CL1", "BZ1", "GC1"):
         quadrant_alignment = "BULLISH_COMMODITIES_ALIGNED"
+        tailwinds.append("DALIO_REGIME: Reflation supports commodities and real assets.")
     elif "Stagflation" in dalio_quadrant and sym in ("NQ1", "ES1"):
         quadrant_alignment = "BEARISH_EQUITIES_ALIGNED"
+        friction_warnings.append(
+            "DALIO_REGIME_WARNING: Stagflation compresses equity valuation multiples."
+        )
     real_yield_row = conn.execute(
         "SELECT value FROM raw_observations WHERE series_id='FRED:DFII10' ORDER BY ts DESC LIMIT 1"
     ).fetchone()
@@ -258,7 +267,27 @@ def generate_trading_playbook(
 
     cot_code = COT_CONTRACT_MAP.get(sym)
     cot_z = cot_signals._cot_zscore(conn, cot_code) if cot_code else None
+    cot_sym = "XAUUSD" if sym == "GC1" else ("XAGUSD" if sym == "SI1" else sym)
+    cot_div = (
+        cot_signals._price_positioning_divergence(conn, cot_sym, "CME", cot_code)
+        if cot_code
+        else None
+    )
+    cot_quad = cot_signals._price_oi_quadrant(conn, cot_sym, "CME") if cot_code else None
+    cot_hedge = cot_signals._hedging_pressure(conn, cot_code) if cot_code else None
 
+    if cot_div == "BEARISH_DIVERGENCE":
+        friction_warnings.append(
+            "COT_DISTRIBUTION_DIVERGENCE: Price at highs without institutional positioning confirmation."
+        )
+    if cot_quad == "NEW_MONEY_LONG":
+        tailwinds.append(
+            "INSTITUTIONAL_NEW_MONEY: Rising price backed by expanding Open Interest confirms trend."
+        )
+    elif cot_quad == "SHORT_COVERING":
+        friction_warnings.append(
+            "FRAGILE_RALLY: Price advance driven by short covering rather than new long buyers."
+        )
     # Crypto Derivatives (Open Interest for BTC/ETH)
     crypto_oi_usd = None
     if sym in ("BTCUSD", "ETHUSD"):
@@ -315,8 +344,6 @@ def generate_trading_playbook(
     adv_ratio = round((mb_row[0] / max(1, mb_row[0] + mb_row[1])) * 100, 1) if mb_row else None
 
     # Multi-Domain Confluence, Friction & Gate Restrictions
-    friction_warnings = []
-    tailwinds = []
     event_restriction = False
 
     # Event Risk Gate
@@ -718,6 +745,9 @@ def generate_trading_playbook(
                 "is_opex_week": is_opex_week,
                 "days_to_opex": days_to_opex,
                 "cot_positioning_3y_zscore": round(cot_z, 2) if cot_z is not None else None,
+                "cot_price_positioning_divergence": cot_div,
+                "price_oi_quadrant": cot_quad,
+                "commercial_hedging_pressure": cot_hedge,
                 "crypto_open_interest_usd": crypto_oi_usd,
             },
             "domain_3_news_events": {

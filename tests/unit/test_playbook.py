@@ -320,3 +320,23 @@ def test_playbook_macro_quadrant_and_net_liquidity(tmp_path):
     assert "dalio_economic_quadrant" in macro
     assert "systemic_net_liquidity_b" in macro
     assert "quadrant_asset_alignment" in macro
+
+
+def test_playbook_rich_cot_and_positioning_integration(tmp_path):
+    db_file = tmp_path / "arkwatch.db"
+    conn = db.get_conn(db_file, allow_init=True)
+    now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    now_iso = now.isoformat(timespec="seconds")
+
+    conn.execute(
+        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('GC1', ?, '5m', 'YAHOO', 4180.0, 4190.0, 4175.0, 4185.0, 100.0, ?)",
+        (now_iso, now_iso),
+    )
+    conn.commit()
+    conn.close()
+
+    pb = api.get_trading_playbook("GC1", db_path=db_file, as_of=now)
+    flows = pb["multi_domain"]["domain_2_flows"]
+    assert "cot_price_positioning_divergence" in flows
+    assert "price_oi_quadrant" in flows
+    assert "commercial_hedging_pressure" in flows

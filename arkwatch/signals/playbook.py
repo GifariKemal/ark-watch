@@ -17,7 +17,7 @@ from typing import Any
 from . import cot_signals, options, vixterm
 from .intraday import session_intraday_intelligence
 from .levels import compute_session_reference_levels
-from .pillars import compute_pillars, compute_regime_score
+from .pillars import compute_pillars, compute_quadrant, compute_regime_score
 from .playbook_tracker import (
     evaluate_active_playbooks,
     get_playbook_performance_metrics,
@@ -201,9 +201,34 @@ def generate_trading_playbook(
     try:
         pillars = compute_pillars(conn)
         macro_regime_score = compute_regime_score(pillars)
+        dalio_quadrant = compute_quadrant(pillars)
     except Exception:
         macro_regime_score = 0.0
+        dalio_quadrant = "UNKNOWN"
 
+    # Systemic Net Liquidity: SOMA Fed Balance Sheet (WALCL) - TGA (WTREGEN) - RRP (RRPONTSYD)
+    walcl = conn.execute(
+        "SELECT value FROM raw_observations WHERE series_id='FRED:WALCL' ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+    wtregen = conn.execute(
+        "SELECT value FROM raw_observations WHERE series_id='FRED:WTREGEN' ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+    rrp = conn.execute(
+        "SELECT value FROM raw_observations WHERE series_id='FRED:RRPONTSYD' ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+
+    fed_bs_b = (float(walcl[0]) / 1000.0) if walcl else 7100.0
+    tga_b = (float(wtregen[0]) / 1000.0) if wtregen else 750.0
+    rrp_b = (float(rrp[0]) / 1000.0) if rrp else 300.0
+    net_liq_b = round(fed_bs_b - tga_b - rrp_b, 2)
+
+    quadrant_alignment = "NEUTRAL"
+    if "Disinflationary" in dalio_quadrant and sym in ("NQ1", "ES1"):
+        quadrant_alignment = "BULLISH_EQUITIES_ALIGNED"
+    elif "Reflation" in dalio_quadrant and sym in ("CL1", "BZ1", "GC1"):
+        quadrant_alignment = "BULLISH_COMMODITIES_ALIGNED"
+    elif "Stagflation" in dalio_quadrant and sym in ("NQ1", "ES1"):
+        quadrant_alignment = "BEARISH_EQUITIES_ALIGNED"
     real_yield_row = conn.execute(
         "SELECT value FROM raw_observations WHERE series_id='FRED:DFII10' ORDER BY ts DESC LIMIT 1"
     ).fetchone()
@@ -678,6 +703,9 @@ def generate_trading_playbook(
         "multi_domain": {
             "domain_1_macro": {
                 "macro_regime_score": round(macro_regime_score, 2),
+                "dalio_economic_quadrant": dalio_quadrant,
+                "systemic_net_liquidity_b": net_liq_b,
+                "quadrant_asset_alignment": quadrant_alignment,
                 "tips_10y_real_yield": real_yield_10y,
                 "yield_curve_spread_t10y2y": yield_curve_spread,
                 "vix_term_structure_state": vix_state,

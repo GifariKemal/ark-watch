@@ -286,3 +286,37 @@ def test_generate_trading_playbook_scenarios_and_api(tmp_path):
     assert lev["symbol"] == "NQ1"
     assert "PDH" in lev["levels"]
     assert "VAH" in lev["levels"]
+
+
+def test_playbook_macro_quadrant_and_net_liquidity(tmp_path):
+    db_file = tmp_path / "arkwatch.db"
+    conn = db.get_conn(db_file, allow_init=True)
+    now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    now_iso = now.isoformat(timespec="seconds")
+
+    # Seed intraday bars and observations
+    conn.execute(
+        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('NQ1', ?, '5m', 'YAHOO', 31000.0, 31100.0, 30900.0, 31050.0, 100.0, ?)",
+        (now_iso, now_iso),
+    )
+    conn.execute(
+        "INSERT INTO series_registry (series_id, name, block, tier, unit, value_format, freq, primary_source) VALUES ('FRED:DFII10', '10Y Real TIPS', 'B', 1, 'pct', 'pct', 'D', 'FRED')"
+    )
+    conn.execute(
+        "INSERT INTO series_registry (series_id, name, block, tier, unit, value_format, freq, primary_source) VALUES ('FRED:WALCL', 'Fed SOMA Assets', 'E', 1, 'usd', 'usd', 'W', 'FRED')"
+    )
+    conn.execute(
+        "INSERT INTO raw_observations (series_id, ts, value, source, fetched_at, vintage_ts) VALUES ('FRED:DFII10', '2026-10-01', 2.88, 'FRED', '2026-10-01T00:00:00Z', 'realtime')"
+    )
+    conn.execute(
+        "INSERT INTO raw_observations (series_id, ts, value, source, fetched_at, vintage_ts) VALUES ('FRED:WALCL', '2026-10-01', 7100000.0, 'FRED', '2026-10-01T00:00:00Z', 'realtime')"
+    )
+    conn.commit()
+    conn.close()
+
+    pb = api.get_trading_playbook("NQ1", db_path=db_file, as_of=now)
+    assert pb is not None
+    macro = pb["multi_domain"]["domain_1_macro"]
+    assert "dalio_economic_quadrant" in macro
+    assert "systemic_net_liquidity_b" in macro
+    assert "quadrant_asset_alignment" in macro

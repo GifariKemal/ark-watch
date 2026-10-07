@@ -14,7 +14,12 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from ..transforms import xccy
 from . import cot_signals, etf_flows, fiscal, options, vixterm
+from .crypto import liquidation_summary
+from .dealers import dealers_snapshot
+from .expectations import inflation_risk_premium
+from .futures_flow import futures_flow_matrix
 from .intraday import session_intraday_intelligence
 from .levels import compute_session_reference_levels
 from .news import news_velocity
@@ -24,6 +29,7 @@ from .playbook_tracker import (
     get_playbook_performance_metrics,
     record_playbook_scenarios,
 )
+from .recession import recession_snapshot
 from .sentiment import compute_asset_sentiment_radar, compute_intraday_catalyst_radar
 
 OPTIONS_PRODUCT_MAP: dict[str, str] = {
@@ -48,6 +54,16 @@ COT_CONTRACT_MAP: dict[str, str] = {
     "EURUSD": "099741",
     "GBPUSD": "096742",
     "USDJPY": "097741",
+}
+FUTURES_PRODUCT_MAP: dict[str, str] = {
+    "NQ1": "NQ",
+    "ES1": "ES",
+    "YM1": "YM",
+    "GC1": "GC",
+    "SI1": "SI",
+    "HG1": "HG",
+    "CL1": "CL",
+    "BTCUSD": "BTC",
 }
 
 # Empirical historical parameters from docs/analysis/weekly-scenarios/daily-breakout-report.md
@@ -312,6 +328,117 @@ def generate_trading_playbook(
     vix_res = vixterm.vix9d_ratio(conn)
     vix_state = vix_res.get("state", "NORMAL") if vix_res else "NORMAL"
     vix_ratio = vix_res.get("ratio") if vix_res else None
+    # FedWatch Rate Expectations Outlook
+    fw_row = conn.execute(
+        """
+        SELECT meeting_date, prob_ease, prob_hold, prob_hike, implied_rate
+        FROM fedwatch_snapshots
+        WHERE date = (SELECT MAX(date) FROM fedwatch_snapshots)
+        ORDER BY meeting_date ASC LIMIT 1
+        """
+    ).fetchone()
+    if fw_row:
+        p_cut = round(fw_row[1] * 100, 1)
+        p_hold = round(fw_row[2] * 100, 1)
+        p_hike = round(fw_row[3] * 100, 1)
+        fedwatch_fomc_outlook = {
+            "meeting_date": fw_row[0],
+            "prob_cut_pct": p_cut,
+            "prob_hold_pct": p_hold,
+            "prob_hike_pct": p_hike,
+            "implied_rate_pct": round(fw_row[4], 2),
+        }
+        if p_cut >= 70.0 and sym in ("NQ1", "ES1", "YM1"):
+            tailwinds.append(
+                f"FEDWATCH_DOVISH: High market consensus ({p_cut}% probability) for rate cut at {fw_row[0]} FOMC meeting."
+            )
+        elif p_hike >= 20.0:
+            friction_warnings.append(
+                f"FEDWATCH_HAWKISH_PRICING: Non-zero hike probability ({p_hike}%) priced into {fw_row[0]} FOMC meeting."
+            )
+    else:
+        fedwatch_fomc_outlook = "N/A (Awaiting FedWatch Snapshot Harvest)"
+
+    # Recession Triangulation (Model, Survey, Labor)
+    rec_snap = recession_snapshot(conn)
+    if rec_snap:
+        rec_sahm = rec_snap.get("sahm") if rec_snap.get("sahm") is not None else 0.0
+        rec_model = round(rec_snap.get("model_pct") or 0.0, 1)
+        rec_spf = round(rec_snap.get("anxious_pct") or 0.0, 1)
+        elevated_count = (
+            (1 if rec_sahm >= 0.50 else 0)
+            + (1 if rec_model >= 30.0 else 0)
+            + (1 if rec_spf >= 30.0 else 0)
+        )
+        recession_triangulation = {
+            "state": (
+                "ELEVATED_RECESSION_RISK"
+                if elevated_count >= 2
+                else ("WARNING" if elevated_count == 1 else "CALM")
+            ),
+            "elevated_gauges_count": elevated_count,
+            "sahm_rule": rec_sahm,
+            "cleve_yield_curve_model_pct": rec_model,
+            "spf_survey_anxious_pct": rec_spf,
+        }
+        if elevated_count >= 2:
+            friction_warnings.append(
+                f"MACRO_RECESSION_TRIANGULATION_ALERT: {elevated_count}/3 independent recession gauges elevated."
+            )
+    else:
+        recession_triangulation = "N/A (Recession Models Standby)"
+
+    # Cleveland Fed Real Rate & Inflation Risk Premium (IRP)
+    irp_snap = inflation_risk_premium(conn)
+    if irp_snap:
+        exp_inf_10y = round(irp_snap.get("expinf_10y") or 0.0, 2)
+        exp_inf_1y = round(irp_snap.get("expinf_1y") or 0.0, 2)
+        irp_bp = round(irp_snap.get("irp_10y_bp") or 0.0, 1)
+        tips_liq_bp = round(irp_snap.get("tips_liq_10y_bp") or 0.0, 1)
+        cleveland_fed_real_rate = {
+            "expected_inflation_10y_pct": exp_inf_10y,
+            "expected_inflation_1y_pct": exp_inf_1y,
+            "inflation_risk_premium_bp": irp_bp,
+            "tips_liquidity_premium_bp": tips_liq_bp,
+        }
+        if irp_bp > 30.0:
+            friction_warnings.append(
+                f"INFLATION_RISK_PREMIUM_ELEVATED: IRP at +{irp_bp} bps, market paying high inflation insurance premium."
+            )
+    else:
+        cleveland_fed_real_rate = "N/A (Cleveland Fed Expectations Standby)"
+
+    # Primary Dealer UST Inventory
+    dlr_snap = dealers_snapshot(conn)
+    if dlr_snap and "PDPOSGST-TOT" in dlr_snap:
+        ust_dlr = dlr_snap["PDPOSGST-TOT"]
+        primary_dealer_ust_inventory = {
+            "inventory_b": round((ust_dlr.get("value_musd") or 0.0) / 1000.0, 1),
+            "z_score": round(ust_dlr.get("z") or 0.0, 2),
+            "delta_4w_pct": round(ust_dlr.get("delta_4w_pct") or 0.0, 1),
+        }
+    else:
+        primary_dealer_ust_inventory = "N/A (NY Fed PD Positions Standby)"
+
+    # Cross-Currency Basis Swap (Global USD Strain)
+    try:
+        xccy_rows = xccy.compute_xccy(conn)
+    except Exception:
+        xccy_rows = []
+    if xccy_rows:
+        front_x = xccy_rows[0]
+        cross_currency_basis = {
+            "contract": front_x.contract,
+            "basis_spread_bp": round(front_x.basis_bp, 1),
+            "interpretation": "NORMAL" if front_x.basis_bp > -20.0 else "USD_FUNDING_STRAIN",
+        }
+        if front_x.basis_bp < -25.0:
+            friction_warnings.append(
+                f"DOLLAR_LIQUIDITY_STRAIN: Cross-currency basis swap wide at {round(front_x.basis_bp, 1)} bps, global banks paying premium for USD."
+            )
+    else:
+        cross_currency_basis = "N/A (XCCY Matrix Standby)"
+
     # 4b. Fetch Domain 2 (Institutional Flows & Positioning)
     opt_prod = OPTIONS_PRODUCT_MAP.get(sym)
     opt_snap = options.options_snapshot(conn, opt_prod) if opt_prod else None
@@ -401,7 +528,7 @@ def generate_trading_playbook(
         friction_warnings.append(
             "FRAGILE_RALLY: Price advance driven by short covering rather than new long buyers."
         )
-    # Crypto Derivatives (Open Interest for BTC/ETH)
+    # Crypto Derivatives (Open Interest and Forced Liquidations)
     crypto_oi_usd = None
     if sym in ("BTCUSD", "ETHUSD"):
         c_inst = "BTC-USDT-SWAP" if sym == "BTCUSD" else "ETH-USDT-SWAP"
@@ -410,6 +537,60 @@ def generate_trading_playbook(
             (c_inst,),
         ).fetchone()
         crypto_oi_usd = float(c_oi_row[0]) if c_oi_row else None
+
+        liq_sum = liquidation_summary(conn, c_inst, window_hours=24, as_of=target_dt)
+        if liq_sum:
+            crypto_liquidation_flow = {
+                "state": liq_sum["state"],
+                "imbalance_ratio": round(liq_sum["imbalance_ratio"], 3),
+                "total_notional_usd": round(liq_sum["total_notional_usd"], 2),
+                "long_flushed_usd": round(liq_sum["long_notional_usd"], 2),
+                "short_squeezed_usd": round(liq_sum["short_notional_usd"], 2),
+            }
+            if liq_sum["state"] == "LONG_FLUSH":
+                tailwinds.append(
+                    f"CRYPTO_LIQUIDATION_FLUSH: Longs flushed ({liq_sum['state']}), leverage reset creates cleaner bounce potential."
+                )
+            elif liq_sum["state"] == "SHORT_SQUEEZE":
+                tailwinds.append(
+                    "CRYPTO_SHORT_SQUEEZE: Forced short liquidations propelling upward price acceleration."
+                )
+        else:
+            crypto_liquidation_flow = "N/A (No Recent Liquidation Events)"
+    else:
+        crypto_liquidation_flow = "N/A (Crypto Asset Only)"
+
+    # CME Futures Volume & Open Interest Flow Matrix
+    fut_code = FUTURES_PRODUCT_MAP.get(sym)
+    if fut_code:
+        fut_flow = futures_flow_matrix(conn, fut_code, as_of=target_dt.strftime("%Y-%m-%d"))
+        if fut_flow:
+            futures_oi_flow = {
+                "quadrant": fut_flow["quadrant"],
+                "signal": fut_flow["signal"],
+                "delta_oi_pct": fut_flow["delta_oi_pct"],
+                "interpretation": fut_flow["interpretation"],
+            }
+            if fut_flow["quadrant"] == "NEW_LONGS":
+                tailwinds.append(
+                    f"FUTURES_ACCUMULATION: CME OI expanding (+{fut_flow['delta_oi_pct']}%) with rising price confirms institutional new buying ({fut_flow['quadrant']})."
+                )
+            elif fut_flow["quadrant"] == "SHORT_COVERING":
+                friction_warnings.append(
+                    "FUTURES_SHORT_COVERING: Rising price driven by short covering rather than new longs, rally vulnerable to fade."
+                )
+            elif fut_flow["quadrant"] == "NEW_SHORTS":
+                friction_warnings.append(
+                    f"FUTURES_DISTRIBUTION: CME OI expanding (+{fut_flow['delta_oi_pct']}%) with falling price confirms aggressive short selling ({fut_flow['quadrant']})."
+                )
+            elif fut_flow["quadrant"] == "LONG_LIQUIDATION":
+                tailwinds.append(
+                    "FUTURES_LONG_EXHAUSTION: Falling price driven by long liquidation rather than aggressive short entry."
+                )
+        else:
+            futures_oi_flow = "N/A (Awaiting Daily CME Settlements)"
+    else:
+        futures_oi_flow = "N/A (CME Futures Metric Only)"
 
     # 4c. Fetch Domain 3 (High-Impact Event Risk in next 24h)
     next_event_row = conn.execute(
@@ -949,6 +1130,11 @@ def generate_trading_playbook(
                 "treasury_10y_auction_percentile": round(auc_pctl, 1)
                 if auc_pctl
                 else "N/A (No Recent 10Y Auction)",
+                "fedwatch_fomc_outlook": fedwatch_fomc_outlook,
+                "recession_triangulation": recession_triangulation,
+                "cleveland_fed_real_rate": cleveland_fed_real_rate,
+                "primary_dealer_ust_inventory": primary_dealer_ust_inventory,
+                "cross_currency_basis": cross_currency_basis,
             },
             "domain_2_flows": {
                 "options_pcr": round(opt_pcr, 3)
@@ -983,6 +1169,8 @@ def generate_trading_playbook(
                 "crypto_open_interest_usd": crypto_oi_usd
                 if sym in ("BTCUSD", "ETHUSD")
                 else "N/A (Crypto Asset Only)",
+                "crypto_liquidation_flow": crypto_liquidation_flow,
+                "futures_oi_flow": futures_oi_flow,
                 "etf_flow_momentum": etf_mom
                 if etf_mom is not None
                 else (

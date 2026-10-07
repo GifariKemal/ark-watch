@@ -410,3 +410,32 @@ def test_playbook_single_print_repair_scenario(tmp_path):
     assert "tpo_analytics" in pb["amt_context"]
     assert "vpoc_tpoc_alignment" in pb["amt_context"]["tpo_analytics"]
     assert "single_prints" in pb["amt_context"]["tpo_analytics"]
+
+
+def test_playbook_full_power_signals_integration(tmp_path):
+    db_file = tmp_path / "arkwatch.db"
+    conn = db.get_conn(db_file, allow_init=True)
+    now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    now_iso = now.isoformat(timespec="seconds")
+
+    conn.execute(
+        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('NQ1', ?, '5m', 'YAHOO', 31200.0, 31250.0, 31180.0, 31210.0, 100.0, ?)",
+        (now_iso, now_iso),
+    )
+    conn.commit()
+    conn.close()
+
+    pb = api.get_trading_playbook("NQ1", db_path=db_file, as_of=now)
+    assert pb is not None
+    d1 = pb["multi_domain"]["domain_1_macro"]
+    d2 = pb["multi_domain"]["domain_2_flows"]
+
+    # Verify all 6 newly wired signals exist and have non-null structural contracts
+    assert "fedwatch_fomc_outlook" in d1
+    assert "recession_triangulation" in d1
+    assert "cleveland_fed_real_rate" in d1
+    assert "primary_dealer_ust_inventory" in d1
+    assert "cross_currency_basis" in d1
+
+    assert "futures_oi_flow" in d2
+    assert "crypto_liquidation_flow" in d2

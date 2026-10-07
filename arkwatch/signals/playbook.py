@@ -917,15 +917,25 @@ def generate_trading_playbook(
         "catalysts": {
             "intraday_fast_stance": fast_cat["stance"],
             "intraday_fast_score": fast_cat["net_stance_score"],
+            "intraday_articles_4h": fast_cat.get("sample_count", 0),
             "active_channels": fast_cat.get("active_catalysts", {}),
-            "top_quotes": fast_cat.get("top_intraday_quotes", [])[:2],
+            "top_quotes": (
+                fast_cat.get("top_intraday_quotes", [])
+                + [
+                    q
+                    for q in swing_sent.get("top_quotes", [])
+                    if q["title"]
+                    not in [x["title"] for x in fast_cat.get("top_intraday_quotes", [])]
+                ]
+            )[:3],
             "swing_macro_stance": swing_sent["stance"],
             "swing_macro_score": swing_sent["net_stance_score"],
+            "swing_articles_3d": swing_sent.get("sample_count", 0),
+            "multiday_macro_headlines": swing_sent.get("top_quotes", [])[:3],
             "macro_regime_score": round(macro_regime_score, 2),
         },
         "multi_domain": {
             "domain_1_macro": {
-                "macro_regime_score": round(macro_regime_score, 2),
                 "dalio_economic_quadrant": dalio_quadrant,
                 "systemic_net_liquidity_b": net_liq_b,
                 "quadrant_asset_alignment": quadrant_alignment,

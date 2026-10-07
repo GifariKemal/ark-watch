@@ -365,3 +365,29 @@ def test_playbook_broad_dollar_and_smile_integration(tmp_path):
     macro = pb["multi_domain"]["domain_1_macro"]
     assert "fed_broad_trade_weighted_dollar" in macro
     assert "dollar_smile_regime" in macro
+
+
+def test_playbook_news_velocity_and_event_gates(tmp_path):
+    db_file = tmp_path / "arkwatch.db"
+    conn = db.get_conn(db_file, allow_init=True)
+    now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    now_iso = now.isoformat(timespec="seconds")
+
+    conn.execute(
+        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('CL1', ?, '5m', 'YAHOO', 90.0, 91.0, 89.5, 90.5, 100.0, ?)",
+        (now_iso, now_iso),
+    )
+    # High-impact event scheduled in 1.5 hours
+    event_time = (now + timedelta(hours=1, minutes=30)).isoformat(timespec="seconds")
+    conn.execute(
+        "INSERT INTO events (event_uid, ts_utc, country, name, normalized_name, importance) VALUES ('ev1', ?, 'US', 'EIA Crude Oil Inventories', 'EIA Crude Oil Inventories', 'high')",
+        (event_time,),
+    )
+    conn.commit()
+    conn.close()
+
+    pb = api.get_trading_playbook("CL1", db_path=db_file, as_of=now)
+    news_ev = pb["multi_domain"]["domain_3_news_events"]
+    assert "news_velocity_state" in news_ev
+    assert pb["multi_domain"]["confluence_status"]["event_risk_halt"] is True
+    assert pb["multi_domain"]["confluence_status"]["alignment_state"] == "EVENT_HALT_REQUIRED"

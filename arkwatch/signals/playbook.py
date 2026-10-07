@@ -17,6 +17,7 @@ from typing import Any
 from . import cot_signals, options, vixterm
 from .intraday import session_intraday_intelligence
 from .levels import compute_session_reference_levels
+from .news import news_velocity
 from .pillars import compute_dollar_smile, compute_pillars, compute_quadrant, compute_regime_score
 from .playbook_tracker import (
     evaluate_active_playbooks,
@@ -338,6 +339,31 @@ def generate_trading_playbook(
         if next_event_row
         else None
     )
+
+    # News Publication Velocity Spikes
+    topic_map = {
+        "CL1": "OIL",
+        "BZ1": "OIL",
+        "GC1": "GOLD",
+        "SI1": "GOLD",
+        "NQ1": "EQUITY",
+        "ES1": "EQUITY",
+        "YM1": "EQUITY",
+        "SPY": "EQUITY",
+        "BTCUSD": "CRYPTO",
+        "ETHUSD": "CRYPTO",
+    }
+    target_topic = topic_map.get(sym)
+    try:
+        vel_res = news_velocity(conn, target_topic, as_of=target_dt) if target_topic else None
+        vel_state = vel_res.get("state", "NORMAL") if vel_res else "NORMAL"
+    except Exception:
+        vel_state = "NORMAL"
+
+    if vel_state == "NEWS_SPIKE":
+        tailwinds.append(
+            "NEWS_VELOCITY_SPIKE: Anomaly surge in news publication frequency detected before price move."
+        )
 
     # 4d. Fetch Domain 4 Intermarket Microstructure & Market Breadth
     def _get_1h_chg(t_sym: str) -> float:
@@ -773,6 +799,7 @@ def generate_trading_playbook(
             "domain_3_news_events": {
                 "fast_catalyst_stance": fast_cat["stance"],
                 "fast_catalyst_score": fast_cat["net_stance_score"],
+                "news_velocity_state": vel_state,
                 "upcoming_high_impact_event": next_event_row[0] if next_event_row else None,
                 "hours_to_next_event": round(hours_to_event, 1)
                 if hours_to_event is not None

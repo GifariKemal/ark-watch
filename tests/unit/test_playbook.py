@@ -391,3 +391,22 @@ def test_playbook_news_velocity_and_event_gates(tmp_path):
     assert "news_velocity_state" in news_ev
     assert pb["multi_domain"]["confluence_status"]["event_risk_halt"] is True
     assert pb["multi_domain"]["confluence_status"]["alignment_state"] == "EVENT_HALT_REQUIRED"
+
+
+def test_playbook_single_print_repair_scenario(tmp_path):
+    db_file = tmp_path / "arkwatch.db"
+    conn = db.get_conn(db_file, allow_init=True)
+    now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    now_iso = now.isoformat(timespec="seconds")
+
+    conn.execute(
+        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('NQ1', ?, '5m', 'YAHOO', 31200.0, 31250.0, 31180.0, 31210.0, 100.0, ?)",
+        (now_iso, now_iso),
+    )
+    conn.commit()
+    conn.close()
+
+    pb = api.get_trading_playbook("NQ1", db_path=db_file, as_of=now)
+    assert "tpo_analytics" in pb["amt_context"]
+    assert "vpoc_tpoc_alignment" in pb["amt_context"]["tpo_analytics"]
+    assert "single_prints" in pb["amt_context"]["tpo_analytics"]

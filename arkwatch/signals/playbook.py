@@ -178,12 +178,17 @@ def generate_trading_playbook(
     cva_name = levels.get("DYNAMIC_CVA_NAME")
     naked_poc_above = levels.get("NAKED_POC_ABOVE")
     naked_poc_below = levels.get("NAKED_POC_BELOW")
+    single_prints = levels.get("TPO_SINGLE_PRINTS", [])
+    tpo_poc = levels.get("TPO_POC")
+    tpo_vah = levels.get("TPO_VAH")
+    tpo_val = levels.get("TPO_VAL")
 
     ctx = ref["auction_context"]
     open_type = ctx.get("open_type", "OPEN_IN_VALUE")
     open_conviction = ctx.get("open_conviction", "MODERATE_CONVICTION")
     participant_activity = ctx.get("participant_activity", "ROTATIONAL_AUCTION")
     value_migration = ctx.get("value_migration", "INSIDE_VALUE")
+    vpoc_tpoc_align = ctx.get("vpoc_tpoc_alignment", {})
     # 2. Fetch Intraday Price Action (VWAP and ATR)
     pa = session_intraday_intelligence(conn, sym, as_of=as_of)
     vwap = pa.get("vwap") if pa else None
@@ -381,6 +386,16 @@ def generate_trading_playbook(
     spy_1h_chg = _get_1h_chg("SPY")
     semi_alpha = round(smh_1h_chg - spy_1h_chg, 2)
 
+    # TPO VPOC vs TPOC Alignment
+    if vpoc_tpoc_align.get("relationship") == "VPOC_ABOVE_TPOC":
+        tailwinds.append(
+            "VPOC_BUY_MIGRATION: Volume POC is above TPO POC, confirming institutional aggressive buy accumulation."
+        )
+    elif vpoc_tpoc_align.get("relationship") == "VPOC_BELOW_TPOC":
+        friction_warnings.append(
+            "VPOC_SELL_DISTRIBUTION: Volume POC formed below TPO POC, indicating institutional sell pressure."
+        )
+
     # S&P 500 Constituent Breadth
     mb_row = conn.execute(
         "SELECT advances, declines FROM market_breadth ORDER BY ts_utc DESC LIMIT 1"
@@ -534,6 +549,33 @@ def generate_trading_playbook(
                     "open_type_gate": f"{open_type} ({open_conviction})",
                     "sample_weeks": emp.get("sample_weeks_low"),
                     "source": emp.get("source_doc"),
+                },
+            }
+        )
+
+    # [B2] INTRADAY SCENARIO: TPO Single Print Imbalance Repair Magnet
+    if single_prints and abs(last_price - single_prints[0]["price_mid"]) <= (1.5 * atr_14):
+        target_sp = round(single_prints[0]["price_mid"] + cfd_basis_offset, 2)
+        sp_dir = "LONG" if target_sp > last_price else "SHORT"
+        sp_inval = round((val if sp_dir == "LONG" else vah) + cfd_basis_offset, 2)
+        intraday_scenarios.append(
+            {
+                "id": "SCENARIO_INTRADAY_SINGLE_PRINT_REPAIR",
+                "horizon": "INTRADAY",
+                "title": f"TPO Single Print Imbalance Repair (Bracket {single_prints[0]['bracket']})",
+                "direction": sp_dir,
+                "trigger_condition": f"Price tests imbalance void; fills toward Single Print at {target_sp}",
+                "trigger_price": last_price,
+                "target_profit": target_sp,
+                "invalidation_level": sp_inval,
+                "risk_reward_ratio": round(
+                    abs(target_sp - last_price) / max(0.01, abs(last_price - sp_inval)), 2
+                ),
+                "invalidation_rationale": "Reversal away from single print void invalidates repair thesis.",
+                "empirical_support": {
+                    "rule": "Auction Market Theory Imbalance Repair Magnet",
+                    "single_print_bracket": single_prints[0]["bracket"],
+                    "source": "AMT Markets in Profile Liquidity Voids",
                 },
             }
         )
@@ -840,6 +882,14 @@ def generate_trading_playbook(
             "cva_measured_move_short": cva_measured_short,
             "nearest_naked_poc_above": naked_poc_above,
             "nearest_naked_poc_below": naked_poc_below,
+            "tpo_analytics": {
+                "tpo_poc": tpo_poc,
+                "tpo_vah": tpo_vah,
+                "tpo_val": tpo_val,
+                "vpoc_tpoc_alignment": vpoc_tpoc_align,
+                "single_prints": single_prints,
+                "single_prints_count": len(single_prints),
+            },
         },
         "intraday_playbook": intraday_scenarios,
         "swing_playbook": swing_scenarios,

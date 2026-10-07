@@ -1,4 +1,5 @@
 """Persistent collector for OKX public liquidation events."""
+
 from __future__ import annotations
 
 import argparse
@@ -26,17 +27,32 @@ def _events(message: dict) -> list[dict]:
         details = parent.get("details") or [parent]
         for row in details:
             merged = {**parent, **row}
-            instrument = str(merged.get("instId") or parent.get("instFamily") or parent.get("uly") or "")
+            instrument = str(
+                merged.get("instId") or parent.get("instFamily") or parent.get("uly") or ""
+            )
             raw_ts = merged.get("ts") or merged.get("uTime") or merged.get("pTime")
             if not instrument or raw_ts is None:
                 continue
-            stamp = datetime.fromtimestamp(int(raw_ts) / 1000, UTC).isoformat(timespec="milliseconds")
+            stamp = datetime.fromtimestamp(int(raw_ts) / 1000, UTC).isoformat(
+                timespec="milliseconds"
+            )
             price = float(merged.get("bkPx") or merged.get("px") or 0) or None
             size = float(merged.get("sz") or 0) or None
             notional = float(merged["notionalUsd"]) if merged.get("notionalUsd") else None
             payload = json.dumps(merged, sort_keys=True, separators=(",", ":"))
             uid = hashlib.sha256(f"OKX|{instrument}|{stamp}|{payload}".encode()).hexdigest()
-            out.append({"uid": uid, "ts": stamp, "instrument": instrument, "side": merged.get("posSide") or merged.get("side"), "price": price, "size": size, "notional": notional, "raw": payload})
+            out.append(
+                {
+                    "uid": uid,
+                    "ts": stamp,
+                    "instrument": instrument,
+                    "side": merged.get("posSide") or merged.get("side"),
+                    "price": price,
+                    "size": size,
+                    "notional": notional,
+                    "raw": payload,
+                }
+            )
     return out
 
 
@@ -45,11 +61,38 @@ def _store(conn, events: list[dict], specs: dict[str, dict] | None = None) -> in
     specs = specs or {}
     values = []
     for event in events:
-        asset_size, calculated_notional = normalize_contract_size(event["size"], event["price"], specs.get(event["instrument"], {})) if event["size"] else (None, None)
-        values.append((event["uid"], event["ts"], "OKX", event["instrument"], event["side"], event["price"], event["size"], event["notional"], event["raw"], now, asset_size, calculated_notional, "instrument_contract_value" if asset_size is not None or calculated_notional is not None else None))
+        asset_size, calculated_notional = (
+            normalize_contract_size(
+                event["size"], event["price"], specs.get(event["instrument"], {})
+            )
+            if event["size"]
+            else (None, None)
+        )
+        values.append(
+            (
+                event["uid"],
+                event["ts"],
+                "OKX",
+                event["instrument"],
+                event["side"],
+                event["price"],
+                event["size"],
+                event["notional"],
+                event["raw"],
+                now,
+                asset_size,
+                calculated_notional,
+                "instrument_contract_value"
+                if asset_size is not None or calculated_notional is not None
+                else None,
+            )
+        )
     if not values:
         return 0
-    return conn.executemany("INSERT OR IGNORE INTO crypto_liquidations (event_uid,ts_utc,source,instrument,position_side,price,size,notional_usd,raw_json,fetched_at,size_asset,notional_usd_calculated,sizing_basis) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", values).rowcount
+    return conn.executemany(
+        "INSERT OR IGNORE INTO crypto_liquidations (event_uid,ts_utc,source,instrument,position_side,price,size,notional_usd,raw_json,fetched_at,size_asset,notional_usd_calculated,sizing_basis) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        values,
+    ).rowcount
 
 
 def _book(conn, message: dict, specs: dict[str, dict], last_saved: dict[str, float]) -> int:
@@ -67,8 +110,20 @@ def _book(conn, message: dict, specs: dict[str, dict], last_saved: dict[str, flo
         return 0
     bid_size = sum(float(level[1]) for level in bids[:5])
     ask_size = sum(float(level[1]) for level in asks[:5])
-    bid_notional = sum((normalize_contract_size(float(level[1]), float(level[0]), specs.get(instrument, {}))[1] or 0.0) for level in bids[:5])
-    ask_notional = sum((normalize_contract_size(float(level[1]), float(level[0]), specs.get(instrument, {}))[1] or 0.0) for level in asks[:5])
+    bid_notional = sum(
+        (
+            normalize_contract_size(float(level[1]), float(level[0]), specs.get(instrument, {}))[1]
+            or 0.0
+        )
+        for level in bids[:5]
+    )
+    ask_notional = sum(
+        (
+            normalize_contract_size(float(level[1]), float(level[0]), specs.get(instrument, {}))[1]
+            or 0.0
+        )
+        for level in asks[:5]
+    )
     total = bid_size + ask_size
     stamp = datetime.fromtimestamp(int(row["ts"]) / 1000, UTC).isoformat(timespec="milliseconds")
     payload = json.dumps(row, sort_keys=True, separators=(",", ":"))
@@ -76,7 +131,21 @@ def _book(conn, message: dict, specs: dict[str, dict], last_saved: dict[str, flo
         "INSERT OR IGNORE INTO crypto_orderbook_snapshots "
         "(ts_utc,source,instrument,bid_size_top5,ask_size_top5,imbalance_top5,raw_json,fetched_at,bid_notional_usd_top5,ask_notional_usd_top5,imbalance_notional_usd_top5) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (stamp, "OKX_WS", instrument, bid_size, ask_size, (bid_size - ask_size) / total if total else None, payload, datetime.now(UTC).isoformat(timespec="seconds"), bid_notional or None, ask_notional or None, (bid_notional - ask_notional) / (bid_notional + ask_notional) if bid_notional + ask_notional else None),
+        (
+            stamp,
+            "OKX_WS",
+            instrument,
+            bid_size,
+            ask_size,
+            (bid_size - ask_size) / total if total else None,
+            payload,
+            datetime.now(UTC).isoformat(timespec="seconds"),
+            bid_notional or None,
+            ask_notional or None,
+            (bid_notional - ask_notional) / (bid_notional + ask_notional)
+            if bid_notional + ask_notional
+            else None,
+        ),
     )
     last_saved[instrument] = time.monotonic()
     return cursor.rowcount
@@ -87,7 +156,13 @@ def _trades(message: dict, buffer: TradeFlowBuffer) -> int:
     return buffer.add(message.get("data") or [], source="OKX_WS", instrument=arg.get("instId"))
 
 
-def _store_market_message(conn, message: dict, specs: dict[str, dict], last_book_saved: dict[str, float], trade_buffer: TradeFlowBuffer) -> int:
+def _store_market_message(
+    conn,
+    message: dict,
+    specs: dict[str, dict],
+    last_book_saved: dict[str, float],
+    trade_buffer: TradeFlowBuffer,
+) -> int:
     channel = (message.get("arg") or {}).get("channel")
     if channel == "trades":
         return _trades(message, trade_buffer)
@@ -112,7 +187,11 @@ def collect(db_path: str, seconds: int | None = None) -> int:
         last_book_saved: dict[str, float] = {}
         ws = websocket.create_connection(URL, timeout=25)
         args = [{"channel": "liquidation-orders", "instType": "SWAP"}]
-        args.extend({"channel": channel, "instId": instrument} for channel in ("trades", "books5") for instrument in INSTRUMENTS)
+        args.extend(
+            {"channel": channel, "instId": instrument}
+            for channel in ("trades", "books5")
+            for instrument in INSTRUMENTS
+        )
         ws.send(json.dumps({"op": "subscribe", "args": args}))
         while deadline is None or time.monotonic() < deadline:
             try:
@@ -124,7 +203,9 @@ def collect(db_path: str, seconds: int | None = None) -> int:
                 continue
             message = json.loads(raw)
             if message.get("event") == "error":
-                raise RuntimeError(f"OKX subscription error {message.get('code')}: {message.get('msg')}")
+                raise RuntimeError(
+                    f"OKX subscription error {message.get('code')}: {message.get('msg')}"
+                )
             if message.get("event") == "subscribe":
                 channel = (message.get("arg") or {}).get("channel", "unknown")
                 log_collection(conn, "okx_liquidations", f"OKX:{channel}", message, 0, status="OK")
@@ -157,7 +238,10 @@ def run_forever(db_path: str) -> None:
             collect(db_path)
             delay = 2
         except Exception as ex:
-            print(f"OKX liquidation reconnect in {delay}s: {type(ex).__name__}: {str(ex)[:160]}", flush=True)
+            print(
+                f"OKX liquidation reconnect in {delay}s: {type(ex).__name__}: {str(ex)[:160]}",
+                flush=True,
+            )
             time.sleep(delay)
             delay = min(delay * 2, 60)
 
@@ -168,7 +252,13 @@ def main(argv=None):
     parser.add_argument("--seconds", type=int)
     args = parser.parse_args(argv)
     if args.seconds:
+        print(f"Memonitor likuidasi OKX selama {args.seconds} detik...")
         print({"stored": collect(args.db, args.seconds)})
     else:
+        print("Mendengarkan stream WebSocket likuidasi real-time OKX (stream continuous)...")
+        print(
+            "Petunjuk: Gunakan 'arkwatch liquidations --seconds 10' untuk sampling, atau tekan Ctrl+C untuk berhenti.",
+            flush=True,
+        )
         run_forever(args.db)
     return 0

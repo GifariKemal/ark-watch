@@ -909,20 +909,36 @@ def generate_trading_playbook(
                 "treasury_10y_auction_percentile": round(auc_pctl, 1) if auc_pctl else None,
             },
             "domain_2_flows": {
-                "options_pcr": round(opt_pcr, 3) if opt_pcr else None,
-                "options_top_wall": opt_top_wall,
-                "options_max_pain": opt_max_pain,
+                "options_pcr": round(opt_pcr, 3)
+                if opt_pcr
+                else ("N/A (No CME Options Settlement Feed)" if not opt_prod else None),
+                "options_top_wall": opt_top_wall
+                if opt_top_wall
+                else ("N/A (No CME Options Settlement Feed)" if not opt_prod else None),
+                "options_max_pain": opt_max_pain
+                if opt_max_pain
+                else ("N/A (No CME Options Settlement Feed)" if not opt_prod else None),
                 "is_opex_week": is_opex_week,
                 "days_to_opex": days_to_opex,
                 "cot_positioning_3y_zscore": round(cot_z, 2) if cot_z is not None else None,
                 "cot_price_positioning_divergence": cot_div,
                 "price_oi_quadrant": cot_quad,
                 "commercial_hedging_pressure": cot_hedge,
-                "crypto_open_interest_usd": crypto_oi_usd,
-                "etf_flow_momentum": etf_mom,
-                "btc_smart_money": btc_smart_money,
-                "fx_turning_point_gate": fx_turning_point,
-                "silver_52wk_gate": silver_52wk_gate,
+                "crypto_open_interest_usd": crypto_oi_usd
+                if sym in ("BTCUSD", "ETHUSD")
+                else "N/A (Crypto Asset Only)",
+                "etf_flow_momentum": etf_mom
+                if etf_mom is not None
+                else (
+                    "N/A (Accumulating Flow History: <5 daily observations)"
+                    if etf_asset
+                    else "N/A (Metals/Crypto Physical ETF Metric)"
+                ),
+                "btc_smart_money": btc_smart_money if sym == "BTCUSD" else "N/A (BTC Only)",
+                "fx_turning_point_gate": fx_turning_point
+                if sym in ("EURUSD", "GBPUSD", "USDJPY")
+                else "N/A (FX Majors Only)",
+                "silver_52wk_gate": silver_52wk_gate if sym == "SI1" else "N/A (Silver Only)",
             },
             "domain_3_news_events": {
                 "fast_catalyst_stance": fast_cat["stance"],

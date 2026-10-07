@@ -168,6 +168,17 @@ def evaluate_active_playbooks(
             mae,
             sc_sess_id,
         ) = row
+
+        # Check fresh state from DB in case an earlier iteration in this batch cancelled it
+        cur_db_state = conn.execute(
+            "SELECT state, entry_price FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+        ).fetchone()
+        if not cur_db_state or cur_db_state[0] not in ("PENDING_TRIGGER", "ACTIVE"):
+            continue
+        state = cur_db_state[0]
+        if cur_db_state[1] is not None:
+            entry_p = cur_db_state[1]
+
         # Fetch subsequent bars since creation
         bars = conn.execute(
             """

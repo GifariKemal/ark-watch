@@ -762,8 +762,9 @@ def generate_trading_playbook(
             )
             + cfd_basis_offset
         )
-        reward_long = intra_target - (last_price + cfd_basis_offset)
-        risk_long = max(0.01, (last_price + cfd_basis_offset) - intra_inval)
+        trig_long = vah + cfd_basis_offset
+        reward_long = abs(intra_target - trig_long)
+        risk_long = max(0.01, abs(trig_long - intra_inval))
         rr_long = round(reward_long / risk_long, 2)
         if rr_long >= 1.5:
             intraday_scenarios.append(
@@ -804,8 +805,9 @@ def generate_trading_playbook(
             )
             + cfd_basis_offset
         )
-        reward_short = (last_price + cfd_basis_offset) - intra_target
-        risk_short = max(0.01, intra_inval - (last_price + cfd_basis_offset))
+        trig_short = val + cfd_basis_offset
+        reward_short = abs(trig_short - intra_target)
+        risk_short = max(0.01, abs(intra_inval - trig_short))
         rr_short = round(reward_short / risk_short, 2)
         if rr_short >= 1.5:
             intraday_scenarios.append(
@@ -871,8 +873,9 @@ def generate_trading_playbook(
             )
             + cfd_basis_offset
         )
-        reward_sweep_short = (last_price + cfd_basis_offset) - sweep_target
-        risk_sweep_short = max(0.01, sweep_inval - (last_price + cfd_basis_offset))
+        trig_sweep_s = pdh + cfd_basis_offset
+        reward_sweep_short = abs(trig_sweep_s - sweep_target)
+        risk_sweep_short = max(0.01, abs(sweep_inval - trig_sweep_s))
         rr_sweep_short = round(reward_sweep_short / risk_sweep_short, 2)
         if rr_sweep_short >= 1.5:
             intraday_scenarios.append(
@@ -911,8 +914,9 @@ def generate_trading_playbook(
             )
             + cfd_basis_offset
         )
-        reward_sweep_long = sweep_target - (last_price + cfd_basis_offset)
-        risk_sweep_long = max(0.01, (last_price + cfd_basis_offset) - sweep_inval)
+        trig_sweep_l = pdl + cfd_basis_offset
+        reward_sweep_long = abs(sweep_target - trig_sweep_l)
+        risk_sweep_long = max(0.01, abs(trig_sweep_l - sweep_inval))
         rr_sweep_long = round(reward_sweep_long / risk_sweep_long, 2)
         if rr_sweep_long >= 1.5:
             intraday_scenarios.append(
@@ -947,8 +951,9 @@ def generate_trading_playbook(
             + cfd_basis_offset,
             2,
         )
-        reward_cva_long = cva_target - (last_price + cfd_basis_offset)
-        risk_cva_long = max(0.01, (last_price + cfd_basis_offset) - cva_inval)
+        trig_cva_l = (levels.get("DYNAMIC_CVA_VAH") or last_price) + cfd_basis_offset
+        reward_cva_long = abs(cva_target - trig_cva_l)
+        risk_cva_long = max(0.01, abs(trig_cva_l - cva_inval))
         rr_cva_long = round(reward_cva_long / risk_cva_long, 2)
         if rr_cva_long >= 1.5:
             swing_scenarios.append(
@@ -977,8 +982,9 @@ def generate_trading_playbook(
             + cfd_basis_offset,
             2,
         )
-        reward_cva_short = (last_price + cfd_basis_offset) - cva_target
-        risk_cva_short = max(0.01, cva_inval - (last_price + cfd_basis_offset))
+        trig_cva_s = (levels.get("DYNAMIC_CVA_VAL") or last_price) + cfd_basis_offset
+        reward_cva_short = abs(trig_cva_s - cva_target)
+        risk_cva_short = max(0.01, abs(cva_inval - trig_cva_s))
         rr_cva_short = round(reward_cva_short / risk_cva_short, 2)
         if rr_cva_short >= 1.5:
             swing_scenarios.append(
@@ -1008,8 +1014,9 @@ def generate_trading_playbook(
     ):
         target_npoc_s = round(naked_poc_below + cfd_basis_offset, 2)
         inval_npoc_s = round((pdh or (last_price + (0.35 * daily_atr))) + cfd_basis_offset, 2)
-        reward_npoc_s = (last_price + cfd_basis_offset) - target_npoc_s
-        risk_npoc_s = max(0.01, inval_npoc_s - (last_price + cfd_basis_offset))
+        trig_npoc_s = (levels.get("WEEKLY_VWAP") or last_price) + cfd_basis_offset
+        reward_npoc_s = abs(trig_npoc_s - target_npoc_s)
+        risk_npoc_s = max(0.01, abs(inval_npoc_s - trig_npoc_s))
         rr_npoc_s = round(reward_npoc_s / risk_npoc_s, 2)
         if rr_npoc_s >= 1.5:
             swing_scenarios.append(
@@ -1037,8 +1044,9 @@ def generate_trading_playbook(
     ):
         target_npoc_l = round(naked_poc_above + cfd_basis_offset, 2)
         inval_npoc_l = round((pdl or (last_price - (0.35 * daily_atr))) + cfd_basis_offset, 2)
-        reward_npoc_l = target_npoc_l - (last_price + cfd_basis_offset)
-        risk_npoc_l = max(0.01, (last_price + cfd_basis_offset) - inval_npoc_l)
+        trig_npoc_l = (levels.get("WEEKLY_VWAP") or last_price) + cfd_basis_offset
+        reward_npoc_l = abs(target_npoc_l - trig_npoc_l)
+        risk_npoc_l = max(0.01, abs(trig_npoc_l - inval_npoc_l))
         rr_npoc_l = round(reward_npoc_l / risk_npoc_l, 2)
         if rr_npoc_l >= 1.5:
             swing_scenarios.append(

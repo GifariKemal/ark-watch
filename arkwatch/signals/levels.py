@@ -285,28 +285,28 @@ def compute_session_reference_levels(
             "VAH": va_profile["vah"],
             "POC": va_profile["poc"],
             "VAL": va_profile["val"],
-            "ONH": round(onh, 4) if onh is not None else None,
-            "ONL": round(onl, 4) if onl is not None else None,
-            "OR15_HIGH": round(or15_high, 4) if or15_high is not None else None,
-            "OR15_LOW": round(or15_low, 4) if or15_low is not None else None,
-            "OR30_HIGH": round(or30_high, 4) if or30_high is not None else None,
-            "OR30_LOW": round(or30_low, 4) if or30_low is not None else None,
+            "ONH": round(onh, 4) if onh is not None else round(pdh, 4),
+            "ONL": round(onl, 4) if onl is not None else round(pdl, 4),
+            "OR15_HIGH": round(or15_high, 4) if or15_high is not None else "FORMING_IN_RTH",
+            "OR15_LOW": round(or15_low, 4) if or15_low is not None else "FORMING_IN_RTH",
+            "OR30_HIGH": round(or30_high, 4) if or30_high is not None else "FORMING_IN_RTH",
+            "OR30_LOW": round(or30_low, 4) if or30_low is not None else "FORMING_IN_RTH",
             "TPO_POC": tpo_data["tpo_poc"],
             "TPO_VAH": tpo_data["tpo_vah"],
             "TPO_VAL": tpo_data["tpo_val"],
             "TPO_SINGLE_PRINTS": tpo_data.get("single_prints", []),
-            "DYNAMIC_CVA_NAME": dynamic_cva["composite_name"] if dynamic_cva else None,
-            "DYNAMIC_CVA_POC": dynamic_cva["c_poc"] if dynamic_cva else None,
-            "DYNAMIC_CVA_VAH": dynamic_cva["c_vah"] if dynamic_cva else None,
-            "DYNAMIC_CVA_VAL": dynamic_cva["c_val"] if dynamic_cva else None,
+            "DYNAMIC_CVA_NAME": dynamic_cva["composite_name"] if dynamic_cva else "BALANCED_RANGE",
+            "DYNAMIC_CVA_POC": dynamic_cva["c_poc"] if dynamic_cva else va_profile["poc"],
+            "DYNAMIC_CVA_VAH": dynamic_cva["c_vah"] if dynamic_cva else va_profile["vah"],
+            "DYNAMIC_CVA_VAL": dynamic_cva["c_val"] if dynamic_cva else va_profile["val"],
             "CVA_MEASURED_MOVE_LONG": dynamic_cva["dalton_measured_move"]["upside_breakout_target"]
             if dynamic_cva
-            else None,
+            else round(pdh + (0.5 * atr_proxy), 4),
             "CVA_MEASURED_MOVE_SHORT": dynamic_cva["dalton_measured_move"][
                 "downside_breakout_target"
             ]
             if dynamic_cva
-            else None,
+            else round(pdl - (0.5 * atr_proxy), 4),
             "NAKED_POC_ABOVE": naked_pocs["nearest_naked_poc_above"]["poc"]
             if naked_pocs.get("nearest_naked_poc_above")
             else None,

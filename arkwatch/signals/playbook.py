@@ -663,10 +663,10 @@ def generate_trading_playbook(
     # [B] INTRADAY SCENARIO 2: Liquidity Sweep / Failed Auction (Trap Setup)
     if last_price >= pdh * 0.998 and not is_bullish_open_drive:
         sweep_inval = round(pdh + (0.20 * atr_14), 2) + cfd_basis_offset
-        sweep_target = (
-            round(naked_poc_below if naked_poc_below else (poc if poc else pdc), 2)
-            + cfd_basis_offset
+        target_naked = (
+            naked_poc_below if isinstance(naked_poc_below, int | float) else (poc if poc else pdc)
         )
+        sweep_target = round(target_naked, 2) + cfd_basis_offset
         intraday_scenarios.append(
             {
                 "id": "SCENARIO_INTRADAY_SWEEP_SHORT",
@@ -822,10 +822,12 @@ def generate_trading_playbook(
         )
 
     # [E] SWING SCENARIO 2: Weekly Value Migration & Naked POC Target
-    if naked_poc_below and value_migration in ("LOWER_VALUE", "OVERLAPPING_LOWER"):
+    if isinstance(naked_poc_below, int | float) and value_migration in (
+        "LOWER_VALUE",
+        "OVERLAPPING_LOWER",
+    ):
         swing_scenarios.append(
             {
-                "id": "SCENARIO_SWING_NAKED_POC_TARGET_SHORT",
                 "horizon": "SWING",
                 "title": f"Swing Value Migration to Naked POC ({naked_poc_below})",
                 "direction": "SHORT",
@@ -846,11 +848,12 @@ def generate_trading_playbook(
                 },
             }
         )
-    elif naked_poc_above and value_migration in ("HIGHER_VALUE", "OVERLAPPING_HIGHER"):
+    elif isinstance(naked_poc_above, int | float) and value_migration in (
+        "HIGHER_VALUE",
+        "OVERLAPPING_HIGHER",
+    ):
         swing_scenarios.append(
             {
-                "id": "SCENARIO_SWING_NAKED_POC_TARGET_LONG",
-                "horizon": "SWING",
                 "title": f"Swing Value Migration to Naked POC ({naked_poc_above})",
                 "direction": "LONG",
                 "trigger_condition": f"Value migration remains {value_migration}; price holds below Weekly VWAP ({levels.get('WEEKLY_VWAP')})",
@@ -877,9 +880,24 @@ def generate_trading_playbook(
         "symbol": sym,
         "as_of": now_utc,
         "last_price": round(last_price, 4),
-        "reference_levels": levels,
+        "reference_levels": {
+            k: (
+                v
+                if v is not None
+                else (
+                    "NONE_IN_25D_LOOKBACK (All-Time High / Blue Sky)"
+                    if k == "NAKED_POC_ABOVE"
+                    else (
+                        "NONE_IN_25D_LOOKBACK (All-Time Low)"
+                        if k == "NAKED_POC_BELOW"
+                        else "FORMING_IN_RTH"
+                    )
+                )
+            )
+            for k, v in levels.items()
+        },
         "price_action": {
-            "vwap": round(vwap, 4) if vwap else None,
+            "vwap": round(vwap, 4) if vwap else round(last_price, 4),
             "atr_14": round(atr_14, 4),
             "vwap_state": vwap_state,
             "volatility_ratio": round(volatility_ratio, 2),
@@ -905,22 +923,38 @@ def generate_trading_playbook(
                 "dollar_smile_regime": smile_regime,
                 "vix_term_structure_state": vix_state,
                 "vix_9d_spot_ratio": vix_ratio,
-                "sahm_rule_recession_indicator": sahm_val,
-                "treasury_10y_auction_percentile": round(auc_pctl, 1) if auc_pctl else None,
+                "sahm_rule_recession_indicator": sahm_val if sahm_val is not None else 0.0,
+                "treasury_10y_auction_percentile": round(auc_pctl, 1)
+                if auc_pctl
+                else "N/A (No Recent 10Y Auction)",
             },
             "domain_2_flows": {
                 "options_pcr": round(opt_pcr, 3)
                 if opt_pcr
-                else ("N/A (No CME Options Settlement Feed)" if not opt_prod else None),
+                else (
+                    "N/A (Awaiting Daily Settlement Publish)"
+                    if opt_prod
+                    else "N/A (No CME Options Settlement Feed)"
+                ),
                 "options_top_wall": opt_top_wall
                 if opt_top_wall
-                else ("N/A (No CME Options Settlement Feed)" if not opt_prod else None),
+                else (
+                    "N/A (Awaiting Daily Settlement Publish)"
+                    if opt_prod
+                    else "N/A (No CME Options Settlement Feed)"
+                ),
                 "options_max_pain": opt_max_pain
                 if opt_max_pain
-                else ("N/A (No CME Options Settlement Feed)" if not opt_prod else None),
+                else (
+                    "N/A (Awaiting Daily Settlement Publish)"
+                    if opt_prod
+                    else "N/A (No CME Options Settlement Feed)"
+                ),
                 "is_opex_week": is_opex_week,
                 "days_to_opex": days_to_opex,
-                "cot_positioning_3y_zscore": round(cot_z, 2) if cot_z is not None else None,
+                "cot_positioning_3y_zscore": round(cot_z, 2)
+                if cot_z is not None
+                else "N/A (No COT Mapping)",
                 "cot_price_positioning_divergence": cot_div,
                 "price_oi_quadrant": cot_quad,
                 "commercial_hedging_pressure": cot_hedge,
@@ -944,16 +978,18 @@ def generate_trading_playbook(
                 "fast_catalyst_stance": fast_cat["stance"],
                 "fast_catalyst_score": fast_cat["net_stance_score"],
                 "news_velocity_state": vel_state,
-                "upcoming_high_impact_event": next_event_row[0] if next_event_row else None,
+                "upcoming_high_impact_event": next_event_row[0]
+                if next_event_row
+                else "NONE_SCHEDULED_NEXT_24H",
                 "hours_to_next_event": round(hours_to_event, 1)
                 if hours_to_event is not None
-                else None,
+                else "N/A (No Event Next 24H)",
             },
             "domain_4_intermarket_breadth": {
-                "us_10y_yield_1h_chg_pct": tnx_1h_chg,
-                "dxy_dollar_1h_chg_pct": dxy_1h_chg,
-                "semi_alpha_vs_spy_pct": semi_alpha,
-                "sp500_advancing_breadth_pct": adv_ratio,
+                "us_10y_yield_1h_chg_pct": tnx_1h_chg if tnx_1h_chg is not None else 0.0,
+                "dxy_dollar_1h_chg_pct": dxy_1h_chg if dxy_1h_chg is not None else 0.0,
+                "semi_alpha_vs_spy_pct": semi_alpha if semi_alpha is not None else 0.0,
+                "sp500_advancing_breadth_pct": adv_ratio if adv_ratio is not None else 50.0,
             },
             "confluence_status": {
                 "friction_warnings": friction_warnings,
@@ -982,8 +1018,12 @@ def generate_trading_playbook(
             "cva_name": cva_name,
             "cva_measured_move_long": cva_measured_long,
             "cva_measured_move_short": cva_measured_short,
-            "nearest_naked_poc_above": naked_poc_above,
-            "nearest_naked_poc_below": naked_poc_below,
+            "nearest_naked_poc_above": naked_poc_above
+            if naked_poc_above
+            else "NONE_IN_25D_LOOKBACK (All-Time High / Blue Sky)",
+            "nearest_naked_poc_below": naked_poc_below
+            if naked_poc_below
+            else "NONE_IN_25D_LOOKBACK (All-Time Low)",
             "tpo_analytics": {
                 "tpo_poc": tpo_poc,
                 "tpo_vah": tpo_vah,

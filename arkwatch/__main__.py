@@ -8,8 +8,68 @@ from pathlib import Path
 _DEFAULT_DB = str(Path(__file__).resolve().parent.parent / "data" / "arkwatch.db")
 
 
+def print_help() -> int:
+    help_text = """
+========================================================================================
+                      ARK-WATCH — US-MACRO & AUCTION TRADING CLI
+========================================================================================
+
+PENGGUNAAN:
+  arkwatch <perintah> [argumen]
+  python -m arkwatch <perintah> [argumen]
+
+[1. TRADING PLAYBOOK & EKSEKUSI LELANG (AMT)]
+  scanner                    Memindai 31 aset 24 jam & mengurutkan peluang (R:R tertinggi)
+                             Contoh: arkwatch scanner --min-rr 2.0
+  playbook [SYMBOL]          Menghasilkan Playbook Dual-Horizon (Intraday & Swing)
+                             Contoh: arkwatch playbook NQ1 --cfd-offset 10.5
+  tracker [SYMBOL]           Melihat pelacak performa real-time (Win Rate, MFE, MAE, R:R)
+                             Contoh: arkwatch tracker NQ1 --horizon INTRADAY
+  levels [SYMBOL]            Melihat level lelang AMT (VAH, VAL, POC, TPO, 2D CVA, Naked POC)
+                             Contoh: arkwatch levels GC1
+  sentiment [--limit N]      Mengekstrak sentimen berita 7-dimensi via AI & update radar
+                             Contoh: arkwatch sentiment --limit 20
+
+[2. REAL-TIME MARKET & MIKROSTRUKTUR INTRADAY]
+  market [--interval 1m|5m]  Memanen timeline bar 1-menit / 5-menit seluruh 31 aset
+  market-news                Memanen berita terkurasi dari 14 sumber institusi
+  breadth                    Menghitung S&P 500 Constituent Breadth (504 saham)
+  crypto                     Memproses sinyal likuidasi & funding rate kripto
+  liquidations               Memonitor orderbook likuidasi real-time OKX
+  energy                     Memeriksa metrik cadangan minyak EIA & kilang
+
+[3. PANEN DATA MAKRO & KALKULASI]
+  calendar [--from D --to D] Memanen kalender ekonomi makro (NFP, CPI, FOMC)
+  surprise                   Menghitung Sigma Surprise Z-Score (rolling 5y, outlier-filtered)
+  cme                        Memanen CME options settlements, OI walls & max-pain
+  fedsurvey                  Memanen survei The Fed (SLOOS, Beige Book, Minutes)
+  soma                       Memanen neraca kepemilikan surat utang The Fed (QT)
+  fiscalx                    Memanen lelang US Treasury, penerbitan utang & beban bunga
+  f2                         Memanen arus ETF fisik emas/perak & cadangan LME
+  nyfed                      Memanen operasi pasar sekunder NY Fed & Repo
+
+[4. OPERASIONAL SISTEM & PEMANTAUAN]
+  daemon [--once]            Menjalankan background service scheduler otomatis
+  watch                      Menjalankan pengecekan alert anomali makro
+  verify                     Memverifikasi kelayakan endpoint seluruh provider data
+  coverage                   Memeriksa kelengkapan dan kesegaran seluruh series registry
+  calibrate                  Mengaudit drift golden anchors kalibrasi data
+  backup                     Membuat backup SQLite database yang aman dan terverifikasi
+  gdelt-retention [--apply]  Membersihkan data mentah GDELT (8d) dan berita (90d)
+  explore <target>           Mengeksplorasi database secara interaktif
+  backtest                   Menjalankan simulasi backtest sinyal historis
+  help, --help, -h           Menampilkan manual panduan perintah ini
+
+========================================================================================
+"""
+    print(help_text)
+    return 0
+
+
 def main() -> int:
-    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    cmd = sys.argv[1].lower() if len(sys.argv) > 1 else ""
+    if cmd in ("help", "--help", "-h", ""):
+        return print_help()
     if cmd == "verify":
         from .qa.verify_sources import main as verify_main
 
@@ -344,12 +404,8 @@ def main() -> int:
         from .qa.explore import main as ex_main
 
         return ex_main(sys.argv[2:])
-    print(
-        "arkwatch — commands: verify|coverage|backfill|instruments|harvest|calendar|"
-        "f4|flows|surprise|alfred|backup|daemon|cme|f2|soma|nyfed|fiscalx|brief|send|"
-        "watch|backtest|export|explore|gdelt-retention"
-    )
-    return 2 if cmd else 0  # an unrecognized command must not exit 0
+    print(f"arkwatch: perintah '{cmd}' tidak dikenali. Ketik 'arkwatch help' untuk panduan.")
+    return 2
 
 
 if __name__ == "__main__":

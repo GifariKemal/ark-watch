@@ -270,12 +270,16 @@ def main() -> int:
         p = argparse.ArgumentParser(prog="arkwatch tracker")
         p.add_argument("symbol", nargs="?", default=None, help="filter by symbol")
         p.add_argument("--horizon", choices=["INTRADAY", "SWING"], default=None)
+        p.add_argument(
+            "--detail", action="store_true", help="show individual trade details and decision logs"
+        )
         p.add_argument("--db", default=str(_DEFAULT_DB))
         a = p.parse_args(sys.argv[2:])
         conn = db.get_conn(a.db, allow_init=True)
-        res = get_playbook_performance_metrics(conn, symbol=a.symbol, horizon=a.horizon)
+        res = get_playbook_performance_metrics(
+            conn, symbol=a.symbol, horizon=a.horizon, detail=a.detail
+        )
         conn.close()
-        print(json.dumps(res, indent=2))
         return 0
     if cmd == "scanner":
         import argparse

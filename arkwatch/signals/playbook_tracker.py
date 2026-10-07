@@ -501,11 +501,11 @@ def get_playbook_performance_metrics(
     *,
     symbol: str | None = None,
     horizon: str | None = None,
+    detail: bool = False,
 ) -> dict[str, Any]:
     """Calculate institutional performance metrics: Win Rate, Profit Factor, MFE/MAE, and R-Multiple."""
     where_clauses = []
     params = []
-
     if symbol:
         where_clauses.append("symbol = ?")
         params.append(symbol.strip().upper())
@@ -566,7 +566,7 @@ def get_playbook_performance_metrics(
     all_mae = [r[4] for r in (wins + losses) if r[4] is not None]
     avg_mae = round(sum(all_mae) / len(all_mae), 2) if all_mae else 0.0
 
-    return {
+    res = {
         "total_scenarios": len(rows),
         "completed_trades": completed,
         "wins": len(wins),
@@ -581,6 +581,54 @@ def get_playbook_performance_metrics(
         "avg_mfe": avg_mfe,
         "avg_mae": avg_mae,
     }
+
+    if detail:
+        trade_rows = conn.execute(
+            f"""
+            SELECT scenario_uid, symbol, horizon, direction, scenario_id, title,
+                   trigger_price, target_profit, invalidation_level, risk_reward_ratio,
+                   state, entry_price, exit_price, pnl_points, r_multiple,
+                   mfe_points, mae_points, created_at_utc, triggered_at_utc, resolved_at_utc, payload_json
+            FROM playbook_scenarios
+            {where_sql}
+            ORDER BY created_at_utc DESC
+            """,
+            params,
+        ).fetchall()
+        trades = []
+        for t in trade_rows:
+            try:
+                p_data = json.loads(t[20]) if t[20] else {}
+            except Exception:
+                p_data = {}
+            trades.append(
+                {
+                    "uid": t[0],
+                    "symbol": t[1],
+                    "horizon": t[2],
+                    "direction": t[3],
+                    "scenario_id": t[4],
+                    "title": t[5],
+                    "trigger_price": t[6],
+                    "target_profit": t[7],
+                    "invalidation_level": t[8],
+                    "risk_reward_ratio": t[9],
+                    "state": t[10],
+                    "entry_price": t[11],
+                    "exit_price": t[12],
+                    "pnl_points": t[13],
+                    "r_multiple": t[14],
+                    "mfe_points": t[15],
+                    "mae_points": t[16],
+                    "created_at_utc": t[17],
+                    "triggered_at_utc": t[18],
+                    "resolved_at_utc": t[19],
+                    "decision_log": p_data.get("decision_log", []),
+                }
+            )
+        res["trades"] = trades
+
+    return res
 
 
 def evaluate_counterfactual_outcomes(

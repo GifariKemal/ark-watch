@@ -26,6 +26,7 @@ TRACKED_ASSETS = (
     "BZ1",  # Brent Crude Oil
     "DXY",  # US Dollar Index
     "EURUSD",  # Euro / US Dollar
+    "GBPUSD",  # British Pound / US Dollar
     "USDJPY",  # US Dollar / Yen
     "BTCUSD",  # Bitcoin
     "ETHUSD",  # Ethereum
@@ -57,6 +58,8 @@ ASSET_ALIASES: dict[str, str] = {
     "BITCOIN": "BTCUSD",
     "ETH": "ETHUSD",
     "ETHEREUM": "ETHUSD",
+    "GBP": "GBPUSD",
+    "CABLE": "GBPUSD",
 }
 
 AUTHORITY_SOURCES = {"RSS_FED", "RSS_BOE", "RSS_TREASURY", "RSS_SEC", "RSS_OILPRICE"}

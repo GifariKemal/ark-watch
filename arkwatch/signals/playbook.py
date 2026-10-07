@@ -429,12 +429,12 @@ def generate_trading_playbook(
         front_x = xccy_rows[0]
         cross_currency_basis = {
             "contract": front_x.contract,
-            "basis_spread_bp": round(front_x.basis_bp, 1),
-            "interpretation": "NORMAL" if front_x.basis_bp > -20.0 else "USD_FUNDING_STRAIN",
+            "basis_spread_bp": round(front_x.basis_bps, 1),
+            "interpretation": "NORMAL" if front_x.basis_bps > -20.0 else "USD_FUNDING_STRAIN",
         }
-        if front_x.basis_bp < -25.0:
+        if front_x.basis_bps < -25.0:
             friction_warnings.append(
-                f"DOLLAR_LIQUIDITY_STRAIN: Cross-currency basis swap wide at {round(front_x.basis_bp, 1)} bps, global banks paying premium for USD."
+                f"DOLLAR_LIQUIDITY_STRAIN: Cross-currency basis swap wide at {round(front_x.basis_bps, 1)} bps, global banks paying premium for USD."
             )
     else:
         cross_currency_basis = "N/A (XCCY Matrix Standby)"

@@ -280,6 +280,7 @@ def main() -> int:
             conn, symbol=a.symbol, horizon=a.horizon, detail=a.detail
         )
         conn.close()
+        print(json.dumps(res, indent=2))
         return 0
     if cmd == "scanner":
         import argparse

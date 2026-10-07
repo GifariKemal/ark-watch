@@ -14,7 +14,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from . import cot_signals, options, vixterm
+from . import cot_signals, etf_flows, fiscal, options, vixterm
 from .intraday import session_intraday_intelligence
 from .levels import compute_session_reference_levels
 from .news import news_velocity
@@ -254,6 +254,28 @@ def generate_trading_playbook(
     ).fetchone()
     yield_curve_spread = float(curve_row[0]) if curve_row else None
 
+    # Sahm Rule Recession Indicator
+    sahm_row = conn.execute(
+        "SELECT value FROM raw_observations WHERE series_id='FRED:SAHMREALTIME' ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+    sahm_val = float(sahm_row[0]) if sahm_row else None
+    if sahm_val is not None and sahm_val >= 0.50:
+        friction_warnings.append(
+            f"SAHM_RULE_RECESSION_TRIGGER: Sahm Rule at {sahm_val} (>=0.50 triggers formal US recession indicator)."
+        )
+
+    # Treasury Auction Demand (10-Year Bid-to-Cover)
+    try:
+        auc_demand = fiscal.auction_demand(conn)
+        auc_10y = auc_demand.get("terms", {}).get("10-Year", {})
+        auc_pctl = auc_10y.get("percentile")
+    except Exception:
+        auc_pctl = None
+
+    if auc_pctl is not None and auc_pctl <= 20.0 and sym in ("NQ1", "ES1"):
+        friction_warnings.append(
+            f"WEAK_TREASURY_AUCTION: 10Y Auction bid-to-cover at bottom {round(auc_pctl, 1)}% percentile, risks yield spikes."
+        )
     # Fed Broad Trade-Weighted Dollar & Dollar Smile
     broad_d_row = conn.execute(
         "SELECT value FROM raw_observations WHERE series_id='FRED:DTWEXBGS' ORDER BY ts DESC LIMIT 1"
@@ -300,6 +322,39 @@ def generate_trading_playbook(
     cot_quad = cot_signals._price_oi_quadrant(conn, cot_sym, "CME") if cot_code else None
     cot_hedge = cot_signals._hedging_pressure(conn, cot_code) if cot_code else None
 
+    # Specialized Asset-Specific COT Models
+    btc_smart_money = cot_signals._btc_smart_money(conn) if sym == "BTCUSD" else None
+    fx_turning_point = (
+        cot_signals._fx_turning_point(conn, cot_code)
+        if sym in ("EURUSD", "GBPUSD", "USDJPY") and cot_code
+        else None
+    )
+    silver_52wk_gate = cot_signals._silver_52wk_gate(conn) if sym == "SI1" else None
+
+    if fx_turning_point and "EXTREME" in str(fx_turning_point):
+        tailwinds.append(f"FX_TURNING_POINT_GATE: {fx_turning_point}")
+
+    # Institutional ETF Flow Momentum
+    etf_asset_map = {
+        "GC1": "GOLD",
+        "SI1": "SILVER",
+        "BTCUSD": "BTC",
+        "ETHUSD": "ETH",
+    }
+    etf_asset = etf_asset_map.get(sym)
+    try:
+        etf_mom = etf_flows.etf_flow_momentum(conn, etf_asset) if etf_asset else None
+    except Exception:
+        etf_mom = None
+
+    if etf_mom and etf_mom.get("flow_state") in ("INFLOW_SURGE", "ACCUMULATION"):
+        tailwinds.append(
+            f"ETF_FLOW_ACCUMULATION: Institutional ETF flow expanding ({etf_mom['flow_state']})."
+        )
+    elif etf_mom and etf_mom.get("flow_state") == "OUTFLOW_DRAIN":
+        friction_warnings.append(
+            f"ETF_FLOW_OUTFLOW: Institutional ETF flow draining ({etf_mom['flow_state']})."
+        )
     if cot_div == "BEARISH_DIVERGENCE":
         friction_warnings.append(
             "COT_DISTRIBUTION_DIVERGENCE: Price at highs without institutional positioning confirmation."
@@ -825,6 +880,8 @@ def generate_trading_playbook(
                 "dollar_smile_regime": smile_regime,
                 "vix_term_structure_state": vix_state,
                 "vix_9d_spot_ratio": vix_ratio,
+                "sahm_rule_recession_indicator": sahm_val,
+                "treasury_10y_auction_percentile": round(auc_pctl, 1) if auc_pctl else None,
             },
             "domain_2_flows": {
                 "options_pcr": round(opt_pcr, 3) if opt_pcr else None,
@@ -837,6 +894,10 @@ def generate_trading_playbook(
                 "price_oi_quadrant": cot_quad,
                 "commercial_hedging_pressure": cot_hedge,
                 "crypto_open_interest_usd": crypto_oi_usd,
+                "etf_flow_momentum": etf_mom,
+                "btc_smart_money": btc_smart_money,
+                "fx_turning_point_gate": fx_turning_point,
+                "silver_52wk_gate": silver_52wk_gate,
             },
             "domain_3_news_events": {
                 "fast_catalyst_stance": fast_cat["stance"],

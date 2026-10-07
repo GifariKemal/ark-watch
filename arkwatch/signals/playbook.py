@@ -27,13 +27,16 @@ from .playbook_tracker import (
 from .sentiment import compute_asset_sentiment_radar, compute_intraday_catalyst_radar
 
 OPTIONS_PRODUCT_MAP: dict[str, str] = {
+    "NQ1": "NQ",
+    "ES1": "ES",
+    "YM1": "YM",
     "GC1": "OG",
     "SI1": "SO",
-    "BTCUSD": "BTC",
+    "PL1": "PO",
+    "HG1": "HXE",
     "CL1": "LO",
-    "ES1": "ES",
+    "BTCUSD": "BTC",
 }
-
 COT_CONTRACT_MAP: dict[str, str] = {
     "NQ1": "209742",
     "ES1": "13874A",
@@ -251,8 +254,19 @@ def generate_trading_playbook(
     curve_row = conn.execute(
         "SELECT value FROM raw_observations WHERE series_id='FRED:T10Y2Y' ORDER BY ts DESC LIMIT 1"
     ).fetchone()
-    yield_curve_spread = float(curve_row[0]) if curve_row else None
-
+    if curve_row and curve_row[0] is not None:
+        yield_curve_spread = float(curve_row[0])
+    else:
+        dgs10_row = conn.execute(
+            "SELECT value FROM raw_observations WHERE series_id='FRED:DGS10' ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+        dgs2_row = conn.execute(
+            "SELECT value FROM raw_observations WHERE series_id='FRED:DGS2' ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+        if dgs10_row and dgs2_row and dgs10_row[0] is not None and dgs2_row[0] is not None:
+            yield_curve_spread = round(float(dgs10_row[0]) - float(dgs2_row[0]), 2)
+        else:
+            yield_curve_spread = None
     # Sahm Rule Recession Indicator
     sahm_row = conn.execute(
         "SELECT value FROM raw_observations WHERE series_id='FRED:SAHMREALTIME' ORDER BY ts DESC LIMIT 1"
@@ -312,16 +326,28 @@ def generate_trading_playbook(
 
     cot_code = COT_CONTRACT_MAP.get(sym)
     cot_z = cot_signals._cot_zscore(conn, cot_code) if cot_code else None
-    cot_sym = "XAUUSD" if sym == "GC1" else ("XAGUSD" if sym == "SI1" else sym)
+    cot_sym = (
+        "XAUUSD"
+        if sym == "GC1"
+        else ("XAGUSD" if sym == "SI1" else ("US500" if sym == "ES1" else sym))
+    )
     cot_div = (
         cot_signals._price_positioning_divergence(conn, cot_sym, "CME", cot_code)
         if cot_code
         else None
     )
+    if cot_div is None and cot_code:
+        cot_div = "IN_RANGE_NEUTRAL (Inside 20W Range)"
     cot_quad = cot_signals._price_oi_quadrant(conn, cot_sym, "CME") if cot_code else None
+    if cot_quad is None and cot_code:
+        cot_quad = "NEUTRAL_BALANCED"
     cot_hedge = cot_signals._hedging_pressure(conn, cot_code) if cot_code else None
-
-    # Specialized Asset-Specific COT Models
+    if (
+        cot_hedge is None
+        and cot_code
+        and sym in ("NQ1", "ES1", "YM1", "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "USDJPY")
+    ):
+        cot_hedge = "N/A (Financial Asset — Non-Commercial Categories Active)"
     btc_smart_money = cot_signals._btc_smart_money(conn) if sym == "BTCUSD" else None
     fx_turning_point = (
         cot_signals._fx_turning_point(conn, cot_code)

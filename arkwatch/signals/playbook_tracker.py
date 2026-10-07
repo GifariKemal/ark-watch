@@ -268,7 +268,54 @@ def evaluate_active_playbooks(
                     (trig_time, entry_price, json.dumps(cur_p), uid),
                 )
 
-                # Cancel opposing pending scenarios on same instrument, session & horizon
+                # 1. Close any existing ACTIVE opposing scenarios immediately (Reversal Exit Flip)
+                active_opposing = conn.execute(
+                    """
+                    SELECT scenario_uid, direction, entry_price, invalidation_level, payload_json, mfe_points, mae_points
+                    FROM playbook_scenarios
+                    WHERE symbol = ? AND session_id = ? AND horizon = ?
+                      AND state = 'ACTIVE' AND scenario_uid != ? AND direction != ?
+                    """,
+                    (sym, sc_sess_id, horizon, uid, direction),
+                ).fetchall()
+                for (
+                    opp_uid,
+                    opp_dir,
+                    opp_entry,
+                    opp_inval,
+                    opp_payload_str,
+                    _opp_mfe,
+                    _opp_mae,
+                ) in active_opposing:
+                    try:
+                        opp_p = json.loads(opp_payload_str) if opp_payload_str else {}
+                    except Exception:
+                        opp_p = {}
+                    opp_exit = entry_price
+                    opp_pnl = (
+                        (opp_exit - opp_entry) if opp_dir == "LONG" else (opp_entry - opp_exit)
+                    )
+                    opp_risk = abs(opp_entry - opp_inval) or 1.0
+                    opp_r = round(opp_pnl / opp_risk, 2)
+                    opp_p.setdefault("decision_log", []).append(
+                        {
+                            "ts_utc": trig_time,
+                            "event": "REVERSAL_EXIT_FLIP",
+                            "details": f"Market structure reversed: closed early at {opp_exit} (PnL: {round(opp_pnl, 2)}, {opp_r}R) because opposing setup {uid} triggered ACTIVE",
+                        }
+                    )
+                    conn.execute(
+                        """
+                        UPDATE playbook_scenarios
+                        SET state = 'CANCELLED_EXPIRED', resolved_at_utc = ?, exit_price = ?,
+                            pnl_points = ?, r_multiple = ?, payload_json = ?
+                        WHERE scenario_uid = ?
+                        """,
+                        (trig_time, opp_exit, round(opp_pnl, 2), opp_r, json.dumps(opp_p), opp_uid),
+                    )
+                    stats["resolved_losses" if opp_pnl < 0 else "resolved_wins"] += 1
+
+                # 2. Cancel opposing pending scenarios on same instrument, session & horizon
                 opposing_rows = conn.execute(
                     """
                     SELECT scenario_uid, payload_json FROM playbook_scenarios
@@ -308,19 +355,42 @@ def evaluate_active_playbooks(
             exit_price = None
             resolved_time = None
 
+            risk_dist = abs(entry_p - inval_p) or 1.0
+            be_ratchet_active = False
+
+            # Multi-Domain Catalyst Defense
+            try:
+                from .sentiment import compute_intraday_catalyst_radar
+
+                fast_cat = compute_intraday_catalyst_radar(
+                    conn, sym, window_hours=2, as_of=target_ts
+                )
+                cat_score = fast_cat.get("net_stance_score", 0.0) if fast_cat else 0.0
+            except Exception:
+                cat_score = 0.0
+
+            adverse_news_shock = (direction == "LONG" and cat_score <= -0.30) or (
+                direction == "SHORT" and cat_score >= 0.30
+            )
+            if adverse_news_shock:
+                if current_mfe > 0.0:
+                    be_ratchet_active = True
+                else:
+                    inval_p = (
+                        round(entry_p - (0.5 * risk_dist), 2)
+                        if direction == "LONG"
+                        else round(entry_p + (0.5 * risk_dist), 2)
+                    )
+
             for b in bars:
                 b_high = b[2]
                 b_low = b[3]
-
-                risk_dist = abs(entry_p - inval_p) or 1.0
-                be_ratchet_active = False
 
                 if direction == "LONG":
                     fav = b_high - entry_p
                     adv = entry_p - b_low
                     current_mfe = max(current_mfe, fav)
                     current_mae = max(current_mae, adv)
-
                     if current_mfe >= 1.0 * risk_dist:
                         be_ratchet_active = True
 

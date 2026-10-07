@@ -69,8 +69,10 @@ def vix9d_ratio(conn: sqlite3.Connection) -> dict | None:
     vx_val = vx[1] if vx[0] == ts else _value_at(conn, VIX, ts)
     if v9_val is None or vx_val is None or vx_val <= 0:
         return None
+    ratio_val = round(v9_val / vx_val, 3)
     return {
-        "ratio": round(v9_val / vx_val, 3),
+        "ratio": ratio_val,
+        "state": _state(ratio_val),
         "vix9d": v9_val,
         "vix": vx_val,
         "ts": ts,

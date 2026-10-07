@@ -336,24 +336,31 @@ def generate_trading_playbook(
         if cot_code
         else None
     )
-    if cot_div is None and cot_code:
-        cot_div = "IN_RANGE_NEUTRAL (Inside 20W Range)"
+    if cot_div is None:
+        cot_div = (
+            "IN_RANGE_NEUTRAL (Inside 20W Range)" if cot_code else "N/A (No COT Contract Mapping)"
+        )
     cot_quad = cot_signals._price_oi_quadrant(conn, cot_sym, "CME") if cot_code else None
-    if cot_quad is None and cot_code:
-        cot_quad = "NEUTRAL_BALANCED"
+    if cot_quad is None:
+        cot_quad = "NEUTRAL_BALANCED" if cot_code else "N/A (No COT Contract Mapping)"
     cot_hedge = cot_signals._hedging_pressure(conn, cot_code) if cot_code else None
-    if (
-        cot_hedge is None
-        and cot_code
-        and sym in ("NQ1", "ES1", "YM1", "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "USDJPY")
-    ):
-        cot_hedge = "N/A (Financial Asset — Non-Commercial Categories Active)"
+    if cot_hedge is None:
+        cot_hedge = (
+            "N/A (Financial Asset — Non-Commercial Categories Active)"
+            if (
+                cot_code
+                and sym in ("NQ1", "ES1", "YM1", "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "USDJPY")
+            )
+            else ("N/A (No COT Contract Mapping)" if not cot_code else "NEUTRAL_BALANCED")
+        )
     btc_smart_money = cot_signals._btc_smart_money(conn) if sym == "BTCUSD" else None
     fx_turning_point = (
         cot_signals._fx_turning_point(conn, cot_code)
         if sym in ("EURUSD", "GBPUSD", "USDJPY") and cot_code
         else None
     )
+    if sym in ("EURUSD", "GBPUSD", "USDJPY") and fx_turning_point is None:
+        fx_turning_point = "IN_RANGE_NORMAL (No COT Extreme Turning Point)"
     silver_52wk_gate = cot_signals._silver_52wk_gate(conn) if sym == "SI1" else None
 
     if fx_turning_point and "EXTREME" in str(fx_turning_point):
@@ -369,6 +376,8 @@ def generate_trading_playbook(
     etf_asset = etf_asset_map.get(sym)
     try:
         etf_mom = etf_flows.etf_flow_momentum(conn, etf_asset) if etf_asset else None
+        if isinstance(etf_mom, dict):
+            etf_mom = {k: (v if v is not None else 0.0) for k, v in etf_mom.items()}
     except Exception:
         etf_mom = None
 

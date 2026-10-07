@@ -243,6 +243,34 @@ def evaluate_active_playbooks(
                 entry_price = activation_bar[4]
                 trig_time = activation_bar[0]
 
+                target_already_passed = (direction == "LONG" and target_p <= entry_price) or (
+                    direction == "SHORT" and target_p >= entry_price
+                )
+                if target_already_passed:
+                    cur_payload_row = conn.execute(
+                        "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+                    ).fetchone()
+                    try:
+                        cur_p = json.loads(cur_payload_row[0]) if cur_payload_row else {}
+                    except Exception:
+                        cur_p = {}
+                    cur_p.setdefault("decision_log", []).append(
+                        {
+                            "ts_utc": trig_time,
+                            "event": "CANCELLED_EXPIRED",
+                            "details": f"Target price {target_p} was already surpassed upon trigger at {entry_price} (missed fill/slippage)",
+                        }
+                    )
+                    conn.execute(
+                        """
+                        UPDATE playbook_scenarios
+                        SET state = 'CANCELLED_EXPIRED', resolved_at_utc = ?, payload_json = ?
+                        WHERE scenario_uid = ?
+                        """,
+                        (trig_time, json.dumps(cur_p), uid),
+                    )
+                    stats["resolved_invalidated"] += 1
+                    continue
                 cur_payload_row = conn.execute(
                     "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
                 ).fetchone()
@@ -394,7 +422,7 @@ def evaluate_active_playbooks(
                     if current_mfe >= 1.0 * risk_dist:
                         be_ratchet_active = True
 
-                    if b_high >= target_p:
+                    if b_high >= target_p and target_p > entry_p:
                         resolved_state = "HIT_TARGET_WIN"
                         exit_price = target_p
                         resolved_time = b[0]
@@ -419,7 +447,7 @@ def evaluate_active_playbooks(
                     if current_mfe >= 1.0 * risk_dist:
                         be_ratchet_active = True
 
-                    if b_low <= target_p:
+                    if b_low <= target_p and target_p < entry_p:
                         resolved_state = "HIT_TARGET_WIN"
                         exit_price = target_p
                         resolved_time = b[0]
@@ -439,6 +467,8 @@ def evaluate_active_playbooks(
                 risk_dist = abs(entry_p - inval_p) or 1.0
                 r_mult = round(pnl / risk_dist, 2)
 
+                if resolved_state == "HIT_TARGET_WIN" and pnl <= 0.0:
+                    resolved_state = "CANCELLED_EXPIRED"
                 cur_payload_row = conn.execute(
                     "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
                 ).fetchone()

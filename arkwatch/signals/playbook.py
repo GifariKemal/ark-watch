@@ -647,27 +647,29 @@ def generate_trading_playbook(
         target_sp = round(single_prints[0]["price_mid"] + cfd_basis_offset, 2)
         sp_dir = "LONG" if target_sp > last_price else "SHORT"
         sp_inval = round((val if sp_dir == "LONG" else vah) + cfd_basis_offset, 2)
-        intraday_scenarios.append(
-            {
-                "id": "SCENARIO_INTRADAY_SINGLE_PRINT_REPAIR",
-                "horizon": "INTRADAY",
-                "title": f"TPO Single Print Imbalance Repair (Bracket {single_prints[0]['bracket']})",
-                "direction": sp_dir,
-                "trigger_condition": f"Price tests imbalance void; fills toward Single Print at {target_sp}",
-                "trigger_price": last_price,
-                "target_profit": target_sp,
-                "invalidation_level": sp_inval,
-                "risk_reward_ratio": round(
-                    abs(target_sp - last_price) / max(0.01, abs(last_price - sp_inval)), 2
-                ),
-                "invalidation_rationale": "Reversal away from single print void invalidates repair thesis.",
-                "empirical_support": {
-                    "rule": "Auction Market Theory Imbalance Repair Magnet",
-                    "single_print_bracket": single_prints[0]["bracket"],
-                    "source": "AMT Markets in Profile Liquidity Voids",
-                },
-            }
-        )
+        reward_span = abs(target_sp - last_price)
+        risk_span = max(0.01, abs(last_price - sp_inval))
+        rr_sp = round(reward_span / risk_span, 2)
+        if rr_sp >= 1.2:
+            intraday_scenarios.append(
+                {
+                    "id": "SCENARIO_INTRADAY_SINGLE_PRINT_REPAIR",
+                    "horizon": "INTRADAY",
+                    "title": f"TPO Single Print Imbalance Repair (Bracket {single_prints[0]['bracket']})",
+                    "direction": sp_dir,
+                    "trigger_condition": f"Price tests imbalance void; fills toward Single Print at {target_sp}",
+                    "trigger_price": last_price,
+                    "target_profit": target_sp,
+                    "invalidation_level": sp_inval,
+                    "risk_reward_ratio": rr_sp,
+                    "invalidation_rationale": "Reversal away from single print void invalidates repair thesis.",
+                    "empirical_support": {
+                        "rule": "Auction Market Theory Imbalance Repair Magnet",
+                        "single_print_bracket": single_prints[0]["bracket"],
+                        "source": "AMT Markets in Profile Liquidity Voids",
+                    },
+                }
+            )
 
     # [B] INTRADAY SCENARIO 2: Liquidity Sweep / Failed Auction (Trap Setup)
     if last_price >= pdh * 0.998 and not is_bullish_open_drive:

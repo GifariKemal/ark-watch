@@ -96,11 +96,13 @@ def session_intraday_intelligence(
         "latest_bar_ts": latest_bar[0],
         "close": round(latest_close, 4),
         "session_vwap": round(vwap, 4),
+        "vwap": round(vwap, 4),
         "vwap_spread_pct": round(vwap_spread, 3),
         "vwap_state": vwap_state,
         "latest_range": round(latest_range, 4),
         "atr_14": round(atr_14, 4),
         "expansion_ratio": round(expansion_ratio, 2),
+        "volatility_ratio": round(expansion_ratio, 2),
         "volatility_state": vol_state,
         "bars_in_session": len(session_rows),
     }

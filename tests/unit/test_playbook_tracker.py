@@ -257,3 +257,138 @@ def test_evaluate_counterfactual_outcomes(tmp_path):
     assert "GOOD_STOP_LOSS" in data["counterfactual_audit"]["verdict"]
 
     conn.close()
+
+
+def test_evaluate_active_playbooks_breakeven_ratchet(tmp_path):
+    db_file = tmp_path / "arkwatch.db"
+    conn = db.get_conn(db_file, allow_init=True)
+    t0 = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    t0_iso = t0.isoformat(timespec="seconds")
+
+    playbook_payload = {
+        "symbol": "NQ1",
+        "as_of": t0_iso,
+        "last_price": 31000.0,
+        "reference_levels": {"active_session_current": "2026-10-05"},
+        "scenarios": [
+            {
+                "id": "SCENARIO_EXPANSION_LONG",
+                "horizon": "INTRADAY",
+                "title": "Long Expansion",
+                "direction": "LONG",
+                "trigger_condition": "close above 31100",
+                "trigger_price": 31100.0,
+                "target_profit": 31300.0,
+                "invalidation_level": 31000.0,  # Risk is 100 pts (31100 -> 31000)
+                "risk_reward_ratio": 2.0,
+            }
+        ],
+    }
+    uids = playbook_tracker.record_playbook_scenarios(conn, playbook_payload)
+
+    # Bar 1 triggers at 31100
+    # Bar 2 rallies to 31220 (+120 pts MFE >= 100 pts risk -> Breakeven ratchet activated)
+    # Bar 3 drops back to 31090 (breaches entry 31100 -> HIT_BREAKEVEN)
+    t1_iso = (t0 + timedelta(minutes=5)).isoformat(timespec="seconds")
+    t2_iso = (t0 + timedelta(minutes=10)).isoformat(timespec="seconds")
+    t3_iso = (t0 + timedelta(minutes=15)).isoformat(timespec="seconds")
+
+    bars = [
+        ("NQ1", t1_iso, "5m", "YAHOO", 31050.0, 31110.0, 31040.0, 31100.0, 500.0, t1_iso),
+        ("NQ1", t2_iso, "5m", "YAHOO", 31100.0, 31220.0, 31090.0, 31200.0, 600.0, t2_iso),
+        ("NQ1", t3_iso, "5m", "YAHOO", 31200.0, 31210.0, 31080.0, 31090.0, 700.0, t3_iso),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        bars,
+    )
+    conn.commit()
+
+    stats = playbook_tracker.evaluate_active_playbooks(conn, as_of=t3_iso)
+    assert stats["activated"] == 1
+    assert stats["resolved_breakeven"] == 1
+
+    row = conn.execute(
+        "SELECT state, entry_price, exit_price, pnl_points, r_multiple, payload_json FROM playbook_scenarios WHERE scenario_uid = ?",
+        (uids[0],),
+    ).fetchone()
+    assert row[0] == "CANCELLED_EXPIRED"
+    assert row[1] == 31100.0  # entry
+    assert row[2] == 31100.0  # breakeven exit
+    assert row[3] == 0.0  # 0 pts pnl
+    assert row[4] == 0.0  # 0R
+    import json
+
+    payload = json.loads(row[5])
+    assert payload["decision_log"][-1]["event"] == "HIT_BREAKEVEN"
+
+    conn.close()
+    conn = db.get_conn(db_file, allow_init=True)
+    t0 = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    t0_iso = t0.isoformat(timespec="seconds")
+
+    playbook_payload = {
+        "symbol": "ES1",
+        "as_of": t0_iso,
+        "last_price": 5000.0,
+        "reference_levels": {"active_session_current": "2026-10-05"},
+        "scenarios": [
+            {
+                "id": "SCENARIO_LONG",
+                "horizon": "INTRADAY",
+                "title": "ES Long",
+                "direction": "LONG",
+                "trigger_condition": "above 5020",
+                "trigger_price": 5020.0,
+                "target_profit": 5050.0,
+                "invalidation_level": 4980.0,
+                "risk_reward_ratio": 1.5,
+            },
+            {
+                "id": "SCENARIO_SHORT",
+                "horizon": "INTRADAY",
+                "title": "ES Short",
+                "direction": "SHORT",
+                "trigger_condition": "below 4980",
+                "trigger_price": 4980.0,
+                "target_profit": 4940.0,
+                "invalidation_level": 5010.0,
+                "risk_reward_ratio": 1.5,
+            },
+        ],
+    }
+    uids = playbook_tracker.record_playbook_scenarios(conn, playbook_payload)
+    assert len(uids) == 2
+
+    # Bar 1 drops to 4975:
+    # 1. Triggers SHORT (since 4975 <= 4980) -> SCENARIO_SHORT becomes ACTIVE
+    # 2. SCENARIO_LONG had invalidation at 4980, and price dropped to 4975 -> invalidated / cancelled superseded!
+    t1_iso = (t0 + timedelta(minutes=5)).isoformat(timespec="seconds")
+    bars = [
+        ("ES1", t1_iso, "5m", "YAHOO", 4995.0, 4998.0, 4970.0, 4975.0, 500.0, t1_iso),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        bars,
+    )
+    conn.commit()
+
+    stats = playbook_tracker.evaluate_active_playbooks(conn, as_of=t1_iso)
+    assert stats["activated"] == 1
+
+    states = dict(
+        conn.execute(
+            "SELECT scenario_id, state FROM playbook_scenarios WHERE scenario_uid IN (?, ?)",
+            (uids[0], uids[1]),
+        ).fetchall()
+    )
+    assert states["SCENARIO_SHORT"] == "ACTIVE"
+    assert states["SCENARIO_LONG"] == "CANCELLED_EXPIRED"
+
+    conn.close()

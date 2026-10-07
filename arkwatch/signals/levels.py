@@ -132,9 +132,9 @@ def compute_session_reference_levels(
         idx = sorted_sessions.index(curr_session_id)
         prior_session_id = sorted_sessions[idx - 1] if idx > 0 else sorted_sessions[0]
     else:
+        idx = len(sorted_sessions) - 1
         prior_session_id = sorted_sessions[-1]
         curr_session_id = prior_session_id
-
     prior_bars = session_bars[prior_session_id]
     curr_bars = session_bars.get(curr_session_id, [rows[-1]])
 

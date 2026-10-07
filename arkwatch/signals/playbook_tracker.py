@@ -126,22 +126,30 @@ def evaluate_active_playbooks(
         """
         SELECT scenario_uid, symbol, horizon, direction, scenario_id,
                trigger_price, target_profit, invalidation_level, risk_reward_ratio,
-               created_at_utc, state, entry_price, mfe_points, mae_points
+               created_at_utc, state, entry_price, mfe_points, mae_points, session_id
         FROM playbook_scenarios
         WHERE state IN ('PENDING_TRIGGER', 'ACTIVE')
         """
     ).fetchall()
 
     if not pending_or_active:
-        return {"evaluated": 0, "activated": 0, "resolved_wins": 0, "resolved_losses": 0}
+        return {
+            "evaluated": 0,
+            "activated": 0,
+            "resolved_wins": 0,
+            "resolved_losses": 0,
+            "resolved_breakeven": 0,
+            "resolved_invalidated": 0,
+        }
 
     stats = {
         "evaluated": len(pending_or_active),
         "activated": 0,
         "resolved_wins": 0,
         "resolved_losses": 0,
+        "resolved_breakeven": 0,
+        "resolved_invalidated": 0,
     }
-
     for row in pending_or_active:
         (
             uid,
@@ -158,8 +166,8 @@ def evaluate_active_playbooks(
             entry_p,
             mfe,
             mae,
+            sc_sess_id,
         ) = row
-
         # Fetch subsequent bars since creation
         bars = conn.execute(
             """
@@ -177,31 +185,64 @@ def evaluate_active_playbooks(
             continue
 
         if state == "PENDING_TRIGGER":
-            # Check for activation trigger
             activated = False
+            invalidated = False
             activation_bar = None
+            inval_bar = None
             for b in bars:
                 b_high = b[2]
                 b_low = b[3]
                 b_close = b[4]
                 if direction == "LONG":
-                    # Long activates if price pushed above trigger price
+                    if b_low <= inval_p:
+                        invalidated = True
+                        inval_bar = b
+                        break
                     if b_close >= trig_p or b_high >= trig_p:
                         activated = True
                         activation_bar = b
                         break
                 elif direction == "SHORT":
-                    # Short activates if price dropped below trigger price
+                    if b_high >= inval_p:
+                        invalidated = True
+                        inval_bar = b
+                        break
                     if b_close <= trig_p or b_low <= trig_p:
                         activated = True
                         activation_bar = b
                         break
 
+            if invalidated and inval_bar:
+                inval_time = inval_bar[0]
+                cur_payload_row = conn.execute(
+                    "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+                ).fetchone()
+                try:
+                    cur_p = json.loads(cur_payload_row[0]) if cur_payload_row else {}
+                except Exception:
+                    cur_p = {}
+                cur_p.setdefault("decision_log", []).append(
+                    {
+                        "ts_utc": inval_time,
+                        "event": "INVALIDATED_BEFORE_TRIGGER",
+                        "details": f"Price breached invalidation level {inval_p} on bar {inval_time} before trigger {trig_p}",
+                    }
+                )
+                conn.execute(
+                    """
+                    UPDATE playbook_scenarios
+                    SET state = 'CANCELLED_EXPIRED', resolved_at_utc = ?, payload_json = ?
+                    WHERE scenario_uid = ?
+                    """,
+                    (inval_time, json.dumps(cur_p), uid),
+                )
+                stats["resolved_invalidated"] += 1
+                continue
+
             if activated and activation_bar:
                 entry_price = activation_bar[4]
                 trig_time = activation_bar[0]
 
-                # Update payload decision log
                 cur_payload_row = conn.execute(
                     "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
                 ).fetchone()
@@ -226,12 +267,40 @@ def evaluate_active_playbooks(
                     """,
                     (trig_time, entry_price, json.dumps(cur_p), uid),
                 )
+
+                # Cancel opposing pending scenarios on same instrument, session & horizon
+                opposing_rows = conn.execute(
+                    """
+                    SELECT scenario_uid, payload_json FROM playbook_scenarios
+                    WHERE symbol = ? AND session_id = ? AND horizon = ?
+                      AND state = 'PENDING_TRIGGER' AND scenario_uid != ?
+                    """,
+                    (sym, sc_sess_id, horizon, uid),
+                ).fetchall()
+                for opp_uid, opp_payload_str in opposing_rows:
+                    try:
+                        opp_p = json.loads(opp_payload_str) if opp_payload_str else {}
+                    except Exception:
+                        opp_p = {}
+                    opp_p.setdefault("decision_log", []).append(
+                        {
+                            "ts_utc": trig_time,
+                            "event": "CANCELLED_SUPERSEDED",
+                            "details": f"Cancelled because scenario {uid} activated first",
+                        }
+                    )
+                    conn.execute(
+                        """
+                        UPDATE playbook_scenarios
+                        SET state = 'CANCELLED_EXPIRED', resolved_at_utc = ?, payload_json = ?
+                        WHERE scenario_uid = ?
+                        """,
+                        (trig_time, json.dumps(opp_p), opp_uid),
+                    )
                 stats["activated"] += 1
                 state = "ACTIVE"
                 entry_p = entry_price
-                # Filter bars after activation
                 bars = [b for b in bars if b[0] >= trig_time]
-
         if state == "ACTIVE" and entry_p:
             current_mfe = mfe or 0.0
             current_mae = mae or 0.0
@@ -243,20 +312,28 @@ def evaluate_active_playbooks(
                 b_high = b[2]
                 b_low = b[3]
 
+                risk_dist = abs(entry_p - inval_p) or 1.0
+                be_ratchet_active = False
+
                 if direction == "LONG":
-                    # Update MFE & MAE
                     fav = b_high - entry_p
                     adv = entry_p - b_low
                     current_mfe = max(current_mfe, fav)
                     current_mae = max(current_mae, adv)
 
-                    # Check Target Hit (WIN)
+                    if current_mfe >= 1.0 * risk_dist:
+                        be_ratchet_active = True
+
                     if b_high >= target_p:
                         resolved_state = "HIT_TARGET_WIN"
                         exit_price = target_p
                         resolved_time = b[0]
                         break
-                    # Check Stop Hit (LOSS)
+                    if be_ratchet_active and b_low <= entry_p:
+                        resolved_state = "HIT_BREAKEVEN"
+                        exit_price = entry_p
+                        resolved_time = b[0]
+                        break
                     if b_low <= inval_p:
                         resolved_state = "HIT_STOP_LOSS"
                         exit_price = inval_p
@@ -269,9 +346,17 @@ def evaluate_active_playbooks(
                     current_mfe = max(current_mfe, fav)
                     current_mae = max(current_mae, adv)
 
+                    if current_mfe >= 1.0 * risk_dist:
+                        be_ratchet_active = True
+
                     if b_low <= target_p:
                         resolved_state = "HIT_TARGET_WIN"
                         exit_price = target_p
+                        resolved_time = b[0]
+                        break
+                    if be_ratchet_active and b_high >= entry_p:
+                        resolved_state = "HIT_BREAKEVEN"
+                        exit_price = entry_p
                         resolved_time = b[0]
                         break
                     if b_high >= inval_p:
@@ -279,7 +364,6 @@ def evaluate_active_playbooks(
                         exit_price = inval_p
                         resolved_time = b[0]
                         break
-
             if resolved_state:
                 pnl = (exit_price - entry_p) if direction == "LONG" else (entry_p - exit_price)
                 risk_dist = abs(entry_p - inval_p) or 1.0
@@ -300,6 +384,9 @@ def evaluate_active_playbooks(
                     }
                 )
 
+                db_state = (
+                    "CANCELLED_EXPIRED" if resolved_state == "HIT_BREAKEVEN" else resolved_state
+                )
                 conn.execute(
                     """
                     UPDATE playbook_scenarios
@@ -309,7 +396,7 @@ def evaluate_active_playbooks(
                     WHERE scenario_uid = ?
                     """,
                     (
-                        resolved_state,
+                        db_state,
                         resolved_time,
                         exit_price,
                         round(current_mfe, 2),
@@ -322,10 +409,11 @@ def evaluate_active_playbooks(
                 )
                 if resolved_state == "HIT_TARGET_WIN":
                     stats["resolved_wins"] += 1
+                elif resolved_state == "HIT_BREAKEVEN":
+                    stats["resolved_breakeven"] += 1
                 else:
                     stats["resolved_losses"] += 1
             else:
-                # Update current MFE/MAE snapshot while trade remains active
                 conn.execute(
                     """
                     UPDATE playbook_scenarios
@@ -334,7 +422,6 @@ def evaluate_active_playbooks(
                     """,
                     (round(current_mfe, 2), round(current_mae, 2), uid),
                 )
-
     conn.commit()
     return stats
 
@@ -381,13 +468,15 @@ def get_playbook_performance_metrics(
             "avg_mfe": 0.0,
             "avg_mae": 0.0,
         }
-
     wins = [r for r in rows if r[0] == "HIT_TARGET_WIN"]
+    breakevens = [
+        r for r in rows if r[0] == "CANCELLED_EXPIRED" and r[1] == 0.0 and r[3] and r[3] > 0
+    ]
     losses = [r for r in rows if r[0] == "HIT_STOP_LOSS"]
+    cancelled = [r for r in rows if r[0] == "CANCELLED_EXPIRED" and r not in breakevens]
     pending = sum(1 for r in rows if r[0] == "PENDING_TRIGGER")
     active = sum(1 for r in rows if r[0] == "ACTIVE")
-    completed = len(wins) + len(losses)
-
+    completed = len(wins) + len(losses) + len(breakevens)
     win_rate = round((len(wins) / completed * 100), 1) if completed > 0 else 0.0
 
     gross_profit = sum(r[1] for r in wins if r[1] and r[1] > 0)
@@ -411,7 +500,9 @@ def get_playbook_performance_metrics(
         "total_scenarios": len(rows),
         "completed_trades": completed,
         "wins": len(wins),
+        "breakevens": len(breakevens),
         "losses": len(losses),
+        "invalidated": len(cancelled),
         "pending": pending,
         "active": active,
         "win_rate_pct": win_rate,

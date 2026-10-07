@@ -191,14 +191,13 @@ def generate_trading_playbook(
     vpoc_tpoc_align = ctx.get("vpoc_tpoc_alignment", {})
     # 2. Fetch Intraday Price Action (VWAP and ATR)
     pa = session_intraday_intelligence(conn, sym, as_of=as_of)
-    vwap = pa.get("vwap") if pa else None
+    vwap = (pa.get("session_vwap") or pa.get("vwap")) if pa else None
     atr_14 = pa.get("atr_14") if pa else None
     if atr_14 is None or atr_14 <= 0.0:
         atr_14 = max(0.001, (pdh - pdl) * 0.5)
 
-    volatility_ratio = pa.get("volatility_ratio", 1.0) if pa else 1.0
+    volatility_ratio = pa.get("expansion_ratio") or pa.get("volatility_ratio", 1.0) if pa else 1.0
     vwap_state = pa.get("vwap_state", "NEUTRAL") if pa else "NEUTRAL"
-
     # 3. Fetch Fast Intraday Catalyst & Macro Swing Sentiment
     fast_cat = compute_intraday_catalyst_radar(conn, sym, window_hours=4, as_of=as_of)
     swing_sent = compute_asset_sentiment_radar(conn, sym, window_days=3, as_of=as_of)

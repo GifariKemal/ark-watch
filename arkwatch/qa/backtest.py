@@ -193,12 +193,17 @@ def main(argv: list[str] | None = None) -> int:
 
     fdr = _fdr_guardrail(results)
     if fdr:
+        if "warning" in fdr[0]:
+            print(f"\n=== FDR GUARDRAIL ===\n  ⚠ {fdr[0]['warning']}")
+            return 0
         print("\n=== FDR GUARDRAIL (Benjamini-Hochberg α=0.05) ===")
         n_sig = sum(1 for f in fdr if f.get("significant_after_fdr"))
         print(f"  {n_sig}/{len(fdr)} signals PASS after multiple-testing correction:\n")
         for f in fdr:
             flag = "✅" if f.get("significant_after_fdr") else "❌"
-            print(f"  {flag} {f['signal']:<28} p={f['p_raw']:.4f} → FDR={f['p_fdr']:.4f}")
+            print(
+                f"  {flag} {f.get('signal', 'N/A'):<28} p={f['p_raw']:.4f} → FDR={f['p_fdr']:.4f}"
+            )
         if n_sig == 0:
             print("\n  ⚠ NO signals pass FDR — all findings are likely noise.")
     return 0

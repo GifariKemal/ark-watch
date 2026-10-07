@@ -431,7 +431,7 @@ def run_loop():
             ):
                 last_market_bucket = market_bucket
                 _run_job("market", "Five-minute cross-asset timeline")
-
+                _run_job("scanner", "Opportunity scanner and playbook tracker")
             news_interval = _market_news_interval(now_wib)
             news_bucket = now_wib.strftime("%Y%m%d%H") + f"{now_wib.minute // news_interval:02d}"
             if now_wib.minute % news_interval == 0 and news_bucket != last_news_bucket:

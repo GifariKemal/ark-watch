@@ -56,6 +56,13 @@ def record_playbook_scenarios(
                 "catalysts": playbook_payload.get("catalysts", {}),
                 "multi_domain": playbook_payload.get("multi_domain", {}),
                 "amt_context": playbook_payload.get("amt_context", {}),
+                "decision_log": [
+                    {
+                        "ts_utc": now_utc,
+                        "event": "CREATED_PENDING",
+                        "details": f"Scenario created with trigger {trigger_price}, TP {target_p}, SL {inval_p}",
+                    }
+                ],
             }
         )
 
@@ -193,14 +200,31 @@ def evaluate_active_playbooks(
             if activated and activation_bar:
                 entry_price = activation_bar[4]
                 trig_time = activation_bar[0]
+
+                # Update payload decision log
+                cur_payload_row = conn.execute(
+                    "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+                ).fetchone()
+                try:
+                    cur_p = json.loads(cur_payload_row[0]) if cur_payload_row else {}
+                except Exception:
+                    cur_p = {}
+                cur_p.setdefault("decision_log", []).append(
+                    {
+                        "ts_utc": trig_time,
+                        "event": "TRIGGERED_ACTIVE",
+                        "details": f"Trigger met at price {entry_price} on bar {trig_time}",
+                    }
+                )
+
                 conn.execute(
                     """
                     UPDATE playbook_scenarios
                     SET state = 'ACTIVE', triggered_at_utc = ?, entry_price = ?,
-                        mfe_points = 0.0, mae_points = 0.0
+                        mfe_points = 0.0, mae_points = 0.0, payload_json = ?
                     WHERE scenario_uid = ?
                     """,
-                    (trig_time, entry_price, uid),
+                    (trig_time, entry_price, json.dumps(cur_p), uid),
                 )
                 stats["activated"] += 1
                 state = "ACTIVE"
@@ -261,11 +285,27 @@ def evaluate_active_playbooks(
                 risk_dist = abs(entry_p - inval_p) or 1.0
                 r_mult = round(pnl / risk_dist, 2)
 
+                cur_payload_row = conn.execute(
+                    "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+                ).fetchone()
+                try:
+                    cur_p = json.loads(cur_payload_row[0]) if cur_payload_row else {}
+                except Exception:
+                    cur_p = {}
+                cur_p.setdefault("decision_log", []).append(
+                    {
+                        "ts_utc": resolved_time,
+                        "event": resolved_state,
+                        "details": f"Exit reached at {exit_price}. PnL: {round(pnl, 2)} pts ({r_mult}R). MFE: +{round(current_mfe, 2)}, MAE: -{round(current_mae, 2)}",
+                    }
+                )
+
                 conn.execute(
                     """
                     UPDATE playbook_scenarios
                     SET state = ?, resolved_at_utc = ?, exit_price = ?,
-                        mfe_points = ?, mae_points = ?, pnl_points = ?, r_multiple = ?
+                        mfe_points = ?, mae_points = ?, pnl_points = ?, r_multiple = ?,
+                        payload_json = ?
                     WHERE scenario_uid = ?
                     """,
                     (
@@ -276,6 +316,7 @@ def evaluate_active_playbooks(
                         round(current_mae, 2),
                         round(pnl, 2),
                         r_mult,
+                        json.dumps(cur_p),
                         uid,
                     ),
                 )

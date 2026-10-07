@@ -828,6 +828,7 @@ def generate_trading_playbook(
     ):
         swing_scenarios.append(
             {
+                "id": "SCENARIO_SWING_NAKED_POC_TARGET_SHORT",
                 "horizon": "SWING",
                 "title": f"Swing Value Migration to Naked POC ({naked_poc_below})",
                 "direction": "SHORT",
@@ -854,10 +855,10 @@ def generate_trading_playbook(
     ):
         swing_scenarios.append(
             {
+                "id": "SCENARIO_SWING_NAKED_POC_TARGET_LONG",
+                "horizon": "SWING",
                 "title": f"Swing Value Migration to Naked POC ({naked_poc_above})",
                 "direction": "LONG",
-                "trigger_condition": f"Value migration remains {value_migration}; price holds below Weekly VWAP ({levels.get('WEEKLY_VWAP')})",
-                "trigger_price": levels.get("WEEKLY_VWAP") or last_price,
                 "target_profit": round(naked_poc_above + cfd_basis_offset, 2),
                 "invalidation_level": round((pdl or last_price) + cfd_basis_offset, 2),
                 "risk_reward_ratio": round(

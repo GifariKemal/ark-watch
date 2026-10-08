@@ -103,12 +103,24 @@ def compute_horizon_amt(
         "vah": va["vah"],
         "val": va["val"],
         "poc": va["poc"],
-        "tpo_vah": tpo_data.get("tpo_vah"),
-        "tpo_val": tpo_data.get("tpo_val"),
-        "tpo_poc": tpo_data.get("tpo_poc"),
+        "tpo_vah": (
+            tpo_data.get("tpo_vah")
+            if tpo_data.get("tpo_vah") is not None
+            else "N/A_DURATION_UNDER_30M"
+        ),
+        "tpo_val": (
+            tpo_data.get("tpo_val")
+            if tpo_data.get("tpo_val") is not None
+            else "N/A_DURATION_UNDER_30M"
+        ),
+        "tpo_poc": (
+            tpo_data.get("tpo_poc")
+            if tpo_data.get("tpo_poc") is not None
+            else "N/A_DURATION_UNDER_30M"
+        ),
         "single_prints_count": len(tpo_data.get("single_prints", [])),
-        "initial_balance_high": round(ib_high, 4),
-        "initial_balance_low": round(ib_low, 4),
+        "initial_balance_high": round(ib_high, 4) if ib_high is not None else "N/A",
+        "initial_balance_low": round(ib_low, 4) if ib_low is not None else "N/A",
         "vpoc_alignment": vpoc_align.get("relationship", "ALIGNED"),
         "vpoc_bias": vpoc_align.get("bias", "NEUTRAL"),
         "high_auction_structure": extremes.get("high_structure", "NORMAL"),

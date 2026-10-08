@@ -40,6 +40,11 @@ SESSION.mount(
 )
 
 
+# a healthy chart call takes <2s; a throttled/tarpitted proxy egress must fail fast so one
+# slow symbol cannot stall the whole sweep (connect, read) seconds
+YAHOO_TIMEOUT = (5, 20)
+
+
 class YahooError(RuntimeError):
     pass
 
@@ -63,7 +68,7 @@ def fetch_meta(symbol: str) -> dict:
         f"{BASE}/{symbol}",
         params={"interval": "1d", "range": "5d"},
         headers=UA,
-        timeout=(10, 60),
+        timeout=YAHOO_TIMEOUT,
         proxies=_proxies(),
     )
     if r.status_code != 200:
@@ -86,7 +91,7 @@ def fetch_daily(symbol: str, *, start_ts: int = 0, end_ts: int = 9999999999) -> 
             "period2": end_ts,
         },
         headers=UA,
-        timeout=(10, 60),
+        timeout=YAHOO_TIMEOUT,
         proxies=_proxies(),
     )
     if r.status_code != 200:
@@ -125,7 +130,7 @@ def fetch_intraday(symbol: str, *, interval: str = "5m", range_: str = "1d") -> 
         f"{BASE}/{symbol}",
         params={"interval": interval, "range": range_, "includePrePost": "true"},
         headers=UA,
-        timeout=(10, 60),
+        timeout=YAHOO_TIMEOUT,
         proxies=_proxies(),
     )
     if r.status_code != 200:

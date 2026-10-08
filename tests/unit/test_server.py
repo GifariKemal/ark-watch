@@ -163,6 +163,31 @@ def test_startup_refuses_short_or_missing_key(seeded, monkeypatch):
         assert cl.get("/v1/series").status_code == 200
 
 
+def test_no_auth_switch_ignored_outside_pytest(seeded, monkeypatch):
+    monkeypatch.delenv("ARKWATCH_API_KEY")
+    monkeypatch.setenv("ARKWATCH_ALLOW_NO_AUTH", "1")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST")  # what a production process looks like
+    with pytest.raises(RuntimeError, match="ARKWATCH_API_KEY"), TestClient(app):
+        pass
+    monkeypatch.setenv("ARKWATCH_API_KEY", " " * 40)  # whitespace is not a key
+    with pytest.raises(RuntimeError, match="ARKWATCH_API_KEY"), TestClient(app):
+        pass
+
+
+def test_docs_and_openapi_not_served(client):
+    for path in ("/docs", "/redoc", "/openapi.json", "/v1/openapi.json"):
+        assert client.get(path, headers={"x-arkwatch-key": ""}).status_code in (401, 404)
+
+
+def test_audit_log_is_append_only(seeded):
+    c = db.get_conn(seeded, allow_init=True)
+    c.execute("INSERT INTO audit_log(ts,actor,action) VALUES ('t','a','x')")
+    for sql in ("UPDATE audit_log SET actor='z'", "DELETE FROM audit_log"):
+        with pytest.raises(Exception, match="append-only"):
+            c.execute(sql)
+    c.close()
+
+
 # --- reads ----------------------------------------------------------------------
 
 

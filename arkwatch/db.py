@@ -649,6 +649,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
   detail_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
 CREATE TABLE playbook_scenarios_v33 (
   scenario_uid TEXT PRIMARY KEY,
   symbol TEXT NOT NULL,

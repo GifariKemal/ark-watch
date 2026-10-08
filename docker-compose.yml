@@ -9,9 +9,9 @@ x-app: &app
   image: arkwatch:latest
   init: true
   restart: unless-stopped
-  env_file:
-    - path: .env
-      required: false
+  # least privilege: no extra capabilities, no setuid escalation
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
   volumes:
     - arkwatch-data:/data
 
@@ -19,6 +19,10 @@ services:
   daemon:
     <<: *app
     command: ["python", "-m", "arkwatch", "daemon"]
+    # only the daemon sees the third-party credentials (FRED, Telegram, NLP, ...)
+    env_file:
+      - path: .env
+        required: false
     mem_limit: 1g
     stop_grace_period: 60s
     healthcheck:
@@ -37,6 +41,8 @@ services:
     # read-only by contract: the api opens SQLite with mode=ro. The volume stays
     # rw on purpose - a WAL reader still needs the -shm file writable.
     mem_limit: 512m
+    read_only: true
+    tmpfs: ["/tmp"]
     depends_on:
       - daemon
     expose:

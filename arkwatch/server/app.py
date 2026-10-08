@@ -85,8 +85,12 @@ def _err(status: int, code: str, error: str, detail: Any = None) -> JSONResponse
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    key = os.environ.get("ARKWATCH_API_KEY", "")
-    if len(key) < MIN_KEY_LEN and os.environ.get("ARKWATCH_ALLOW_NO_AUTH") != "1":
+    key = os.environ.get("ARKWATCH_API_KEY", "").strip()
+    # the no-auth switch only exists for the test suite: a stray env line must not open prod
+    no_auth_ok = os.environ.get("ARKWATCH_ALLOW_NO_AUTH") == "1" and bool(
+        os.environ.get("PYTEST_CURRENT_TEST")
+    )
+    if len(key) < MIN_KEY_LEN and not no_auth_ok:
         raise RuntimeError(
             f"ARKWATCH_API_KEY must be set to >= {MIN_KEY_LEN} chars "
             "(ARKWATCH_ALLOW_NO_AUTH=1 disables auth, tests only)"
@@ -106,6 +110,10 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
     responses=_ERR,
+    # no unauthenticated schema disclosure; `export_openapi` calls app.openapi() directly
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 

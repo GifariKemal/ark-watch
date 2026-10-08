@@ -16,6 +16,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .harvest import _redact
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 # Allowlist = the daemon's idempotent fetch/compute jobs (SCHEDULE commands
@@ -77,12 +79,14 @@ def run_pending_jobs(conn: sqlite3.Connection, *, timeout: int = JOB_TIMEOUT_S) 
                     encoding="utf-8",
                     errors="replace",
                 )
-                tail = [ln for ln in (r.stdout or "").splitlines() if ln.strip()][-3:]
+                tail = [_redact(ln) for ln in (r.stdout or "").splitlines() if ln.strip()][-3:]
                 result = {"returncode": r.returncode, "tail": tail}
                 if r.returncode == 0:
                     status = "done"
                 else:
-                    error = ((r.stderr or "").strip().splitlines() or ["no output"])[-1][:500]
+                    error = _redact(((r.stderr or "").strip().splitlines() or ["no output"])[-1])[
+                        :500
+                    ]
             except subprocess.TimeoutExpired:
                 error = f"timeout after {timeout}s"
         conn.execute(

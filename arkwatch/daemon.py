@@ -3,15 +3,19 @@
 A 30-second loop checks the WIB clock and runs due jobs as subprocesses. Each
 job is a fresh Python process (crashes/leaks do not spread). The heartbeat
 file is refreshed every loop; if it goes stale for more than 5 minutes, the
-daemon is dead or hung. A lockfile prevents a second instance (duplicate
-briefs).
+daemon is dead or hung (`python -m arkwatch healthcheck`). An OS advisory
+lock on daemon.lock prevents a second instance (duplicate briefs); the kernel
+drops it when the holder dies, so a restart never sees a phantom owner.
 Run: python -m arkwatch daemon
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -20,9 +24,16 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
-HEARTBEAT = ROOT / "data" / "daemon_heartbeat"
-LOCKFILE = ROOT / "data" / "daemon.lock"
-LOG_DIR = ROOT / "logs"
+# Docker sets ARKWATCH_DATA_DIR=/data: DB, state, logs and backups on the volume
+_DATA_ENV = os.environ.get("ARKWATCH_DATA_DIR")
+DATA_DIR = Path(_DATA_ENV) if _DATA_ENV else ROOT / "data"
+DB_PATH = DATA_DIR / "arkwatch.db"
+HEARTBEAT = DATA_DIR / "daemon_heartbeat"
+LOCKFILE = DATA_DIR / "daemon.lock"
+LOG_DIR = DATA_DIR / "logs" if _DATA_ENV else ROOT / "logs"
+LOG_RETENTION_DAYS = 14
+HEALTH_MAX_AGE_S = 300  # the 5-minute staleness contract (D-018c)
+HEARTBEAT_EVERY_S = 30.0  # heartbeat cadence while a job subprocess runs
 WIB = ZoneInfo("Asia/Jakarta")
 LONDON = ZoneInfo("Europe/London")
 NEW_YORK = ZoneInfo("America/New_York")
@@ -70,6 +81,10 @@ SCHEDULE = [
     (7, 15, "daily", "verify", "Truth gate"),
     (8, 15, "daily", "cme", "CME settlements + CVOL + VOI (gray harvester)"),
     (8, 30, "daily", "f2", "COT + flows (Bybit/Farside/PBoC/LBMA/TIC/LME) + FedWatch"),
+    # nightly local snapshot (VACUUM INTO + verify + rotation); offsite copies
+    # are Litestream's job. Listed before gdelt-retention: same-slot order =
+    # launch order, so Sunday's purge runs after the night's backup
+    (23, 30, "daily", "backup", "Nightly DB backup + verify + rotation"),
     (23, 45, "sunday", "gdelt-retention --apply", "Purge GDELT data outside the current UTC week"),
     (22, 0, "sunday", "alfred", "Weekly maintenance + vintage audit"),
     # ROUND-4: the blindness class that started this whole audit (calendar
@@ -169,20 +184,125 @@ def _setup_logging():
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
     logger.setLevel(logging.INFO)
     logger.addHandler(fh)
-    # stderr mirror only for interactive runs — under systemd the unit's
-    # StandardError=append doubles EVERY line into logs/daemon-err.log which
-    # nothing rotates (audit round-2: 800KB duplicate log after ~2 months)
-    import sys as _sys
+    # stdout mirror always: `docker logs` is the primary view in the container
+    # (the old systemd StandardError=append duplication was on stderr)
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
+    logger.addHandler(sh)
+    cutoff = time.time() - LOG_RETENTION_DAYS * 86400
+    for old in LOG_DIR.glob("daemon-*.log"):
+        with contextlib.suppress(OSError):
+            if old.stat().st_mtime < cutoff:
+                old.unlink()
 
-    if _sys.stderr.isatty():
-        sh = logging.StreamHandler()
-        sh.setFormatter(logging.Formatter("daemon: %(message)s"))
-        logger.addHandler(sh)
+
+def _atomic_write(path: Path, text: str) -> None:
+    """tmp + os.replace: a crash mid-write never leaves a torn file behind."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _heartbeat():
-    HEARTBEAT.parent.mkdir(exist_ok=True)
-    HEARTBEAT.write_text(datetime.now(UTC).isoformat(timespec="seconds"))
+    _atomic_write(HEARTBEAT, datetime.now(UTC).isoformat(timespec="seconds"))
+
+
+def healthcheck(heartbeat: Path | None = None, db_path: Path | None = None) -> int:
+    """Docker HEALTHCHECK: 0 = heartbeat fresh (<5 min) and DB readable."""
+    import sqlite3
+
+    try:
+        beat = datetime.fromisoformat((heartbeat or HEARTBEAT).read_text().strip())
+        age = (datetime.now(UTC) - beat).total_seconds()
+        conn = sqlite3.connect(f"file:{db_path or DB_PATH}?mode=ro", uri=True)
+        try:
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        finally:
+            conn.close()
+    except Exception as ex:
+        print(f"unhealthy: {type(ex).__name__}: {ex}")
+        return 1
+    if age > HEALTH_MAX_AGE_S:
+        print(f"unhealthy: heartbeat {age:.0f}s old")
+        return 1
+    print(f"ok: heartbeat {age:.0f}s old")
+    return 0
+
+
+def _acquire_lock(path: Path | None = None):
+    """Non-blocking OS advisory lock; returns the open handle (hold it for the
+    process lifetime) or None when another live process holds it. The kernel
+    releases it on death: the old PID file + os.kill(pid, 0) check looked
+    alive forever in Docker (PID 1 after a restart) and crash-looped."""
+    path = path or LOCKFILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "a+")  # noqa: SIM115 - held until release/exit
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None
+    return fh
+
+
+def _signal_group(proc: subprocess.Popen, sig: int) -> None:
+    with contextlib.suppress(ProcessLookupError):
+        if os.name == "nt":
+            proc.send_signal(sig)  # SIGTERM -> TerminateProcess
+        else:
+            os.killpg(proc.pid, sig)
+
+
+def _stop_child(proc: subprocess.Popen, grace_s: float = 20.0) -> None:
+    """SIGTERM the job's process group, SIGKILL after the grace period."""
+    if proc.poll() is not None:
+        return
+    _signal_group(proc, signal.SIGTERM)
+    try:
+        proc.wait(timeout=grace_s)
+    except subprocess.TimeoutExpired:
+        _signal_group(proc, getattr(signal, "SIGKILL", signal.SIGTERM))
+        proc.wait()
+
+
+def _spawn(argv: list[str], timeout_s: float) -> tuple[int, str, str]:
+    """Run one job subprocess in its own process group, refreshing the
+    heartbeat every HEARTBEAT_EVERY_S so a long job (harvest ~6 min) never
+    looks like a hung daemon. Raises TimeoutExpired past timeout_s. The
+    finally reaps the group on every exit path, including SIGTERM unwinding
+    through here as SystemExit."""
+    deadline = time.monotonic() + timeout_s
+    with subprocess.Popen(
+        argv,
+        cwd=str(ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=os.name != "nt",
+    ) as proc:
+        try:
+            while True:
+                left = deadline - time.monotonic()
+                try:
+                    out, err = proc.communicate(timeout=max(min(HEARTBEAT_EVERY_S, left), 0.01))
+                    return proc.returncode, out, err
+                except subprocess.TimeoutExpired:
+                    _heartbeat()
+                    if left <= HEARTBEAT_EVERY_S:
+                        raise
+        finally:
+            _stop_child(proc)
 
 
 def _due_jobs(now_wib, last_run: dict[str, str]) -> list[tuple[str, str, str]]:
@@ -221,7 +341,7 @@ def _alert_job_failed(cmd: str, detail: str) -> None:
         from . import db as _db
         from .qa.watcher import _fire
 
-        conn = _db.get_conn(ROOT / "data" / "arkwatch.db")
+        conn = _db.get_conn(DB_PATH)
         _fire(
             conn,
             "job_failed",
@@ -245,23 +365,15 @@ def _run_job(cmd: str, desc: str) -> bool:
     t0 = time.monotonic()
     logger.info(f"▶ {cmd} — {desc}")
     # heartbeat inside the wrapper too: a job >5 min (verify measured
-    # 221-269s, harvest 368s) leaves the loop-top heartbeat stale, one step
-    # from tripping the 5-min staleness contract (D-018c)
+    # 221-269s, harvest 368s) would leave the loop-top heartbeat stale (D-018c);
+    # _spawn keeps refreshing it while the job runs
     _heartbeat()
     try:
         cmd_timeout = 3600 if "gdelt-retention" in cmd else 1800
-        r = subprocess.run(
-            [sys.executable, "-m", "arkwatch"] + cmd.split(),
-            cwd=str(ROOT),
-            timeout=cmd_timeout,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        code, stdout, stderr = _spawn([sys.executable, "-m", "arkwatch"] + cmd.split(), cmd_timeout)
         dt = time.monotonic() - t0
-        if r.returncode == 0:
-            tail = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
+        if code == 0:
+            tail = [ln.strip() for ln in (stdout or "").splitlines() if ln.strip()]
             if cmd == "gdelt-retention --apply":
                 result = next((ln for ln in reversed(tail) if ln.startswith("{")), None)
                 if result is None:
@@ -275,7 +387,7 @@ def _run_job(cmd: str, desc: str) -> bool:
             summary = " | ".join(tail[-3:]) if tail else "OK"
             logger.info(f"✓ {cmd} ({dt:.0f}s) — {summary[:240]}")
             return True
-        err = (r.stderr or r.stdout or "").strip().splitlines()
+        err = (stderr or stdout or "").strip().splitlines()
         # ROUND-9: pages must quote the FAILING line, not the last — a
         # verify failure blamed LME:CA_STOCKS (healthy, last row printed)
         # while the sick series hid mid-stream
@@ -285,7 +397,7 @@ def _run_job(cmd: str, desc: str) -> bool:
         tail = (" | ".join(fail_lines[-2:]) if fail_lines else (err[-1] if err else "no output"))[
             :200
         ]
-        logger.error(f"✗ {cmd} ({dt:.0f}s) exit={r.returncode} — {tail}")
+        logger.error(f"✗ {cmd} ({dt:.0f}s) exit={code} — {tail}")
         _alert_job_failed(cmd, tail)
         return False
     except subprocess.TimeoutExpired:
@@ -298,7 +410,7 @@ def _run_job(cmd: str, desc: str) -> bool:
         return False
 
 
-STATE_PATH = ROOT / "data" / "daemon_state.json"
+STATE_PATH = DATA_DIR / "daemon_state.json"
 
 
 def _load_state(path: Path | None = None) -> dict[str, str]:
@@ -330,41 +442,42 @@ def _save_state(d: dict[str, str], path: Path | None = None) -> None:
 
     try:
         succ = {k: v for k, v in d.items() if v == "1"}
-        (path or STATE_PATH).write_text(_json.dumps(succ))
+        _atomic_write(path or STATE_PATH, _json.dumps(succ))
     except Exception as ex:
         logger.warning(f"state persist failed: {ex}")
 
 
-def run_loop():
-    # Lockfile prevents duplicate instances
-    if LOCKFILE.exists():
-        try:
-            pid = int(LOCKFILE.read_text().strip())
-            import os
+def _on_signal(signum, _frame):
+    # unwind as SystemExit: _spawn's finally reaps the running job group,
+    # run_loop's finally releases the lock (an inline flag would wait out
+    # a 30-min job or the 30s sleep)
+    raise SystemExit(0)
 
-            os.kill(pid, 0)  # raises if the process is gone
-            print(f"another daemon is alive (pid {pid}) — exit")
-            return
-        except (ValueError, OSError, ImportError):
-            pass  # stale lock → take over
-    LOCKFILE.parent.mkdir(exist_ok=True)
-    LOCKFILE.write_text(str(__import__("os").getpid()))
+
+def run_loop():
+    lock = _acquire_lock()
+    if lock is None:
+        print(f"another daemon holds {LOCKFILE} — exit")
+        return
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
 
     _setup_logging()
     # ROUND-10: stamp the code revision at start + every log rotation — the
     # soak lens was misled by an assumed-HEAD daemon (the restart only
-    # landed the new code at 10:37 WIB while the 08:30 job ran pre-fix)
-    import subprocess as _sp
-
-    try:
-        _head = _sp.run(
-            ["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        ).stdout.strip()
-    except Exception:
-        _head = "?"
+    # landed the new code at 10:37 WIB while the 08:30 job ran pre-fix).
+    # The image has no git: the build stamps GIT_SHA instead.
+    _head = os.environ.get("GIT_SHA", "")
+    if not _head:
+        try:
+            _head = subprocess.run(
+                ["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+        except Exception:
+            _head = "?"
     logger.info(f"=== daemon start @ {_head} ===")
     # ROUND-10 queue: last_run persists across restarts (a deploy-restart
     # used to replay every already-succeeded daily job and page the owner
@@ -449,7 +562,10 @@ def run_loop():
                 _setup_logging()
             time.sleep(30)
     finally:
-        LOCKFILE.unlink(missing_ok=True)
+        logger.info("=== daemon stop ===")
+        # closing releases the lock; the file stays (unlinking a locked path
+        # races a starting successor onto a different inode)
+        lock.close()
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -37,8 +37,14 @@ def _redact(text: str) -> str:
     if _SECRET_RE is None:
         import re as _re
 
-        _SECRET_RE = _re.compile(r"(api_key|api_token|apikey|token|key)=[^&\s]+", _re.IGNORECASE)
-    return _SECRET_RE.sub(r"\1=REDACTED", text)
+        _SECRET_RE = _re.compile(
+            r"((?:api_key|api_token|apikey|token|key)=)[^&\s]+"
+            r"|(/bot)\d+:[\w-]+"  # Telegram bot token in an echoed URL path
+            r"|(/api/webhooks/)[^\s'\"]+"  # Discord webhook id/token
+            r"|((?:set-)?cookie[\"']?\s*[:=]\s*)[^\n]+",  # Cookie header/env echo
+            _re.IGNORECASE,
+        )
+    return _SECRET_RE.sub(lambda m: next(g for g in m.groups() if g) + "REDACTED", text)
 
 
 def _window_or_latest(

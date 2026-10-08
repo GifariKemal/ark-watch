@@ -41,12 +41,15 @@ def _form_action(text: str) -> str:
     Posting without them is silently ignored by the server (the response is
     identical to the GET).
     """
-    from urllib.parse import urljoin
+    from urllib.parse import urljoin, urlparse
 
     m = re.search(r'<form[^>]*action="([^"]+)"', text)
     if not m:
         return QS_BASE
-    return urljoin("https://cmegroup-tools.quikstrike.net/User/", m.group(1).replace("&amp;", "&"))
+    url = urljoin("https://cmegroup-tools.quikstrike.net/User/", m.group(1).replace("&amp;", "&"))
+    # scraped action: never POST the form (session fields) off-host
+    u = urlparse(url)
+    return url if (u.scheme, u.hostname) == ("https", "cmegroup-tools.quikstrike.net") else QS_BASE
 
 
 def _fedwatch_eventtarget(text: str) -> str | None:

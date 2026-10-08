@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-_DEFAULT_DB = str(Path(__file__).resolve().parent.parent / "data" / "arkwatch.db")
+_DEFAULT_DB = str(
+    Path(os.environ.get("ARKWATCH_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
+    / "arkwatch.db"
+)
 
 
 def print_help() -> int:
@@ -246,6 +250,10 @@ def main() -> int:
         from .daemon import main as daemon_main
 
         return daemon_main(sys.argv[2:])
+    if cmd == "healthcheck":
+        from .daemon import healthcheck
+
+        return healthcheck()
     if cmd == "cme":
         from .qa.cme_harvest import main as cme_main
 

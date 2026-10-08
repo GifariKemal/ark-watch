@@ -40,6 +40,8 @@ from .horizons import (
     get_quarterly_session_bounds,
     get_session_window,
     get_weekly_quarter,
+    subdivide_micro_22m,
+    subdivide_quarter_90m,
 )
 
 US_CASH_OPEN_UTC_SUMMER = time(13, 30)  # 09:30 ET during EDT
@@ -291,11 +293,23 @@ def compute_session_reference_levels(
     ov_s, ov_e = get_session_window("NY_LONDON_OVERLAP", target_d)
     overlap_prof = compute_horizon_amt(conn, sym, ov_s, ov_e)
 
+    # Minor Sessions & Quarterly Theory Slices
+    fk_s, fk_e = get_session_window("FRANKFURT", target_d)
+    frankfurt_prof = compute_horizon_amt(conn, sym, fk_s, min(fk_e, target_dt))
+
+    sg_s, sg_e = get_session_window("SINGAPORE", target_d)
+    singapore_prof = compute_horizon_amt(conn, sym, sg_s, min(sg_e, target_dt))
+
+    pl_s, pl_e = get_session_window("PRE_LONDON", target_d)
+    pre_london_prof = compute_horizon_amt(conn, sym, pl_s, min(pl_e, target_dt))
+
+    ny_s, ny_e = get_session_window("NY_REGULAR", target_d)
+    ny_regular_prof = compute_horizon_amt(conn, sym, ny_s, min(ny_e, target_dt))
+
     # Separate London Desk vs London Quarterly Theory Q2
     q_bounds = get_quarterly_session_bounds(target_d)
     q2_s, q2_e = q_bounds["Q2_LONDON"]
-    q2_london_prof = compute_horizon_amt(conn, sym, q2_s, q2_e)
-
+    q2_london_prof = compute_horizon_amt(conn, sym, q2_s, min(q2_e, target_dt))
     # Session-to-Session Value Migration (London Desk vs Asia)
     if asia_prof and london_prof:
         session_migration = classify_value_migration(
@@ -362,6 +376,33 @@ def compute_session_reference_levels(
                 "total_volume": None,
             }
 
+    # IPDA Intraday Lookbacks (4H, 8H, 12H)
+    for h_str, hrs in [("4H", 4), ("8H", 8), ("12H", 12)]:
+        s_dt = target_dt - timedelta(hours=hrs)
+        h_amt = compute_horizon_amt(conn, sym, s_dt, target_dt)
+        if h_amt:
+            ipda_ranges[h_str] = {
+                "high": round(h_amt["high"], 4),
+                "low": round(h_amt["low"], 4),
+                "range": round(h_amt["range"], 4),
+                "midpoint": round((h_amt["high"] + h_amt["low"]) / 2.0, 4),
+                "composite_poc": h_amt.get("poc"),
+                "composite_vah": h_amt.get("vah"),
+                "composite_val": h_amt.get("val"),
+                "total_volume": h_amt.get("total_volume"),
+            }
+        else:
+            ipda_ranges[h_str] = {
+                "high": None,
+                "low": None,
+                "range": None,
+                "midpoint": None,
+                "composite_poc": None,
+                "composite_vah": None,
+                "composite_val": None,
+                "total_volume": None,
+            }
+
     # Quarterly Theory Context with Real AMT Volume Profiles
     w_quarter = get_weekly_quarter(target_d)
     m_quarter = get_monthly_quarter(target_d)
@@ -387,8 +428,79 @@ def compute_session_reference_levels(
     # Active 22.5m Micro-Cycle AMT Profile
     mic_s = datetime.fromisoformat(active_qt["micro_cycle_start_utc"])
     mic_e = datetime.fromisoformat(active_qt["micro_cycle_end_utc"])
-    active_micro_amt = compute_horizon_amt(conn, sym, mic_s, mic_e)
+    active_micro_amt = compute_horizon_amt(conn, sym, mic_s, min(mic_e, target_dt))
 
+    # All 4 Daily Quarters in Quarterly Theory
+    all_daily_quarters = {}
+    for q_name, (qs_b, qe_b) in q_bounds.items():
+        if qs_b < target_dt:
+            q_p = compute_horizon_amt(conn, sym, qs_b, min(qe_b, target_dt))
+            if q_p:
+                all_daily_quarters[q_name] = {
+                    "vah": q_p.get("vah"),
+                    "val": q_p.get("val"),
+                    "poc": q_p.get("poc"),
+                    "total_volume": q_p.get("total_volume"),
+                    "vwap": q_p.get("vwap"),
+                }
+            else:
+                all_daily_quarters[q_name] = "Awaiting"
+        else:
+            all_daily_quarters[q_name] = "Upcoming"
+
+    # All 4 Sub-Quarters 90m for the Active Quarter
+    active_quarter_sub_quarters = []
+    for idx, (ss, se) in enumerate(subdivide_quarter_90m(qs, qe)):
+        if ss < target_dt:
+            s_amt = compute_horizon_amt(conn, sym, ss, min(se, target_dt))
+            active_quarter_sub_quarters.append(
+                {
+                    "sub_quarter": f"Sub-{idx + 1}",
+                    "status": "COMPLETED" if target_dt >= se else "ACTIVE",
+                    "vah": s_amt.get("vah") if s_amt else None,
+                    "val": s_amt.get("val") if s_amt else None,
+                    "poc": s_amt.get("poc") if s_amt else None,
+                    "total_volume": s_amt.get("total_volume") if s_amt else None,
+                }
+            )
+        else:
+            active_quarter_sub_quarters.append(
+                {
+                    "sub_quarter": f"Sub-{idx + 1}",
+                    "status": "UPCOMING",
+                    "vah": None,
+                    "val": None,
+                    "poc": None,
+                    "total_volume": None,
+                }
+            )
+
+    # All 4 Micro-Cycles 22.5m for the Active Sub-Quarter
+    active_sub_quarter_micros = []
+    for idx, (ms, me) in enumerate(subdivide_micro_22m(sub_s, sub_e)):
+        if ms < target_dt:
+            m_amt = compute_horizon_amt(conn, sym, ms, min(me, target_dt))
+            active_sub_quarter_micros.append(
+                {
+                    "micro_cycle": f"Micro-{idx + 1}",
+                    "status": "COMPLETED" if target_dt >= me else "ACTIVE",
+                    "vah": m_amt.get("vah") if m_amt else None,
+                    "val": m_amt.get("val") if m_amt else None,
+                    "poc": m_amt.get("poc") if m_amt else None,
+                    "total_volume": m_amt.get("total_volume") if m_amt else None,
+                }
+            )
+        else:
+            active_sub_quarter_micros.append(
+                {
+                    "micro_cycle": f"Micro-{idx + 1}",
+                    "status": "UPCOMING",
+                    "vah": None,
+                    "val": None,
+                    "poc": None,
+                    "total_volume": None,
+                }
+            )
     return {
         "symbol": sym,
         "as_of": target_dt.isoformat(timespec="seconds"),
@@ -510,6 +622,10 @@ def compute_session_reference_levels(
                 "q2_london_quarter": q2_london_prof
                 if q2_london_prof
                 else "N/A (Awaiting Session Bars)",
+                "frankfurt": frankfurt_prof if frankfurt_prof else "N/A (Awaiting Session Bars)",
+                "singapore": singapore_prof if singapore_prof else "N/A (Awaiting Session Bars)",
+                "pre_london": pre_london_prof if pre_london_prof else "N/A (Awaiting Session Bars)",
+                "ny_regular": ny_regular_prof if ny_regular_prof else "N/A (Awaiting Session Bars)",
             },
             "session_value_migration": session_migration,
             "ipda_data_ranges": ipda_ranges,
@@ -523,6 +639,9 @@ def compute_session_reference_levels(
                 "active_22m_micro_cycle": active_qt["active_22m_micro_cycle"],
                 "micro_cycle_role": active_qt["micro_cycle_role"],
                 "active_22m_micro_cycle_amt": active_micro_amt if active_micro_amt else "N/A",
+                "all_daily_quarters": all_daily_quarters,
+                "active_quarter_all_sub_quarters_90m": active_quarter_sub_quarters,
+                "active_sub_quarter_all_micros_22m": active_sub_quarter_micros,
                 "weekly_quarter": w_quarter,
                 "monthly_quarter": m_quarter,
             },

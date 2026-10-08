@@ -16,6 +16,7 @@ SESSION_HOURS_ET: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
     "NY_AM": ((8, 0), (12, 0)),  # 08:00 ET - 12:00 ET
     "NY_PM": ((12, 0), (17, 0)),  # 12:00 ET - 17:00 ET
     "NY_LONDON_OVERLAP": ((8, 0), (12, 0)),  # 08:00 ET - 12:00 ET
+    "PRE_LONDON": ((2, 0), (3, 0)),  # 02:00 ET - 03:00 ET (False Auction Trap Window)
     "FRANKFURT": ((2, 0), (11, 0)),  # 02:00 ET - 11:00 ET (opens 1h before London)
     "SINGAPORE": ((21, 0), (4, 0)),  # 21:00 ET (D-1) - 04:00 ET
 }

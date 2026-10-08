@@ -331,13 +331,17 @@ def compute_session_reference_levels(
             "c_range": round(on_range, 4),
             "dalton_measured_move": {
                 "upside_breakout_target": (
-                    round(on_cva["vah"] + on_range, 4) if on_cva.get("vah") else None
+                    round(on_cva["vah"] + on_range, 4)
+                    if on_cva.get("vah")
+                    else "AWAITING_EXPANSION"
                 ),
                 "downside_breakout_target": (
-                    round(on_cva["val"] - on_range, 4) if on_cva.get("val") else None
+                    round(on_cva["val"] - on_range, 4)
+                    if on_cva.get("val")
+                    else "AWAITING_EXPANSION"
                 ),
             },
-            "total_volume": on_cva.get("total_volume"),
+            "total_volume": on_cva.get("total_volume", 0.0),
         }
     else:
         overnight_cva = {
@@ -846,8 +850,34 @@ def compute_session_reference_levels(
             "dynamic_cva_days": dynamic_cva["composite_days_count"] if dynamic_cva else 1,
             "naked_pocs_count": naked_pocs["total_naked_pocs"],
             "hierarchical_naked_pocs": {
-                "session_naked_pocs": session_naked_pocs,
-                "weekly_virgin_pocs": weekly_naked_pocs,
+                "session_naked_pocs": {
+                    "total_naked_pocs": session_naked_pocs.get("total_naked_pocs", 0),
+                    "nearest_naked_poc_above": (
+                        session_naked_pocs["nearest_naked_poc_above"]
+                        if session_naked_pocs.get("nearest_naked_poc_above")
+                        else "NONE_IN_LOOKBACK (All-Time High / Blue Sky)"
+                    ),
+                    "nearest_naked_poc_below": (
+                        session_naked_pocs["nearest_naked_poc_below"]
+                        if session_naked_pocs.get("nearest_naked_poc_below")
+                        else "NONE_IN_LOOKBACK (All-Time Low)"
+                    ),
+                    "all_naked_pocs": session_naked_pocs.get("all_naked_pocs", []),
+                },
+                "weekly_virgin_pocs": {
+                    "total_naked_pocs": weekly_naked_pocs.get("total_naked_pocs", 0),
+                    "nearest_naked_poc_above": (
+                        weekly_naked_pocs["nearest_naked_poc_above"]
+                        if weekly_naked_pocs.get("nearest_naked_poc_above")
+                        else "NONE_IN_LOOKBACK (All-Time High / Blue Sky)"
+                    ),
+                    "nearest_naked_poc_below": (
+                        weekly_naked_pocs["nearest_naked_poc_below"]
+                        if weekly_naked_pocs.get("nearest_naked_poc_below")
+                        else "NONE_IN_LOOKBACK (All-Time Low)"
+                    ),
+                    "all_naked_pocs": weekly_naked_pocs.get("all_naked_pocs", []),
+                },
             },
             "multi_desk_initial_balance": {
                 "asia_open_ib": asia_ib,

@@ -18,6 +18,7 @@ from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
 from .amt import (
+    ASSET_TICK_SIZES,
     analyze_initial_balance,
     classify_open_type,
     classify_participant_activity,
@@ -144,7 +145,7 @@ def compute_session_reference_levels(
     pdc = prior_bars[-1][4]
 
     # Prior Session Value Area
-    va_profile = compute_value_area(prior_bars)
+    va_profile = compute_value_area(prior_bars, tick_size=ASSET_TICK_SIZES.get(sym))
 
     # 4. Overnight Session (Asia + London: 18:00 ET to 09:30 ET)
     edt_active = _is_dst_edt(target_dt)

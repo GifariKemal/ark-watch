@@ -15,140 +15,32 @@ def print_help() -> int:
 ========================================================================================
 
 PENGGUNAAN:
-  arkwatch <perintah> [argumen] [opsi --flag]
-  python -m arkwatch <perintah> [argumen] [opsi --flag]
+  arkwatch <perintah> [argumen] [opsi]
+  python -m arkwatch <perintah> [argumen] [opsi]
 
 [1. TRADING PLAYBOOK & EKSEKUSI LELANG (AMT)]
-  scanner
-    • Fungsi : Memindai 31 aset 24 jam & mengurutkan peluang (R:R tertinggi)
-    • Opsi   : --min-rr FLOAT            Batas rasio Risk-Reward minimum (default: 1.5)
-               --db PATH                 Path database kustom (default: data/arkwatch.db)
+  scanner [--min-rr FLOAT]       Memindai 31 aset & menyaring peluang (default: R:R >= 1.5)
+  playbook [SYMBOL]              Playbook Dual-Horizon (Intraday & Swing) per instrumen
+  tracker [SYMBOL] [--detail]    Pelacak performa trading (Win Rate, PnL, R-Mult, Log)
+  levels [SYMBOL]                Level lelang AMT (VAH, VAL, POC, TPO, CVA, Naked POC)
+  sentiment [--limit INT]        Ekstraksi sentimen berita 7-dimensi via model AI
 
-  playbook [SYMBOL]
-    • Fungsi : Menghasilkan Playbook Dual-Horizon (Intraday & Swing) per instrumen
-    • Opsi   : --cfd-offset FLOAT        Offset poin untuk sinkronisasi harga broker CFD
-               --db PATH                 Path database kustom
+[2. REAL-TIME MARKET & MIKROSTRUKTUR]
+  market [--interval 5m|1m]      Pemanenan bar harga real-time 31 aset portofolio
+  market-news                    Pemanenan berita breaking dari 14 sumber resmi
+  breadth                        S&P 500 Constituent Breadth (504 saham)
+  crypto                         Sinyal derivatif & likuidasi kripto (OKX/Bybit)
 
-  tracker [SYMBOL]
-    • Fungsi : Melihat pelacak performa lelang (Win Rate, PnL, MFE, MAE, R-Multiple)
-    • Opsi   : --horizon {INTRADAY,SWING} Filter horizon trading
-               --db PATH                 Path database kustom
-
-  levels [SYMBOL]
-    • Fungsi : Melihat level lelang AMT (VAH, VAL, POC, TPO, 2D CVA, Naked POC)
-    • Opsi   : --db PATH                 Path database kustom
-
-  sentiment
-    • Fungsi : Mengekstrak sentimen berita 7-dimensi via AI & memperbarui radar
-    • Opsi   : --limit INT               Batas jumlah artikel per proses (default: 15)
-               --db PATH                 Path database kustom
-
-[2. REAL-TIME MARKET & MIKROSTRUKTUR INTRADAY]
-  market
-    • Fungsi : Memanen timeline bar 1-menit / 5-menit seluruh 31 aset
-    • Opsi   : --interval {5m,1m}        Interval bar utama (default: 5m)
-               --no-1m                   Lewati pemanenan bar 1-menit
-               --only SYMBOL             Panen hanya untuk 1 simbol tertentu (misal: NQ1)
-               --force-fallback          Paksa uji coba provider cadangan
-               --db PATH                 Path database kustom
-
-  market-news
-    • Fungsi : Memanen berita terkurasi dari 14 sumber regulator & media finansial
-    • Opsi   : --db PATH                 Path database kustom
-
-  breadth
-    • Fungsi : Menghitung S&P 500 Constituent Breadth (504 saham)
-    • Opsi   : --db PATH                 Path database kustom
-
-  crypto
-    • Fungsi : Memproses sinyal likuidasi & funding rate kripto
-    • Opsi   : --db PATH                 Path database kustom
-
-  liquidations
-    • Fungsi : Memonitor orderbook likuidasi real-time OKX WebSocket/REST
-
-  energy
-    • Fungsi : Memeriksa metrik cadangan minyak EIA & kilang energi
-    • Opsi   : --db PATH                 Path database kustom
-
-[3. PANEN DATA MAKRO & KALKULASI]
-  calendar
-    • Fungsi : Memanen kalender ekonomi makro (NFP, CPI, FOMC, ISM)
-    • Opsi   : --from YYYY-MM-DD         Tanggal mulai penarikan
-               --to YYYY-MM-DD           Tanggal akhir penarikan
-               --db PATH                 Path database kustom
-
-  surprise
-    • Fungsi : Menghitung Sigma Surprise Z-Score (rolling 5y, outlier-filtered)
-    • Opsi   : --db PATH                 Path database kustom
-
-  cme
-    • Fungsi : Memanen settlements & options CME (OI walls & max-pain)
-    • Opsi   : --db PATH                 Path database kustom
-
-  fedsurvey
-    • Fungsi : Memanen survei The Fed (SLOOS, Beige Book, SCOOS, Minutes)
-    • Opsi   : --db PATH                 Path database kustom
-
-  soma
-    • Fungsi : Memanen neraca kepemilikan surat utang The Fed (QT Runoff)
-    • Opsi   : --db PATH                 Path database kustom
-
-  fiscalx
-    • Fungsi : Memanen lelang US Treasury, penerbitan utang & beban bunga
-    • Opsi   : --db PATH                 Path database kustom
-
-  f2
-    • Fungsi : Memanen arus ETF fisik emas/perak & cadangan LME
-    • Opsi   : --db PATH                 Path database kustom
-
-  nyfed
-    • Fungsi : Memanen operasi pasar sekunder NY Fed & Repo
-    • Opsi   : --db PATH                 Path database kustom
-
-[4. OPERASIONAL SISTEM & PEMANTAUAN]
-  daemon
-    • Fungsi : Menjalankan background service scheduler otomatis
-    • Opsi   : --once                    Jalankan siklus satu kali untuk pengujian
-
-  watch
-    • Fungsi : Menjalankan pengecekan alert anomali makro & lelang
-    • Opsi   : --db PATH                 Path database kustom
-
-  verify
-    • Fungsi : Memverifikasi kelayakan endpoint seluruh provider data
-    • Opsi   : --limit INT               Batas jumlah series yang diverifikasi
-
-  coverage
-    • Fungsi : Memeriksa kelengkapan dan kesegaran seluruh series registry
-    • Opsi   : --db PATH                 Path database kustom
-
-  calibrate
-    • Fungsi : Mengaudit drift golden anchors kalibrasi data
-    • Opsi   : --db PATH                 Path database kustom
-
-  backup
-    • Fungsi : Membuat backup SQLite database yang aman dan terverifikasi
-    • Opsi   : --db PATH                 Path database kustom
-
-  gdelt-retention
-    • Fungsi : Membersihkan data mentah GDELT (8d) dan berita (90d)
-    • Opsi   : --apply                   Terapkan pembersihan langsung (tanpa dry-run)
-               --db PATH                 Path database kustom
-
-  explore <target>
-    • Fungsi : Mengeksplorasi database secara interaktif (blocks|series|signal)
-
-  backtest
-    • Fungsi : Menjalankan simulasi backtest sinyal historis
-    • Opsi   : --db PATH                 Path database kustom
-
-  help, --help, -h
-    • Fungsi : Menampilkan manual panduan perintah ini
+[3. INSPEKSI SISTEM & RISET DATA]
+  watch                          Pemeriksaan alert anomali makro & lelang
+  coverage                       Audit kelengkapan & kesegaran seluruh series registry
+  verify [--limit INT]           Verifikasi kelayakan endpoint seluruh provider data
+  explore <target> [--trace]     Inspeksi interaktif data database & trace komponen
+  backtest                       Uji statistik sinyal makro dengan Benjamini-Hochberg FDR
 
 ========================================================================================
 """
-    print(help_text)
+    print(help_text.strip())
     return 0
 
 

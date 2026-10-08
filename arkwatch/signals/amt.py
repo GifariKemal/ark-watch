@@ -22,7 +22,21 @@ from typing import Any
 
 TPO_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
-
+ASSET_TICK_SIZES: dict[str, float] = {
+    "NQ1": 0.25,
+    "ES1": 0.25,
+    "YM1": 1.0,
+    "GC1": 0.10,
+    "SI1": 0.005,
+    "HG1": 0.0005,
+    "CL1": 0.01,
+    "BTCUSD": 1.0,
+    "ETHUSD": 0.1,
+    "EURUSD": 0.0001,
+    "GBPUSD": 0.0001,
+    "USDJPY": 0.01,
+    "DXY": 0.01,
+}
 def get_asset_ib_timing(symbol: str, is_dst: bool = True) -> tuple[time, str]:
     """Determine asset-class-specific Initial Balance start time and institutional label.
 
@@ -60,6 +74,7 @@ def compute_value_area(
     *,
     num_bins: int = 50,
     va_volume_ratio: float = 0.70,
+    tick_size: float | None = None,
 ) -> dict[str, Any]:
     """Compute Point of Control (POC), VAH, and VAL using discrete volume profile binning."""
     if not bars:
@@ -93,7 +108,13 @@ def compute_value_area(
             "bars_count": len(bars),
         }
 
-    bin_size = (max_p - min_p) / float(num_bins)
+    if tick_size and tick_size > 0:
+        raw_bin = (max_p - min_p) / float(num_bins)
+        ticks_per_bin = max(1, round(raw_bin / tick_size))
+        bin_size = ticks_per_bin * tick_size
+        num_bins = max(5, int(math.ceil((max_p - min_p) / bin_size)))
+    else:
+        bin_size = (max_p - min_p) / float(num_bins)
     volume_by_bin = [0.0] * num_bins
     total_vol = 0.0
 

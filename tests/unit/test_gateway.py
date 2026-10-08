@@ -119,3 +119,36 @@ def test_outbox_dispatch_per_channel(tmp_path, monkeypatch):
     c2.close()
     assert rows["fake"] == "sent"
     assert rows["dead"] == "failed"
+
+
+def test_alerts_with_no_channel_are_skipped_not_failed(tmp_path, monkeypatch):
+    """No alert channel configured: rows become 'skipped' (attempts untouched, reason visible)
+    and still count toward the watcher cooldown, so a standing condition fires once per
+    cooldown window instead of piling up 'failed' rows every ~25 minutes."""
+    import sqlite3
+    from datetime import UTC, datetime
+
+    from arkwatch import db as arkdb
+    from arkwatch.qa import watcher
+    from arkwatch.senders import outbox
+
+    conn = arkdb.get_conn(tmp_path / "t.db", allow_init=True)
+    conn.execute(
+        "INSERT INTO alert_deliveries(alert_type, triggered_at, cooldown_key,"
+        " priority, status, message) VALUES ('copper', ?, 'copper', 'normal',"
+        " 'pending', 'x')",
+        (datetime.now(UTC).isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(outbox, "active_channels", lambda: {})
+    res = outbox.send_pending_alerts(str(tmp_path / "t.db"), max_attempts=5, min_gap_s=0)
+    assert res.get("skipped") == 1 and not res.get("failed")
+
+    c2 = sqlite3.connect(tmp_path / "t.db")
+    status, attempts, err = c2.execute(
+        "SELECT status, attempts, last_error FROM alert_deliveries"
+    ).fetchone()
+    assert (status, attempts) == ("skipped", 0) and "unconfigured" in err
+    assert watcher._cooldown_active(c2, "copper") is True
+    c2.close()

@@ -105,7 +105,7 @@ def _cooldown_active(conn, alert_type: str, *, permanent: bool = False) -> bool:
         # date instead (see docs/audits 2026-09-17).
         row = conn.execute(
             "SELECT COUNT(*) FROM alert_deliveries WHERE cooldown_key=? "
-            "AND status IN ('pending','sending','sent')",
+            "AND status IN ('pending','sending','sent','skipped')",
             (alert_type,),
         ).fetchone()
         return row[0] > 0
@@ -113,7 +113,7 @@ def _cooldown_active(conn, alert_type: str, *, permanent: bool = False) -> bool:
     cutoff = (datetime.now(UTC) - timedelta(hours=cooldown_h)).isoformat()
     row = conn.execute(
         "SELECT COUNT(*) FROM alert_deliveries WHERE cooldown_key=? "
-        "AND triggered_at > ? AND status IN ('pending','sending','sent')",
+        "AND triggered_at > ? AND status IN ('pending','sending','sent','skipped')",
         (alert_type, cutoff),
     ).fetchone()
     return row[0] > 0

@@ -182,6 +182,17 @@ def send_pending_alerts(
         if rows:
             channels = active_channels()
             now_iso = now.isoformat(timespec="seconds")
+            if not channels:
+                # nothing configured to deliver to: not a failure, and no retries burned
+                conn.executemany(
+                    "UPDATE alert_deliveries SET status='skipped', last_error=? WHERE id=?",
+                    [
+                        ("unconfigured: no alert channel (TELEGRAM_* or DISCORD_WEBHOOK_URL)", r[0])
+                        for r in rows
+                    ],
+                )
+                conn.commit()
+                return {"sent": 0, "still_pending": 0, "skipped": len(rows)}
             for row_id, message, attempts in rows:
                 conn.execute(
                     "UPDATE alert_deliveries SET attempts=attempts+1, last_attempt=? WHERE id=?",

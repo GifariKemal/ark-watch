@@ -73,6 +73,10 @@ class CalDistError(RuntimeError):
     pass
 
 
+class NoDataYet(CalDistError):
+    """Family has no actuals yet (fresh volume, calendar job not run): not a failure."""
+
+
 def _ref_month(name_norm: str, ts_utc: str, convention: str) -> tuple[int, int] | None:
     """(year, month) of the REFERENCE period for one release row."""
     y, mon = int(ts_utc[:4]), int(ts_utc[5:7])
@@ -124,7 +128,10 @@ def family_rows(
     agg=max   — level series (ISM twins dedup, historical behavior)
     agg=sum   — weekly FLOWS collapsed to the true monthly total (EIA)
     agg=last  — latest release within the month (rig count)"""
-    conn = sqlite3.connect(f"file:{Path(db_path or DEFAULT_DB)}?mode=ro", uri=True)
+    path = Path(db_path or DEFAULT_DB)
+    if not path.exists():
+        return []  # empty volume: mode=ro cannot open (or create) a missing file
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         rows = conn.execute(
             "SELECT normalized_name, substr(ts_utc,1,10) d, actual FROM events"
@@ -164,7 +171,7 @@ def fetch_latest(series_id: str) -> dict:
     key, convention, agg = fam
     rows = family_rows(key, convention, agg)
     if not rows:
-        raise CalDistError(f"caldist: no actuals for family {key}")
+        raise NoDataYet(f"caldist: no actuals for family {key}")
     return rows[-1]
 
 

@@ -244,12 +244,12 @@ golden_anchors:
     provenance: "quarterly recalibrated 2026-10-02, FRED UNRATE"
 
   - series_id: PAYEMS
-    anchor_date: "2026-08-01"
-    expected: 159075
+    anchor_date: "2026-07-01"
+    expected: 158882
     tolerance: 50        # thousands of jobs; minor monthly revisions within a vintage
-    provenance: "recalibrated 2026-09-08 (Aug report revised Jul 158858→158913,
-      busting the 09-05 anchor by 5 — routine benchmark revision, the exact
-      case the tolerance comment documents); FRED live"
+    provenance: "recalibrated 2026-10-09, FRED API: the Sep report revised Aug
+      159075->159015 (busting the 2026-08-01 anchor by 60). Anchored on Jul,
+      which has had both BLS monthly revisions (only the Feb benchmark moves it)"
 
   - series_id: SAHMREALTIME
     anchor_date: "2026-07-01"

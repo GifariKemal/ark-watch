@@ -14,7 +14,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .. import db
-from ..config import load_registry
+from ..config import PROVIDER_ENV, load_registry, missing_env
+from ..fetchers.caldist import NoDataYet
 from ..qa.verify_sources import ROUTES
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
@@ -110,9 +111,14 @@ def harvest(db_path: str = str(DEFAULT_DB), *, block: str | None = None) -> tupl
 
     ok = fail = rows_new = 0
     now = datetime.now(UTC).isoformat(timespec="seconds")
+    skipped: dict[str, str] = {}  # prefix -> reason: ONE fetch_log row per run
     for e in reg:
         sid_full = e["series_id"]
         prefix = next(p for p in ROUTES if sid_full.startswith(p))
+        reason = missing_env(*PROVIDER_ENV.get(prefix, ()))
+        if reason:
+            skipped[prefix] = reason
+            continue
         mod = ROUTES[prefix]
         t0 = _t.monotonic()
         status, n, err = "OK", 0, None
@@ -189,6 +195,8 @@ def harvest(db_path: str = str(DEFAULT_DB), *, block: str | None = None) -> tupl
                 n += db.apply_realtime_revisions(conn, rows)
             ok += 1
             rows_new += n
+        except NoDataYet:
+            status, err = "EMPTY", "no data yet"
         except Exception as ex:
             status, err = "ERROR", _redact(str(ex))[:150]
             fail += 1
@@ -217,6 +225,13 @@ def harvest(db_path: str = str(DEFAULT_DB), *, block: str | None = None) -> tupl
         )
         if status == "ERROR":
             print(f"  ✗ {sid_full}: {err}")
+    for prefix, reason in skipped.items():
+        conn.execute(
+            "INSERT INTO fetch_log(ts,fetcher,target,status,error,rows,quota_used)"
+            " VALUES (?,?,?,'SKIPPED',?,0,0)",
+            (now, prefix.rstrip(":").lower(), prefix, reason),
+        )
+        print(f"  · {prefix}* skipped ({reason})")
     conn.close()
     return ok, fail, rows_new
 

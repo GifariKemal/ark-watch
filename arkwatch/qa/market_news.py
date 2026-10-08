@@ -16,6 +16,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .. import db as _db
+from ..config import missing_env
 from ..gdelt_storage import compress_record
 from . import gdelt_archive
 from .fetch_log import log_collection
@@ -464,7 +465,12 @@ def run(db_path: str) -> dict[str, int]:
         ("RSS_FEEDS", fetch_all_rss_feeds),
         ("CRYPTOPANIC", fetch_cryptopanic_posts),
     )
+    needs_env = {"EODHD": "EODHD_API_TOKEN", "CRYPTOPANIC": "CRYPTOPANIC_API_KEY"}
     for name, fetch in sources:
+        reason = missing_env(needs_env[name]) if name in needs_env else None
+        if reason:
+            log_collection(conn, "market_news", name, None, 0, err=reason, status="SKIPPED")
+            continue
         try:
             rows = fetch()
             now = datetime.now(UTC).isoformat(timespec="seconds")

@@ -184,6 +184,8 @@ def fetch_cme(from_d: str, to_d: str) -> list[dict]:
 
 def fetch_eodhd(from_d: str, to_d: str) -> list[dict]:
     tok = os.environ.get("EODHD_API_TOKEN", "")
+    if not tok:
+        return []  # optional provider unconfigured: no 401 per pull
     r = requests.get(
         "https://eodhd.com/api/economic-events",
         params={"from": from_d, "to": to_d, "country": "US", "api_token": tok, "fmt": "json"},

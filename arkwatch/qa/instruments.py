@@ -16,7 +16,7 @@ from pathlib import Path
 import requests
 
 from .. import db as _db
-from ..config import _load_yaml
+from ..config import _load_yaml, missing_env
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
 UA = {
@@ -125,6 +125,9 @@ def backfill(
     conn = _db.get_conn(db_path, allow_init=True)
     out: dict[str, int] = {}
     tok = os.environ.get("EODHD_API_TOKEN", "")
+    if skip := missing_env("EODHD_API_TOKEN"):
+        eodhd = False
+        print(f"  · EODHD skipped ({skip})")
     for ins in instruments():
         sym = ins["symbol"]
         if only and sym != only:
@@ -242,10 +245,12 @@ def sweep(db_path: str = str(DEFAULT_DB)) -> dict[str, int]:
     conn = _db.get_conn(db_path, allow_init=True)
     out: dict[str, int] = {}
     tok = os.environ.get("EODHD_API_TOKEN", "")
+    if skip := missing_env("EODHD_API_TOKEN"):  # once per run, not an ERROR per symbol
+        log_collection(conn, "instruments", "EODHD", None, 0, err=skip, status="SKIPPED")
     start_ts = int(time.time()) - 7 * 86400
     for ins in instruments():
         sym = ins["symbol"]
-        if ins.get("eodhd"):
+        if ins.get("eodhd") and not skip:
             try:
                 rows = fetch_eodhd_daily(tok, ins["eodhd"], days=7)
                 out[f"{sym}|EODHD"] = insert_prices(conn, sym, "EODHD", rows)

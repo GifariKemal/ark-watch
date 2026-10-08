@@ -20,6 +20,7 @@ is the verification; the header-map logic mirrors Empire's.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 import openpyxl
 import pytest
@@ -132,54 +133,31 @@ class TestHpw:
 
 
 class TestSce:
-    def test_columns_mapped_by_label(self, tmp_path, monkeypatch):
-        """Job-loss and quit probabilities share one sheet — a positional read
-        swaps them (13.84 vs 19.49, press-release-verified)."""
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Job separation expectation"
-        ws.append(["Source: SCE"])
-        ws.append(["Job separation expectations"])
-        ws.append([None])
-        ws.append(
-            [
-                None,
-                "Mean probability of losing a job",
-                "Mean probability of leaving a job voluntarily",
-            ]
-        )
-        ws.append([202608, 13.842, 19.494])
-        ws2 = wb.create_sheet("Inflation expectations")
-        ws2.append([None])
-        ws2.append([None])
-        ws2.append([None])
-        ws2.append(
-            [
-                None,
-                "Median one-year ahead expected inflation rate",
-                "Median three-year ahead expected inflation rate",
-            ]
-        )
-        ws2.append([202608, 3.5794, 3.1878])
-        path = tmp_path / "sce.xlsx"
-        wb.save(path)
-        monkeypatch.setattr(nr, "_download", lambda k: path.read_bytes())
-        # only the two sheets the fixture carries — patch the spec table
-        monkeypatch.setattr(
-            nr,
-            "_SCE_SPECS",
-            [
-                ("SCE_JOBLOSS", "Job separation expectation", "Mean probability of losing a job"),
-                (
-                    "SCE_INFL_1Y",
-                    "Inflation expectations",
-                    "Median one-year ahead expected inflation",
-                ),
-            ],
-        )
+    FIX = Path(__file__).resolve().parents[2] / "fixtures" / "nyfed" / "sce_2026-09.xlsx"
+
+    def test_live_layout_2026_09(self, monkeypatch):
+        """Trimmed copy of the live workbook (2026-10-09): the 'Five-year ahead
+        Infl Exp' sheet is gone, the 5y median moved into 'Inflation
+        expectations'. Labels are found by header scan, so the 'Demo' sheet's
+        identically-labelled 5y column must not win, and job-loss vs quit
+        (same sheet) must not swap (13.84 vs 19.49 class defect)."""
+        monkeypatch.setattr(nr, "_download", lambda k: self.FIX.read_bytes())
         out = nr._sce()
-        assert out["SCE_JOBLOSS"] == [("2026-08-01", 13.842)]
-        assert out["SCE_INFL_1Y"] == [("2026-08-01", 3.5794)]
+        last = {k: v[-1] for k, v in out.items()}
+        assert last == {
+            "SCE_INFL_1Y": ("2026-09-01", 3.9027),
+            "SCE_INFL_3Y": ("2026-09-01", 3.2503),
+            "SCE_INFL_5Y": ("2026-09-01", 2.9951),
+            "SCE_EARN": ("2026-09-01", 2.6137),
+            "SCE_JOBLOSS": ("2026-09-01", 13.5177),
+            "SCE_JOBFIND": ("2026-09-01", 46.1146),
+        }
+
+    def test_missing_label_raises(self, monkeypatch):
+        monkeypatch.setattr(nr, "_download", lambda k: self.FIX.read_bytes())
+        monkeypatch.setattr(nr, "_SCE_SPECS", [("X", "No such label")])
+        with pytest.raises(nr.NyFedResearchError, match="No such label"):
+            nr._sce()
 
 
 # --- LW / HLW ------------------------------------------------------------------------

@@ -13,6 +13,16 @@ CONFIG_DIR = Path(
 
 REGISTRY_FILES = ["series_registry.yaml", "series_registry_blocks_d-f.yaml"]
 
+# Optional paid/credentialed providers by registry prefix: unset env = SKIPPED
+# (unconfigured), never ERROR. Set-but-failing stays ERROR.
+PROVIDER_ENV = {"EODHD:": ("EODHD_API_TOKEN",)}
+
+
+def missing_env(*names: str) -> str | None:
+    """'unconfigured: A, B' for unset/blank env vars, None when all are set."""
+    miss = [n for n in names if not os.environ.get(n, "").strip()]
+    return f"unconfigured: {', '.join(miss)}" if miss else None
+
 
 def _load_yaml(name: str) -> dict | list:
     # An empty or comment-only file safe_loads to None → an opaque

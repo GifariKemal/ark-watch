@@ -17,7 +17,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
-from ..config import load_anchors, load_registry
+from ..config import PROVIDER_ENV, load_anchors, load_registry, missing_env
 from ..fetchers import (
     atl,
     caldist,
@@ -269,6 +269,7 @@ def verify(
 
     rep = Report(checked=len(targets))
     _db_conn = None  # lazily opened ONCE for the routeless fallback below
+    skipped: set[str] = set()
     for e in targets:
         prefix = next((p for p in ROUTES if e["series_id"].startswith(p)), None)
         if prefix is None:
@@ -304,6 +305,13 @@ def verify(
                     r.sanity = "✗"
                     r.note = "db-fallback: no stored realtime obs"
                 rep.rows.append(r)
+            continue
+        reason = missing_env(*PROVIDER_ENV.get(prefix, ()))
+        if reason:
+            # unconfigured optional provider: one '·' row per run, not a ✗ per series
+            if prefix not in skipped:
+                skipped.add(prefix)
+                rep.rows.append(Row(series_id=prefix + "*", note=f"SKIPPED {reason}"))
             continue
         mod = ROUTES[prefix]
         # Fetch-id resolution: native_id > primary_source (mnemonic) > series_id
@@ -397,6 +405,8 @@ def verify(
                 r.crossval = _crossval_eodhd_ust(
                     e["series_id"], cur["value"], cur["ts"], e.get("tolerance")
                 )
+        except caldist.NoDataYet:  # empty events table (first boot): not a violation
+            r.note = "no data yet"
         except Exception as ex:  # a fetch error is recorded; it must not crash the gate
             r.anchor = r.sanity = r.depth = r.crossval = "✗"
             r.note = (r.note + str(ex))[:120]

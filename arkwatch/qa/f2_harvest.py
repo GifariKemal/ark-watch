@@ -1085,8 +1085,11 @@ def main(argv: list[str] | None = None) -> int:
     # cookie death must surface as a named fetch_log ERROR, never silence.
     n_owsr = 0
     owsr_err: str | None = None
+    from ..config import missing_env
+
+    owsr_skip = missing_env("LME_COOKIE")  # unset = SKIPPED; a dead cookie stays ERROR
     try:
-        for m in flows_extra.fetch_lme_owsr_daily(session=_lme_sess):
+        for m in [] if owsr_skip else flows_extra.fetch_lme_owsr_daily(session=_lme_sess):
             conn.execute(
                 "INSERT INTO flows_periodic(period,kind,value_raw,unit_raw,factor,value,meta_json)"
                 " VALUES (?,'lme_owsr_cu',?, 'tonne',1,?,?)"
@@ -1116,7 +1119,15 @@ def main(argv: list[str] | None = None) -> int:
 
     log_collection(conn, "f2", "LME:CA_STOCKS", None, total_new, err=lme_err)
     log_collection(conn, "f2", "LME:OFFWARRANT", None, n_ow)
-    log_collection(conn, "f2", "LME:OWSR", None, n_owsr, err=owsr_err)
+    log_collection(
+        conn,
+        "f2",
+        "LME:OWSR",
+        None,
+        n_owsr,
+        err=owsr_err or owsr_skip,
+        status="SKIPPED" if owsr_skip else None,
+    )
 
     # COT parser gate (vendor-api audit #2): FMP's independent parse of the
     # same CFTC filings vs ours — OI + nonreportable must match EXACTLY.

@@ -248,40 +248,51 @@ def _hhdc() -> dict[str, list[tuple[str, float]]]:
 # --- SCE (monthly expectations) ----------------------------------------------------
 
 
-# (series_key, sheet, label-prefix) — labels live-verified 2026-09-19
+# (series_key, header label-prefix). Labels are located by scanning the header
+# rows of every non-'Demo' sheet, so sheet renames/merges do not break the
+# parser: the 2026-10 release dropped 'Five-year ahead Infl Exp' and moved the
+# 5y median into 'Inflation expectations' (live-verified 2026-10-09).
 _SCE_SPECS = [
-    ("SCE_INFL_1Y", "Inflation expectations", "Median one-year ahead expected inflation"),
-    ("SCE_INFL_3Y", "Inflation expectations", "Median three-year ahead expected inflation"),
-    ("SCE_INFL_5Y", "Five-year ahead Infl Exp", "Median five-year ahead expected inflation"),
-    ("SCE_EARN", "Earnings growth", "Median expected earnings growth"),
-    ("SCE_JOBLOSS", "Job separation expectation", "Mean probability of losing a job"),
-    ("SCE_JOBFIND", "Job finding expectations", "Mean probability of finding a job"),
+    ("SCE_INFL_1Y", "Median one-year ahead expected inflation"),
+    ("SCE_INFL_3Y", "Median three-year ahead expected inflation"),
+    ("SCE_INFL_5Y", "Median five-year ahead expected inflation"),
+    ("SCE_EARN", "Median expected earnings growth"),
+    ("SCE_JOBLOSS", "Mean probability of losing a job"),
+    ("SCE_JOBFIND", "Mean probability of finding a job"),
 ]
 
 
 def _sce() -> dict[str, list[tuple[str, float]]]:
-    """Core-module workbook → series. Columns are mapped BY LABEL (row idx 3):
-    job-loss and quit probabilities share a sheet — a positional read swaps
-    them (a claim-drift class defect)."""
+    """Core-module workbook -> series. Columns are mapped BY LABEL: job-loss and
+    quit probabilities share a sheet - a positional read swaps them (a
+    claim-drift class defect). 'Demo' sheets repeat core labels per
+    demographic group and are skipped."""
     import openpyxl
 
     wb = openpyxl.load_workbook(io.BytesIO(_download("sce")), read_only=True, data_only=True)
+    sheets = [
+        [list(r) for r in wb[n].iter_rows(values_only=True)]
+        for n in wb.sheetnames
+        if not n.strip().endswith("Demo")
+    ]
+    wb.close()
     out: dict[str, list[tuple[str, float]]] = {}
-    for key, sheet, label in _SCE_SPECS:
-        ws = wb[sheet]
-        rows = [list(r) for r in ws.iter_rows(values_only=True)]
-        col = next(
+    for key, label in _SCE_SPECS:
+        hit = next(
             (
-                j
-                for j, c in enumerate(rows[3])
+                (rows, j)
+                for rows in sheets
+                for row in rows[:10]
+                for j, c in enumerate(row)
                 if isinstance(c, str) and c.strip().startswith(label)
             ),
             None,
         )
-        if col is None:
-            raise NyFedResearchError(f"sce: label {label!r} not found in sheet {sheet!r}")
+        if hit is None:
+            raise NyFedResearchError(f"sce: label {label!r} not found in any sheet")
+        rows, col = hit
         vals = []
-        for row in rows[4:]:
+        for row in rows:
             ym = row and row[0]
             v = _f(row[col]) if col < len(row) else None
             if isinstance(ym, (int, float)) and int(ym) > 190000 and v is not None:
@@ -290,7 +301,6 @@ def _sce() -> dict[str, list[tuple[str, float]]]:
         if not vals:
             raise NyFedResearchError(f"sce: no rows for {key}")
         out[key] = vals
-    wb.close()
     return out
 
 

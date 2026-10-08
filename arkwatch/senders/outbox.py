@@ -11,8 +11,14 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
+from ..config import missing_env
 from ..db import get_conn
 from .base import active_channels
+
+CHANNEL_ENV = {
+    "telegram": ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
+    "discord": ("DISCORD_WEBHOOK_URL",),
+}
 
 CLAIM_STALE_MIN = 10  # re-claim a sending row only after >10 min
 BRIEF_MAX_ATTEMPTS = 3
@@ -85,7 +91,7 @@ def _claim_brief_rows(conn: sqlite3.Connection) -> list[tuple]:
 def send_pending(db_path: str) -> dict:
     """Read pending outbox rows → dispatch per channel → update status."""
     conn = get_conn(db_path)
-    results = {"sent": 0, "failed": 0, "messages": []}
+    results = {"sent": 0, "failed": 0, "skipped": 0, "messages": []}
     try:
         rows = _claim_brief_rows(conn)
         if rows:
@@ -94,12 +100,20 @@ def send_pending(db_path: str) -> dict:
             for row_id, brief_date, channel_name in rows:
                 ch = channels.get(channel_name)
                 if ch is None:
+                    # unconfigured channel = 'skipped' (not retried, not a
+                    # failure); an unknown channel name stays 'failed'
+                    env = CHANNEL_ENV.get(channel_name)
+                    reason = env and missing_env(*env)
                     conn.execute(
-                        "UPDATE brief_deliveries SET status='failed', last_error=? WHERE id=?",
-                        (f"channel '{channel_name}' not active (env not set)", row_id),
+                        "UPDATE brief_deliveries SET status=?, last_error=? WHERE id=?",
+                        (
+                            "skipped" if reason else "failed",
+                            reason or f"channel '{channel_name}' not active",
+                            row_id,
+                        ),
                     )
                     conn.commit()
-                    results["failed"] += 1
+                    results["skipped" if reason else "failed"] += 1
                     continue
                 md_row = conn.execute(
                     "SELECT markdown FROM brief_log WHERE date=?", (brief_date,)

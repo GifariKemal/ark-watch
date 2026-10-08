@@ -544,18 +544,22 @@ series:
   calendar_family: "NEW HOME SALES"
   active: 1
 
+# FRED API verified 2026-10-09: units "Number of Units" (raw, SAAR; latest
+# 2026-08 = 3,980,000, not thousands) and a ROLLING ~13-month window
+# (observation_start 2025-08-01, NAR licence): no fixed expected_start holds,
+# so the depth gate is off for this series.
 - series_id: FRED:EXHOSLUSM495S
-  name: "Existing Home Sales (SAAR, thousands of units)"
+  name: "Existing Home Sales (SAAR, units)"
   block: D
   tier: 1
-  unit: "thousand units (SAAR)"
+  unit: "units (SAAR)"
   value_format: fraction
   freq: M
   ts_convention: report_month
   release_schedule: "monthly; ~20th of following month 10:00 ET"
-  expected_start: "1968-01-01"
-  sanity_min: 1500
-  sanity_max: 9000
+  expected_start: null
+  sanity_min: 1500000
+  sanity_max: 9000000
   primary_source: "FRED:EXHOSLUSM495S"
   secondary_source: null
   tolerance: null
@@ -680,7 +684,7 @@ series:
   expected_start: "2022-01-01"      # 5y module starts later (live: 202201 first row)
   sanity_min: 0.0
   sanity_max: 30.0
-  primary_source: "NYFED:frbny-sce-data.xlsx 'Five-year ahead Infl Exp'"
+  primary_source: "NYFED:frbny-sce-data.xlsx 'Inflation expectations' (5y col; own sheet until 2026-09)"
   secondary_source: null
   tolerance: null
   active: 1

@@ -598,6 +598,10 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="arkwatch daemon")
     p.add_argument("--once", action="store_true", help="run the loop once then exit (for testing)")
     a = p.parse_args(argv)
+    from . import db as _db
+
+    # first boot on an empty volume: schema exists before any job / api read
+    _db.get_conn(DB_PATH, allow_init=True).close()
     if a.once:
         _setup_logging()
         _heartbeat()

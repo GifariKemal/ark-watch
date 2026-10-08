@@ -20,7 +20,7 @@ def _num(v: Any) -> float | None:
 
 
 Num = Annotated[float | None, BeforeValidator(_num)]
-FreshnessStatus = Literal["fresh", "late", "stale", "never"]
+FreshnessStatus = Literal["fresh", "late", "stale", "never", "unconfigured"]
 JobKind = Literal[tuple(JOB_KINDS)]  # type: ignore[valid-type]
 
 

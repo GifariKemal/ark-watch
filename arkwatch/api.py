@@ -881,7 +881,20 @@ def data_freshness(c: sqlite3.Connection) -> list[dict]:
         " WHERE o.series_id = r.series_id) AS last_ts FROM series_registry r"
         " WHERE r.active = 1 ORDER BY r.series_id",
     )
-    return [{**r, **_freshness(r["last_ts"], r["freq"], today)} for r in rows]
+    # latest fetch_log row per target (SQLite: bare column follows MAX(id)).
+    # A harvest SKIPPED row on the provider prefix ('EODHD:') newer than the
+    # series' own last fetch = unconfigured provider, not a stale series.
+    sql = "SELECT target, MAX(id), status FROM fetch_log GROUP BY target"
+    last = {t: (i, st) for t, i, st in c.execute(sql)}
+    out = []
+    for r in rows:
+        sid = r["series_id"]
+        f = _freshness(r["last_ts"], r["freq"], today)
+        latest = max(last.get(sid, (0, "")), last.get(sid.split(":", 1)[0] + ":", (0, "")))
+        if latest[1] == "SKIPPED":
+            f["status"] = "unconfigured"
+        out.append({**r, **f})
+    return out
 
 
 def _job_out(r: dict) -> dict:

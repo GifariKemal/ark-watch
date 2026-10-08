@@ -1085,7 +1085,11 @@ def generate_trading_playbook(
                     else (
                         "NONE_IN_25D_LOOKBACK (All-Time Low)"
                         if k == "NAKED_POC_BELOW"
-                        else "FORMING_IN_RTH"
+                        else (
+                            "FORMING_IN_SESSION"
+                            if k.startswith(("ASIA_", "LONDON_"))
+                            else "FORMING_IN_RTH"
+                        )
                     )
                 )
             )
@@ -1236,6 +1240,10 @@ def generate_trading_playbook(
             "nearest_naked_poc_below": naked_poc_below
             if naked_poc_below
             else "NONE_IN_25D_LOOKBACK (All-Time Low)",
+            "multi_horizon_session_profiles": ctx.get("session_profiles", {}),
+            "session_value_migration": ctx.get("session_value_migration", {}),
+            "ipda_data_ranges": ctx.get("ipda_data_ranges", {}),
+            "quarterly_theory": ctx.get("quarterly_theory", {}),
             "tpo_analytics": {
                 "tpo_poc": tpo_poc,
                 "tpo_vah": tpo_vah,

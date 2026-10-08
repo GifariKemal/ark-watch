@@ -33,6 +33,12 @@ from .amt import (
     find_naked_pocs,
     get_asset_ib_timing,
 )
+from .amt_horizons import compute_horizon_amt
+from .horizons import (
+    get_monthly_quarter,
+    get_session_window,
+    get_weekly_quarter,
+)
 
 US_CASH_OPEN_UTC_SUMMER = time(13, 30)  # 09:30 ET during EDT
 US_CASH_OPEN_UTC_WINTER = time(14, 30)  # 09:30 ET during EST
@@ -271,6 +277,64 @@ def compute_session_reference_levels(
 
     # Pilar 5: Naked POCs (Virgin POC Liquidity Magnets)
     naked_pocs = find_naked_pocs(session_bars, last_price, lookback_sessions=25)
+
+    # Multi-Horizon Session Profiles (Asia, London, Overlap)
+    target_d = target_dt.date()
+    as_s, as_e = get_session_window("ASIA", target_d)
+    asia_prof = compute_horizon_amt(conn, sym, as_s, as_e)
+
+    ld_s, ld_e = get_session_window("LONDON", target_d)
+    london_prof = compute_horizon_amt(conn, sym, ld_s, ld_e)
+
+    ov_s, ov_e = get_session_window("NY_LONDON_OVERLAP", target_d)
+    overlap_prof = compute_horizon_amt(conn, sym, ov_s, ov_e)
+
+    # Session-to-Session Value Migration (London vs Asia)
+    if asia_prof and london_prof:
+        session_migration = classify_value_migration(
+            london_prof["vah"],
+            london_prof["val"],
+            london_prof["poc"],
+            asia_prof["vah"],
+            asia_prof["val"],
+            asia_prof["poc"],
+        )
+    else:
+        session_migration = {
+            "relationship": "INSUFFICIENT_SESSION_DATA",
+            "bias": "NEUTRAL",
+            "meaning": "Awaiting session completion",
+        }
+
+    # IPDA Data Ranges (Daily Lookbacks & Intraday Lookbacks)
+    daily_rows = conn.execute(
+        "SELECT ts, high, low FROM instrument_prices WHERE symbol=? AND source IN ('YAHOO', 'EODHD') ORDER BY ts DESC LIMIT 65",
+        (sym,),
+    ).fetchall()
+    ipda_ranges = {}
+    for days in [1, 2, 3, 5, 10, 15, 20, 40, 60]:
+        s_rows = daily_rows[:days]
+        if s_rows:
+            h = max(float(r[1]) for r in s_rows if r[1] is not None)
+            l_val = min(float(r[2]) for r in s_rows if r[2] is not None)
+            ipda_ranges[f"{days}D"] = {
+                "high": round(h, 4),
+                "low": round(l_val, 4),
+                "range": round(h - l_val, 4),
+                "equilibrium": round((h + l_val) / 2.0, 4),
+            }
+        else:
+            ipda_ranges[f"{days}D"] = {
+                "high": None,
+                "low": None,
+                "range": None,
+                "equilibrium": None,
+            }
+
+    # Quarterly Theory Context
+    w_quarter = get_weekly_quarter(target_d)
+    m_quarter = get_monthly_quarter(target_d)
+
     return {
         "symbol": sym,
         "as_of": target_dt.isoformat(timespec="seconds"),
@@ -318,6 +382,20 @@ def compute_session_reference_levels(
             "WEEKLY_VAH": weekly_va["vah"],
             "WEEKLY_POC": weekly_va["poc"],
             "WEEKLY_VAL": weekly_va["val"],
+            "ASIA_VAH": asia_prof["vah"] if asia_prof else None,
+            "ASIA_VAL": asia_prof["val"] if asia_prof else None,
+            "ASIA_POC": asia_prof["poc"] if asia_prof else None,
+            "ASIA_VWAP": asia_prof["vwap"] if asia_prof else None,
+            "LONDON_VAH": london_prof["vah"] if london_prof else None,
+            "LONDON_VAL": london_prof["val"] if london_prof else None,
+            "LONDON_POC": london_prof["poc"] if london_prof else None,
+            "LONDON_VWAP": london_prof["vwap"] if london_prof else None,
+            "IPDA_20D_HIGH": ipda_ranges.get("20D", {}).get("high"),
+            "IPDA_20D_LOW": ipda_ranges.get("20D", {}).get("low"),
+            "IPDA_40D_HIGH": ipda_ranges.get("40D", {}).get("high"),
+            "IPDA_40D_LOW": ipda_ranges.get("40D", {}).get("low"),
+            "IPDA_60D_HIGH": ipda_ranges.get("60D", {}).get("high"),
+            "IPDA_60D_LOW": ipda_ranges.get("60D", {}).get("low"),
         },
         "auction_context": {
             "price_vs_prior_value": (
@@ -359,9 +437,19 @@ def compute_session_reference_levels(
             "time_acceptance_level": time_acc["acceptance_level"],
             "high_auction_structure": extremes_data["high_structure"],
             "low_auction_structure": extremes_data["low_structure"],
+            "session_profiles": {
+                "asia": asia_prof if asia_prof else "N/A (Awaiting Session Bars)",
+                "london": london_prof if london_prof else "N/A (Awaiting Session Bars)",
+                "overlap": overlap_prof if overlap_prof else "N/A (Awaiting Session Bars)",
+            },
+            "session_value_migration": session_migration,
+            "ipda_data_ranges": ipda_ranges,
+            "quarterly_theory": {
+                "weekly_quarter": w_quarter,
+                "monthly_quarter": m_quarter,
+            },
         },
         "provenance": {
-            "source": ",".join(sorted(sources)),
             "session_convention": "CME_Globex_18ET_to_17ET",
             "prior_session_bars_evaluated": len(prior_bars),
             "current_session_bars_evaluated": len(curr_bars),

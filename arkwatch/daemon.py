@@ -19,7 +19,7 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -215,7 +215,9 @@ def healthcheck(heartbeat: Path | None = None, db_path: Path | None = None) -> i
     try:
         beat = datetime.fromisoformat((heartbeat or HEARTBEAT).read_text().strip())
         age = (datetime.now(UTC) - beat).total_seconds()
-        conn = sqlite3.connect(f"file:{db_path or DB_PATH}?mode=ro", uri=True)
+        # as_uri() percent-encodes '#', '?', '%' (a raw f"file:{path}" cut the path at '#')
+        uri = Path(db_path or DB_PATH).resolve().as_uri()
+        conn = sqlite3.connect(f"{uri}?mode=ro", uri=True)
         try:
             conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
         finally:
@@ -410,6 +412,28 @@ def _run_job(cmd: str, desc: str) -> bool:
         return False
 
 
+def _run_api_jobs(daemon_start: str) -> None:
+    """One API-queued job per loop cycle, through _spawn (heartbeat stays fresh). First
+    reap 'running' rows left by a previous daemon or older than timeout + grace: this
+    daemon runs jobs synchronously, so none of its own can be running right now."""
+    try:
+        from . import db as _db
+        from .qa import jobs_runner
+
+        cutoff = datetime.now(UTC) - timedelta(seconds=jobs_runner.JOB_TIMEOUT_S + 300)
+        conn = _db.get_conn(DB_PATH)
+        try:
+            # started before max(start, cutoff) == started before start OR before cutoff
+            stale = max(daemon_start, cutoff.isoformat(timespec="seconds"))
+            if n := jobs_runner.reap_running_jobs(conn, stale):
+                logger.warning(f"reaped {n} interrupted API job(s)")
+            jobs_runner.run_pending_jobs(conn, run=_spawn, limit=1)
+        finally:
+            conn.close()
+    except Exception as ex:  # the queue must never break the loop
+        logger.error(f"API job queue failed: {ex}")
+
+
 STATE_PATH = DATA_DIR / "daemon_state.json"
 
 
@@ -492,6 +516,7 @@ def run_loop():
     last_watch = 0.0
     last_market_bucket = ""
     last_news_bucket = ""
+    daemon_start = datetime.now(UTC).isoformat(timespec="seconds")
     try:
         while True:
             _heartbeat()
@@ -553,6 +578,7 @@ def run_loop():
                 _run_job("sentiment", "Multi-asset news intelligence radar")
                 _run_job("breadth", "S&P 500 constituent breadth")
                 _run_job("crypto", "Crypto liquidation analytics")
+            _run_api_jobs(daemon_start)
             # Rotate logs at the UTC date change (the filename convention is
             # UTC). CYCLE-counting drifted: a daemon started at 20:18 rotated
             # at 20:18 daily, so yesterday's filename kept receiving today's

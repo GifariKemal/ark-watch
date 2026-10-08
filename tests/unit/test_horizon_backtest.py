@@ -68,3 +68,31 @@ def test_unresolved_rows_are_ignored():
     conn = _conn()
     _seed(conn, [("A", "2026-01-02", "2026-01-02T14:00:00+00:00", "ACTIVE")])
     assert horizon_backtest.run_horizon_backtest(conn)["n_trades"] == 0
+
+
+def test_every_filled_resolved_trade_counts_and_win_is_positive_r():
+    """Breakeven/early-exit/time-exit/flip trades are stored as CANCELLED_EXPIRED with the
+    real outcome in the payload: dropping them is survivorship bias."""
+    conn = _conn()
+    rows = [
+        ("w", "HIT_TARGET_WIN", 100.0, 2.0),
+        ("l", "HIT_STOP_LOSS", 100.0, -1.0),
+        ("be", "CANCELLED_EXPIRED", 100.0, 0.5),  # partial then breakeven
+        ("tx", "CANCELLED_EXPIRED", 100.0, -0.3),  # time exit
+        ("nt", "CANCELLED_EXPIRED", None, 0.0),  # never filled: not a trade
+        ("man", "CANCELLED_MANUAL", 100.0, 1.0),  # operator cancel: excluded
+        ("act", "ACTIVE", 100.0, 0.0),
+    ]
+    ts = "2026-01-02T14:00:00+00:00"
+    for uid, state, entry, r in rows:
+        conn.execute(
+            "INSERT INTO playbook_scenarios(scenario_uid, symbol, horizon, direction, scenario_id,"
+            " title, trigger_condition, target_profit, invalidation_level, risk_reward_ratio,"
+            " created_at_utc, session_id, state, triggered_at_utc, resolved_at_utc, entry_price,"
+            " r_multiple, payload_json) VALUES (?, 'NQ1', 'INTRADAY', 'LONG', 'A', 't', 'c',"
+            " 1, 0, 2, ?, '2026-01-02', ?, ?, ?, ?, ?, '{}')",
+            (uid, ts, state, ts, ts, entry, r),
+        )
+    out = horizon_backtest.run_horizon_backtest(conn, min_observations=1)
+    assert out["n_trades"] == 4
+    assert out["base_rate"] == 0.5  # wins = r > 0: target win + breakeven-with-partial

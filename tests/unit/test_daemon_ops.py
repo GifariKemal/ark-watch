@@ -93,3 +93,75 @@ def test_stop_child_terminates_process_group():
     )
     daemon._stop_child(proc, grace_s=5)
     assert proc.poll() is not None
+
+
+def test_healthcheck_opens_the_real_file_despite_uri_special_characters(tmp_path):
+    # a raw "file:{path}" URI cuts the path at '#': the probe opened some other path and
+    # reported a junk DB as healthy
+    d = tmp_path / "data#1"
+    d.mkdir()
+    assert daemon.healthcheck(_beat(tmp_path / "hb", 10), _db(d / "good.db")) == 0
+    junk = d / "arkwatch.db"
+    junk.write_bytes(b"not a database at all" * 10)
+    assert daemon.healthcheck(_beat(tmp_path / "hb2", 10), junk) == 1
+
+
+def _iso(dt):
+    return dt.isoformat(timespec="seconds")
+
+
+def test_daemon_runs_one_api_job_per_cycle_and_reaps_orphans(tmp_path, monkeypatch):
+    from arkwatch import db as arkdb
+
+    f = tmp_path / "arkwatch.db"
+    conn = arkdb.get_conn(f, allow_init=True)
+    now = datetime.now(UTC)
+    start = now - timedelta(hours=3)  # daemon started 3h ago
+    conn.executemany(
+        "INSERT INTO jobs(id, kind, status, created_at, started_at) VALUES (?, ?, ?, ?, ?)",
+        [
+            (1, "harvest", "running", _iso(start), _iso(start - timedelta(minutes=5))),  # prior run
+            (2, "cme", "running", _iso(start), _iso(now - timedelta(hours=2))),  # past timeout
+            (3, "f2", "running", _iso(now), _iso(now - timedelta(minutes=1))),  # still fine
+            (4, "market", "queued", _iso(now), None),
+            (5, "energy", "queued", _iso(now), None),
+        ],
+    )
+    seen = []
+    monkeypatch.setattr(daemon, "DB_PATH", f)
+    monkeypatch.setattr(daemon, "_spawn", lambda argv, t: seen.append(argv[3:]) or (0, "ok", ""))
+    daemon._run_api_jobs(_iso(start))
+    rows = dict(conn.execute("SELECT id, status || ':' || COALESCE(error, '') FROM jobs"))
+    conn.close()
+    assert seen == [["market"]]  # one job per loop cycle, through the heartbeat-safe _spawn
+    assert rows == {
+        1: "failed:interrupted",
+        2: "failed:interrupted",
+        3: "running:",
+        4: "done:",
+        5: "queued:",
+    }
+
+
+def test_run_loop_drives_the_api_job_queue(tmp_path, monkeypatch):
+    calls = []
+
+    def stop(_s):
+        raise SystemExit(0)
+
+    monkeypatch.setenv("GIT_SHA", "test")
+    monkeypatch.setattr(daemon, "LOCKFILE", tmp_path / "daemon.lock")
+    monkeypatch.setattr(daemon.signal, "signal", lambda *a: None)
+    for name, fn in {
+        "_setup_logging": lambda: None,
+        "_heartbeat": lambda: None,
+        "_load_state": lambda: {},
+        "_due_jobs": lambda *a: [],
+        "_run_job": lambda *a: True,
+        "_run_api_jobs": lambda start: calls.append(start),
+    }.items():
+        monkeypatch.setattr(daemon, name, fn)
+    monkeypatch.setattr(daemon.time, "sleep", stop)
+    with pytest.raises(SystemExit):
+        daemon.run_loop()
+    assert len(calls) == 1

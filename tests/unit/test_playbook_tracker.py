@@ -15,7 +15,7 @@ def test_record_playbook_scenarios_and_cfd_offset(tmp_path):
         "symbol": "NQ1",
         "as_of": "2026-10-05T14:00:00+00:00",
         "last_price": 31000.0,
-        "reference_levels": {"active_session_current": "2026-10-05"},
+        "session_id": "2026-10-05",
         "scenarios": [
             {
                 "id": "SCENARIO_INTRADAY_EXPANSION_LONG",
@@ -60,7 +60,7 @@ def test_evaluate_active_playbooks_win_lifecycle(tmp_path):
         "symbol": "NQ1",
         "as_of": t0_iso,
         "last_price": 31000.0,
-        "reference_levels": {"active_session_current": "2026-10-05"},
+        "session_id": "2026-10-05",
         "scenarios": [
             {
                 "id": "SCENARIO_EXPANSION_LONG",
@@ -131,7 +131,7 @@ def test_evaluate_active_playbooks_loss_lifecycle(tmp_path):
         "symbol": "CL1",
         "as_of": t0_iso,
         "last_price": 90.0,
-        "reference_levels": {"active_session_current": "2026-10-05"},
+        "session_id": "2026-10-05",
         "scenarios": [
             {
                 "id": "SCENARIO_LONG",
@@ -190,7 +190,7 @@ def test_evaluate_counterfactual_outcomes(tmp_path):
         "symbol": "NQ1",
         "as_of": t0_iso,
         "last_price": 31000.0,
-        "reference_levels": {"active_session_current": "2026-10-05"},
+        "session_id": "2026-10-05",
         "scenarios": [
             {
                 "id": "SCENARIO_LONG_STOPPED",
@@ -270,7 +270,7 @@ def test_evaluate_active_playbooks_breakeven_ratchet(tmp_path):
         "symbol": "NQ1",
         "as_of": t0_iso,
         "last_price": 31000.0,
-        "reference_levels": {"active_session_current": "2026-10-05"},
+        "session_id": "2026-10-05",
         "scenarios": [
             {
                 "id": "SCENARIO_EXPANSION_LONG",
@@ -341,7 +341,7 @@ def test_evaluate_active_playbooks_opposing_invalidation(tmp_path):
         "symbol": "ES1",
         "as_of": t0_iso,
         "last_price": 5000.0,
-        "reference_levels": {"active_session_current": "2026-10-05"},
+        "session_id": "2026-10-05",
         "scenarios": [
             {
                 "id": "SCENARIO_LONG",
@@ -415,7 +415,7 @@ def test_evaluate_active_playbooks_early_vwap_exit(tmp_path):
         "symbol": "NQ1",
         "as_of": t0_iso,
         "last_price": 31000.0,
-        "reference_levels": {"active_session_current": "2026-10-05"},
+        "session_id": "2026-10-05",
         "scenarios": [
             {
                 "id": "SCENARIO_EXPANSION_LONG",
@@ -493,7 +493,7 @@ def _record(conn, *scenarios, as_of=None, symbol="NQ1"):
         "symbol": symbol,
         "as_of": as_of or _ts(0),
         "last_price": 100.0,
-        "reference_levels": {"active_session_current": "2026-10-05"},
+        "session_id": "2026-10-05",
         "scenarios": [
             {
                 "id": sid,
@@ -712,3 +712,143 @@ def test_performance_metrics_trades_ci_and_non_trades(tmp_path):
     assert perf["non_trades"] == {"INVALIDATED_PRE_ENTRY": 1}
     assert perf["invalidated"] == 1
     assert perf["pending"] == 1
+
+
+# --- review fixes ----------------------------------------------------------------------------
+
+
+def test_counterfactual_audits_every_filled_trade_by_payload_outcome(tmp_path):
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    rows = [  # uid, state, entry, exit, outcome
+        ("be", "CANCELLED_EXPIRED", 100.0, 100.0, "HIT_BREAKEVEN"),
+        ("etp", "CANCELLED_EXPIRED", 100.0, 104.0, "EARLY_FULL_TP"),
+        ("nt", "CANCELLED_EXPIRED", None, None, "NO_TRIGGER"),
+    ]
+    conn.executemany(
+        "INSERT INTO playbook_scenarios (scenario_uid, symbol, horizon, direction, scenario_id,"
+        " title, trigger_condition, target_profit, invalidation_level, risk_reward_ratio,"
+        " created_at_utc, session_id, state, entry_price, exit_price, resolved_at_utc,"
+        " payload_json) VALUES (?, 'NQ1', 'INTRADAY', 'LONG', ?, 't', 't', 110, 95, 2,"
+        " ?, '2026-10-05', ?, ?, ?, ?, ?)",
+        [(u, u, _ts(0), st, e, x, _ts(0), json.dumps({"outcome": o})) for u, st, e, x, o in rows],
+    )
+    _bars(conn, *[(5 * i, 99.0, 99.5, 90.0, 91.0) for i in range(1, 8)])
+    stats = playbook_tracker.evaluate_counterfactual_outcomes(conn, as_of=_ts(240))
+    assert stats["audited"] == 2
+    assert stats["good_stop_loss"] == 1  # breakeven stop, price kept falling
+    assert stats["clean_win"] == 1  # early full TP is a win exit
+    audited = {
+        u
+        for (u,) in conn.execute(
+            "SELECT scenario_uid FROM playbook_scenarios"
+            " WHERE json_extract(payload_json, '$.counterfactual_audit') IS NOT NULL"
+        )
+    }
+    assert audited == {"be", "etp"}
+
+
+def test_tracker_bars_are_5m_and_one_row_per_timestamp(tmp_path):
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    (uid,) = _record(conn, ("L", "LONG", 100.0, 95.0, 120.0))
+    _bars(
+        conn,
+        (5, 99.5, 100.5, 99.5, 100.2),  # activation
+        (10, 100.2, 106.0, 100.0, 105.5),  # +1R partial, stop to breakeven
+        (15, 105.5, 105.6, 101.0, 101.5),  # first close under the anchored VWAP
+    )
+    # the same 15m bar from a second provider must not count as a second VWAP loss
+    conn.execute(
+        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close,"
+        " volume, fetched_at) VALUES ('NQ1', ?, '5m', 'EODHD', 105.5, 105.6, 101.0, 101.5,"
+        " 100.0, 'now')",
+        (_ts(15),),
+    )
+    # a 1m bar must not be walked as if it were a 5m bar (its low is through breakeven)
+    conn.execute(
+        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close,"
+        " volume, fetched_at) VALUES ('NQ1', ?, '1m', 'YAHOO', 101.5, 101.6, 90.0, 101.0,"
+        " 100.0, 'now')",
+        (_ts(17),),
+    )
+    conn.commit()
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(18))
+    r = _row(conn, uid)
+    assert (r["state"], r["outcome"]) == ("ACTIVE", None)
+
+
+def test_manual_cancel_racing_the_tracker_is_not_overwritten(tmp_path, monkeypatch):
+    from arkwatch import api
+
+    f = tmp_path / "a.db"
+    conn = db.get_conn(f, allow_init=True)
+    (uid,) = _record(conn, ("L", "LONG", 100.0, 95.0, 110.0))
+    _bars(conn, (5, 99.5, 100.5, 99.5, 100.2))
+    other = db.get_conn(f)
+    real_bars = playbook_tracker._bars
+
+    def racing_bars(*a):
+        # the API cancels on its own connection after the tracker read the row as PENDING
+        if (
+            conn.execute(
+                "SELECT state FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+            ).fetchone()[0]
+            == "PENDING_TRIGGER"
+        ):
+            api.cancel_playbook(other, uid, actor="op", note="manual")
+        return real_bars(*a)
+
+    monkeypatch.setattr(playbook_tracker, "_bars", racing_bars)
+    stats = playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(5))
+    other.close()
+    assert (
+        conn.execute(
+            "SELECT state FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+        ).fetchone()[0]
+        == "CANCELLED_MANUAL"
+    )
+    assert stats["activated"] == 0
+
+
+def test_as_of_before_a_rows_trigger_does_not_rewrite_it(tmp_path):
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    (uid,) = _record(conn, ("L", "LONG", 100.0, 95.0, 110.0))
+    _bars(conn, (5, 99.5, 100.5, 99.5, 100.2), (10, 100.2, 103.0, 99.0, 102.5))
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(10))
+    before = _row(conn, uid)
+    assert (before["state"], before["mfe"], before["mae"]) == ("ACTIVE", 3.0, 1.0)
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(3))  # earlier than triggered_at
+    assert _row(conn, uid) == before
+    (late,) = _record(conn, ("L2", "LONG", 104.0, 95.0, 110.0), as_of=_ts(20))
+    late_before = _row(conn, late)
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(10))  # earlier than created_at
+    assert _row(conn, late) == late_before
+
+
+def test_upsert_refreshes_pending_levels_and_reports_only_written_rows(tmp_path):
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    payload = {
+        "symbol": "NQ1",
+        "as_of": _ts(0),
+        "session_id": "2026-10-05",
+        "scenarios": [
+            {
+                "id": "L",
+                "title": "L",
+                "direction": "LONG",
+                "trigger_condition": "t",
+                "trigger_price": 100.0,
+                "target_profit": 110.0,
+                "invalidation_level": 95.0,
+                "risk_reward_ratio": 2.0,
+            }
+        ],
+    }
+    (uid,) = playbook_tracker.record_playbook_scenarios(conn, payload)
+    payload["scenarios"][0].update(trigger_price=101.0, risk_reward_ratio=3.0)
+    assert playbook_tracker.record_playbook_scenarios(conn, payload) == [uid]
+    sel = "SELECT trigger_price, risk_reward_ratio FROM playbook_scenarios WHERE scenario_uid = ?"
+    assert conn.execute(sel, (uid,)).fetchone() == (101.0, 3.0)
+    conn.execute("UPDATE playbook_scenarios SET state = 'ACTIVE' WHERE scenario_uid = ?", (uid,))
+    payload["scenarios"][0].update(trigger_price=102.0)
+    assert playbook_tracker.record_playbook_scenarios(conn, payload) == []
+    assert conn.execute(sel, (uid,)).fetchone() == (101.0, 3.0)

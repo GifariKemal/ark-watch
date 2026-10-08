@@ -13,6 +13,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -46,10 +47,42 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-def run_pending_jobs(conn: sqlite3.Connection, *, timeout: int = JOB_TIMEOUT_S) -> int:
-    """Run every queued job oldest-first; returns how many were executed."""
+def _run(argv: list[str], timeout: float) -> tuple[int, str, str]:
+    r = subprocess.run(
+        argv,
+        cwd=str(ROOT),
+        timeout=timeout,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return r.returncode, r.stdout, r.stderr
+
+
+def reap_running_jobs(conn: sqlite3.Connection, started_before: str) -> int:
+    """Fail 'running' jobs started before `started_before` (a killed daemon or a hung
+    runner left them behind; enqueue_job would otherwise dedupe onto them forever)."""
+    n = conn.execute(
+        "UPDATE jobs SET status = 'failed', finished_at = ?, error = 'interrupted'"
+        " WHERE status = 'running' AND started_at < ?",
+        (_now(), started_before),
+    ).rowcount
+    conn.commit()  # no-op on db.get_conn (autocommit) connections
+    return n
+
+
+def run_pending_jobs(
+    conn: sqlite3.Connection,
+    *,
+    timeout: int = JOB_TIMEOUT_S,
+    run: Callable[[list[str], float], tuple[int, str, str]] = _run,
+    limit: int | None = None,
+) -> int:
+    """Run queued jobs oldest-first (at most `limit`); returns how many were executed.
+    `run(argv, timeout)` -> (returncode, stdout, stderr), raising TimeoutExpired."""
     ran = 0
-    while True:
+    while limit is None or ran < limit:
         row = conn.execute(
             "SELECT id, kind FROM jobs WHERE status = 'queued' ORDER BY id LIMIT 1"
         ).fetchone()
@@ -70,23 +103,13 @@ def run_pending_jobs(conn: sqlite3.Connection, *, timeout: int = JOB_TIMEOUT_S) 
             error = f"kind '{kind}' is not allowlisted"
         else:
             try:
-                r = subprocess.run(
-                    [sys.executable, "-m", "arkwatch", *argv],
-                    cwd=str(ROOT),
-                    timeout=timeout,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                tail = [_redact(ln) for ln in (r.stdout or "").splitlines() if ln.strip()][-3:]
-                result = {"returncode": r.returncode, "tail": tail}
-                if r.returncode == 0:
+                code, out, err = run([sys.executable, "-m", "arkwatch", *argv], timeout)
+                tail = [_redact(ln) for ln in (out or "").splitlines() if ln.strip()][-3:]
+                result = {"returncode": code, "tail": tail}
+                if code == 0:
                     status = "done"
                 else:
-                    error = _redact(((r.stderr or "").strip().splitlines() or ["no output"])[-1])[
-                        :500
-                    ]
+                    error = _redact(((err or "").strip().splitlines() or ["no output"])[-1])[:500]
             except subprocess.TimeoutExpired:
                 error = f"timeout after {timeout}s"
         conn.execute(
@@ -95,3 +118,4 @@ def run_pending_jobs(conn: sqlite3.Connection, *, timeout: int = JOB_TIMEOUT_S) 
         )
         conn.commit()
         ran += 1
+    return ran

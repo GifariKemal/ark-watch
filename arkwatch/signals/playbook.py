@@ -1283,6 +1283,7 @@ def generate_trading_playbook(
     out_dict = {
         "symbol": sym,
         "as_of": as_of_iso,
+        "session_id": ref["active_session_current"],  # CME trading date, keys the tracker
         "last_price": round(last_price, 4),
         "reference_levels": {
             k: (

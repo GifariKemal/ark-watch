@@ -48,6 +48,9 @@ def _get_connection(
         from . import db
 
         path = db_path or DEFAULT_DB
+        if write and not Path(path).exists():
+            # a typo'd db_path must not silently initialize a parallel DB (CLI jobs init)
+            raise FileNotFoundError(f"{path} does not exist (API writers never create the DB)")
         connection = (
             db.get_conn(path, allow_init=True) if write else db.get_conn(path, read_only=True)
         )

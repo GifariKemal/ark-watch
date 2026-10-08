@@ -1,7 +1,8 @@
 """horizon_backtest.py — timing-cell edge test over REAL resolved playbook trades.
 
-Outcomes come only from playbook_scenarios rows that were triggered and
-resolved (HIT_TARGET_WIN / HIT_STOP_LOSS, entry_price + r_multiple present).
+Outcomes come only from playbook_scenarios rows that were filled and resolved
+(entry_price + r_multiple present, any exit type except a manual cancel); a
+trade wins when its realized r_multiple > 0.
 Each hypothesis is a cell: scenario_id (or "*" = any) x one timing dimension
 value (QT 6h quarter, 90m sub-quarter, weekday, week-of-month) read off the
 trigger time in New York, or the scenario as a whole ("ALL").
@@ -69,8 +70,11 @@ def generate_hypotheses(scenario_ids: list[str]) -> list[dict[str, Any]]:
 
 def _resolved_trades(conn: sqlite3.Connection, symbols: list[str] | None) -> list[dict[str, Any]]:
     rows = conn.execute(
-        "SELECT symbol, scenario_id, session_id, triggered_at_utc, state, r_multiple"
-        " FROM playbook_scenarios WHERE state IN ('HIT_TARGET_WIN', 'HIT_STOP_LOSS')"
+        # every filled, resolved trade: breakeven/early/time/flip exits are stored as
+        # CANCELLED_EXPIRED, dropping them is survivorship bias; manual cancels are excluded
+        "SELECT symbol, scenario_id, session_id, triggered_at_utc, r_multiple"
+        " FROM playbook_scenarios"
+        " WHERE state NOT IN ('PENDING_TRIGGER', 'ACTIVE', 'CANCELLED_MANUAL')"
         " AND entry_price IS NOT NULL AND r_multiple IS NOT NULL"
         " AND triggered_at_utc IS NOT NULL"
     ).fetchall()
@@ -79,11 +83,11 @@ def _resolved_trades(conn: sqlite3.Connection, symbols: list[str] | None) -> lis
         {
             "scenario_id": sc,
             "session": f"{sym}|{sess}",
-            "win": state == "HIT_TARGET_WIN",
+            "win": float(r) > 0,
             "r": float(r),
             **_features(sess, trig),
         }
-        for sym, sc, sess, trig, state, r in rows
+        for sym, sc, sess, trig, r in rows
         if wanted is None or sym.upper() in wanted
     ]
 

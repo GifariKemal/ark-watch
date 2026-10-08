@@ -32,6 +32,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .asof import parse_as_of
+from .horizons import cme_session_date
 
 NEWS_SHOCK_THRESHOLD = 0.30  # |intraday catalyst score| that triggers the defensive stop
 SWING_EXPIRY_DAYS = 7  # ponytail: calendar days; switch to exchange sessions if swing grows
@@ -69,11 +70,14 @@ def _update(conn: sqlite3.Connection, uid: str, event: str | None, ts: str, deta
         )
         cols["resolved_at_utc"] = ts
     cols["payload_json"] = json.dumps(p)
-    # column names are internal literals, never user input
+    # column names are internal literals, never user input. The state guard keeps a concurrent
+    # resolution (api.cancel_playbook on another connection) from being overwritten.
     sets = ", ".join(f"{k} = ?" for k in cols)
-    conn.execute(
-        f"UPDATE playbook_scenarios SET {sets} WHERE scenario_uid = ?", (*cols.values(), uid)
-    )
+    return conn.execute(
+        f"UPDATE playbook_scenarios SET {sets} WHERE scenario_uid = ?"
+        " AND state IN ('PENDING_TRIGGER', 'ACTIVE')",
+        (*cols.values(), uid),
+    ).rowcount
 
 
 def _log_events(conn: sqlite3.Connection, uid: str) -> list[dict]:
@@ -87,15 +91,19 @@ def _log_events(conn: sqlite3.Connection, uid: str) -> list[dict]:
 
 
 def _bars(conn: sqlite3.Connection, sym: str, start: str, end: str) -> list[tuple]:
-    return conn.execute(
+    """5m bars only, one row per timestamp across providers (same rule as levels.py)."""
+    rows: dict[str, tuple] = {}
+    for r in conn.execute(
         """
         SELECT bar_ts_utc, open, high, low, close, COALESCE(volume, 0.0)
         FROM intraday_bars
-        WHERE symbol = ? AND bar_ts_utc >= ? AND bar_ts_utc <= ?
-        ORDER BY bar_ts_utc ASC
+        WHERE symbol = ? AND interval = '5m' AND bar_ts_utc >= ? AND bar_ts_utc <= ?
+        ORDER BY bar_ts_utc ASC, source ASC
         """,
         (sym, start, end),
-    ).fetchall()
+    ):
+        rows.setdefault(r[0], tuple(r))
+    return list(rows.values())
 
 
 def _simulate(
@@ -166,7 +174,7 @@ def _close_trade(conn, uid, outcome, sim, direction, entry, stop, exit_p, ts, st
     risk = abs(entry - stop) or 1.0
     pnl = _pnl(direction, entry, exit_p, risk, bool(sim["partial_ts"]))
     r = round(pnl / risk, 2)
-    _update(
+    if _update(
         conn,
         uid,
         outcome,
@@ -179,8 +187,10 @@ def _close_trade(conn, uid, outcome, sim, direction, entry, stop, exit_p, ts, st
         r_multiple=r,
         mfe_points=round(sim["mfe"], 2),
         mae_points=round(sim["mae"], 2),
-    )
-    stats["resolved_wins" if r > 0 else "resolved_losses" if r < 0 else "resolved_breakeven"] += 1
+    ):
+        stats[
+            "resolved_wins" if r > 0 else "resolved_losses" if r < 0 else "resolved_breakeven"
+        ] += 1
 
 
 def _shock_ts(events: list[dict]) -> str | None:
@@ -197,9 +207,8 @@ def record_playbook_scenarios(
     with the symbol's own bars); the offset is only stored for reference."""
     symbol = playbook_payload["symbol"]
     now_utc = playbook_payload.get("as_of", datetime.now(UTC).isoformat(timespec="seconds"))
-    session_id = playbook_payload.get("reference_levels", {}).get(
-        "active_session_current", now_utc[:10]
-    )
+    # the CME trading date, never the UTC date: 18:00-20:00 ET already belongs to the next session
+    session_id = playbook_payload.get("session_id") or cme_session_date(now_utc).isoformat()
 
     scenarios = playbook_payload.get("scenarios", [])
     recorded_uids = []
@@ -236,7 +245,7 @@ def record_playbook_scenarios(
         )
 
         try:
-            conn.execute(
+            written = conn.execute(
                 """
                 INSERT INTO playbook_scenarios (
                     scenario_uid, symbol, horizon, direction, scenario_id, title,
@@ -247,6 +256,8 @@ def record_playbook_scenarios(
                 ON CONFLICT(scenario_uid) DO UPDATE SET
                     target_profit=excluded.target_profit,
                     invalidation_level=excluded.invalidation_level,
+                    trigger_price=excluded.trigger_price,
+                    risk_reward_ratio=excluded.risk_reward_ratio,
                     payload_json=excluded.payload_json
                 WHERE state = 'PENDING_TRIGGER'
                 """,
@@ -267,8 +278,9 @@ def record_playbook_scenarios(
                     cfd_basis_offset,
                     payload_json,
                 ),
-            )
-            recorded_uids.append(scenario_uid)
+            ).rowcount
+            if written:  # 0 = a conflict on a row that already left PENDING_TRIGGER
+                recorded_uids.append(scenario_uid)
         except sqlite3.Error:
             pass
 
@@ -318,6 +330,8 @@ def evaluate_active_playbooks(
         if not cur or cur[0] not in _OPEN:
             continue
         state, entry_p, triggered_at = cur
+        if parse_as_of(triggered_at or created_at) > target_dt:
+            continue  # evaluating an earlier instant must not rewrite a later live state
         expiry = _expiry(horizon, sess_id)
         expired = expiry is not None and target_dt >= expiry
         end_ts = expiry.isoformat(timespec="seconds") if expired else target_ts
@@ -370,7 +384,7 @@ def evaluate_active_playbooks(
                 )
                 stats["resolved_invalidated"] += 1
                 continue
-            _update(
+            if not _update(
                 conn,
                 uid,
                 "TRIGGERED_ACTIVE",
@@ -381,7 +395,8 @@ def evaluate_active_playbooks(
                 entry_price=entry_p,
                 mfe_points=0.0,
                 mae_points=0.0,
-            )
+            ):
+                continue  # resolved concurrently (manual cancel): no flip, no supersede
             stats["activated"] += 1
             state, triggered_at = "ACTIVE", trig_time
             opposite = "SHORT" if direction == "LONG" else "LONG"
@@ -659,8 +674,8 @@ def evaluate_counterfactual_outcomes(
         SELECT scenario_uid, symbol, direction, target_profit, invalidation_level,
                entry_price, exit_price, state, resolved_at_utc, payload_json
         FROM playbook_scenarios
-        WHERE state IN ('HIT_TARGET_WIN', 'HIT_STOP_LOSS')
-          AND resolved_at_utc IS NOT NULL
+        WHERE state NOT IN ('PENDING_TRIGGER', 'ACTIVE', 'CANCELLED_MANUAL')
+          AND entry_price IS NOT NULL AND resolved_at_utc IS NOT NULL
         """
     ).fetchall()
 
@@ -682,6 +697,8 @@ def evaluate_counterfactual_outcomes(
         # Skip if already audited
         if "counterfactual_audit" in payload:
             continue
+        # breakeven / early-TP exits are stored as CANCELLED_EXPIRED: the payload holds the truth
+        outcome = payload.get("outcome") or state
 
         # Fetch bars in forward window after resolution
         resolved_dt = parse_as_of(resolved_ts)
@@ -690,17 +707,7 @@ def evaluate_counterfactual_outcomes(
         if target_dt < window_end_dt:
             continue
 
-        cf_bars = conn.execute(
-            """
-            SELECT bar_ts_utc, open, high, low, close
-            FROM intraday_bars
-            WHERE symbol = ?
-              AND bar_ts_utc >= ?
-              AND bar_ts_utc <= ?
-            ORDER BY bar_ts_utc ASC
-            """,
-            (sym, resolved_ts, window_end_dt.isoformat(timespec="seconds")),
-        ).fetchall()
+        cf_bars = _bars(conn, sym, resolved_ts, window_end_dt.isoformat(timespec="seconds"))
 
         if len(cf_bars) < 6:
             continue
@@ -713,7 +720,7 @@ def evaluate_counterfactual_outcomes(
         verdict = "NEUTRAL_CONSOLIDATION"
         reason = "Price hovered near exit level during post-trade window."
 
-        if state == "HIT_STOP_LOSS":
+        if outcome in ("HIT_STOP_LOSS", "HIT_BREAKEVEN"):
             if direction == "LONG":
                 # Did price drop further after stop loss?
                 if cf_low < exit_p - (0.25 * risk_dist):
@@ -735,7 +742,7 @@ def evaluate_counterfactual_outcomes(
                     reason = f"Price reversed after stop-out and reached target profit ({target_p}). Stop loss was placed too tightly on a wick."
                     stats["whipsaw_stop"] += 1
 
-        elif state == "HIT_TARGET_WIN":
+        elif outcome in ("HIT_TARGET_WIN", "EARLY_FULL_TP"):
             if direction == "LONG":
                 if cf_high > target_p + (0.50 * risk_dist):
                     verdict = "RUNNER_CONTINUATION (Extended Win)"

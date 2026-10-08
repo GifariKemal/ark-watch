@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 
+import pytest
+
 from arkwatch import api, db
 
 
@@ -122,3 +124,13 @@ def test_on_demand_refresh_targets(tmp_path):
 
     r5 = api.on_demand_refresh("news-velocity", db_path=db_file)
     assert r5["status"] == "OK"
+
+
+def test_writer_paths_refuse_a_missing_db_file(tmp_path):
+
+    missing = tmp_path / "typo.db"
+    with pytest.raises(FileNotFoundError):
+        api.get_trading_playbook("NQ1", db_path=missing)
+    with pytest.raises(FileNotFoundError):
+        api.scan_opportunities(["NQ1"], db_path=missing)
+    assert not missing.exists()  # no parallel DB silently initialized

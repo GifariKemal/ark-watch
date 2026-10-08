@@ -538,3 +538,26 @@ def test_playbook_missing_inputs_are_none_and_no_borrowed_stats(tmp_path):
     sc = next(s for s in pb["scenarios"] if s["id"] == "SCENARIO_INTRADAY_EXPANSION_LONG")
     assert sc["empirical_support"] == "unavailable"  # no silent fallback to NQ1 stats
     assert sc["evidence"] == "unvalidated"
+
+
+def test_playbook_session_id_is_the_cme_session_not_the_utc_date(tmp_path):
+    # Mon 22:30 UTC = 18:30 EDT: the CME session is already Tuesday's (2026-10-06).
+    # The old UTC-date fallback stored 2026-10-05, whose close was already past, so the
+    # same generate call resolved every fresh scenario as NO_TRIGGER.
+    for now, want in (
+        (datetime(2026, 10, 5, 22, 30, tzinfo=UTC), "2026-10-06"),
+        (datetime(2026, 10, 5, 14, 0, tzinfo=UTC), "2026-10-05"),
+    ):
+        f = tmp_path / f"{want}.db"
+        _seed_breakout(f, now)
+        pb = api.get_trading_playbook("NQ1", db_path=f, as_of=now)
+        assert pb["session_id"] == want
+        conn = db.get_conn(f)
+        rows = conn.execute(
+            "SELECT scenario_uid, session_id, state FROM playbook_scenarios"
+        ).fetchall()
+        conn.close()
+        assert rows
+        for uid, sess, state in rows:
+            assert sess == want and f"-{want}-" in uid
+            assert state == "PENDING_TRIGGER", uid

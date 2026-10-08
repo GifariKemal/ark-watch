@@ -864,7 +864,7 @@ def generate_trading_playbook(
     # [B1] INTRADAY SCENARIO: Value Area 80% Rule Rotation (Inside Value Auction)
     if val and vah:
         if abs(last_price - val) <= (0.25 * daily_atr) and last_price >= (val - 0.05 * daily_atr):
-            rot_target = round((poc if poc and poc > last_price else vah) + cfd_basis_offset, 2)
+            rot_target = round(vah + cfd_basis_offset, 2)
             rot_inval = round(val - (0.05 * daily_atr) + cfd_basis_offset, 2)
             rot_reward = abs(rot_target - last_price)
             rot_risk = max(0.01, abs(last_price - rot_inval))
@@ -898,7 +898,7 @@ def generate_trading_playbook(
                     }
                 )
         elif abs(last_price - vah) <= (0.25 * daily_atr) and last_price <= (vah + 0.05 * daily_atr):
-            rot_target_s = round((poc if poc and poc < last_price else val) + cfd_basis_offset, 2)
+            rot_target_s = round(val + cfd_basis_offset, 2)
             rot_inval_s = round(vah + (0.05 * daily_atr) + cfd_basis_offset, 2)
             rot_reward_s = abs(last_price - rot_target_s)
             rot_risk_s = max(0.01, abs(rot_inval_s - last_price))

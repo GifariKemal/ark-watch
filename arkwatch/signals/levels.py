@@ -37,6 +37,7 @@ from .amt_horizons import compute_horizon_amt
 from .horizons import (
     get_active_quarterly_cycles,
     get_monthly_quarter,
+    get_quarterly_session_bounds,
     get_session_window,
     get_weekly_quarter,
 )
@@ -290,7 +291,12 @@ def compute_session_reference_levels(
     ov_s, ov_e = get_session_window("NY_LONDON_OVERLAP", target_d)
     overlap_prof = compute_horizon_amt(conn, sym, ov_s, ov_e)
 
-    # Session-to-Session Value Migration (London vs Asia)
+    # Separate London Desk vs London Quarterly Theory Q2
+    q_bounds = get_quarterly_session_bounds(target_d)
+    q2_s, q2_e = q_bounds["Q2_LONDON"]
+    q2_london_prof = compute_horizon_amt(conn, sym, q2_s, q2_e)
+
+    # Session-to-Session Value Migration (London Desk vs Asia)
     if asia_prof and london_prof:
         session_migration = classify_value_migration(
             london_prof["vah"],
@@ -307,35 +313,70 @@ def compute_session_reference_levels(
             "meaning": "Awaiting session completion",
         }
 
-    # IPDA Data Ranges (Daily Lookbacks & Intraday Lookbacks)
+    # IPDA Composite Value Area on Multi-Day Daily Lookbacks
     daily_rows = conn.execute(
-        "SELECT ts, high, low FROM instrument_prices WHERE symbol=? AND source IN ('YAHOO', 'EODHD') ORDER BY ts DESC LIMIT 65",
+        "SELECT ts, open, high, low, close, COALESCE(volume, 0.0) FROM instrument_prices WHERE symbol=? AND source IN ('YAHOO', 'EODHD') ORDER BY ts DESC LIMIT 65",
         (sym,),
     ).fetchall()
     ipda_ranges = {}
     for days in [1, 2, 3, 5, 10, 15, 20, 40, 60]:
         s_rows = daily_rows[:days]
         if s_rows:
-            h = max(float(r[1]) for r in s_rows if r[1] is not None)
-            l_val = min(float(r[2]) for r in s_rows if r[2] is not None)
+            h = max(float(r[2]) for r in s_rows if r[2] is not None)
+            l_val = min(float(r[3]) for r in s_rows if r[3] is not None)
+            bars = [
+                (r[0], float(r[1] or r[4]), float(r[2]), float(r[3]), float(r[4]), float(r[5]))
+                for r in reversed(s_rows)
+            ]
+            cva = compute_value_area(bars, tick_size=ASSET_TICK_SIZES.get(sym))
             ipda_ranges[f"{days}D"] = {
                 "high": round(h, 4),
                 "low": round(l_val, 4),
                 "range": round(h - l_val, 4),
-                "equilibrium": round((h + l_val) / 2.0, 4),
+                "midpoint": round((h + l_val) / 2.0, 4),
+                "composite_poc": cva.get("poc"),
+                "composite_vah": cva.get("vah"),
+                "composite_val": cva.get("val"),
+                "total_volume": cva.get("total_volume"),
             }
         else:
             ipda_ranges[f"{days}D"] = {
                 "high": None,
                 "low": None,
                 "range": None,
-                "equilibrium": None,
+                "midpoint": None,
+                "composite_poc": None,
+                "composite_vah": None,
+                "composite_val": None,
+                "total_volume": None,
             }
 
-    # Quarterly Theory Context
+    # Quarterly Theory Context with Real AMT Volume Profiles
     w_quarter = get_weekly_quarter(target_d)
     m_quarter = get_monthly_quarter(target_d)
     active_qt = get_active_quarterly_cycles(target_dt)
+
+    # Active Quarter AMT Profile (6 Hours)
+    qs = datetime.fromisoformat(active_qt["quarter_start_utc"])
+    qe = datetime.fromisoformat(active_qt["quarter_end_utc"])
+    active_q_amt = compute_horizon_amt(conn, sym, qs, qe)
+
+    # Active 90m Sub-Quarter AMT Profile
+    sub_s = datetime.fromisoformat(active_qt["sub_quarter_start_utc"])
+    sub_e = datetime.fromisoformat(active_qt["sub_quarter_end_utc"])
+    active_sub_amt = compute_horizon_amt(conn, sym, sub_s, sub_e)
+
+    # Prior 90m Sub-Quarter AMT Profile
+    prior_sub_amt = None
+    if active_qt.get("prior_sub_quarter_start_utc") and active_qt.get("prior_sub_quarter_end_utc"):
+        p_sub_s = datetime.fromisoformat(active_qt["prior_sub_quarter_start_utc"])
+        p_sub_e = datetime.fromisoformat(active_qt["prior_sub_quarter_end_utc"])
+        prior_sub_amt = compute_horizon_amt(conn, sym, p_sub_s, p_sub_e)
+
+    # Active 22.5m Micro-Cycle AMT Profile
+    mic_s = datetime.fromisoformat(active_qt["micro_cycle_start_utc"])
+    mic_e = datetime.fromisoformat(active_qt["micro_cycle_end_utc"])
+    active_micro_amt = compute_horizon_amt(conn, sym, mic_s, mic_e)
 
     return {
         "symbol": sym,
@@ -453,17 +494,24 @@ def compute_session_reference_levels(
             "low_auction_structure": extremes_data["low_structure"],
             "session_profiles": {
                 "asia": asia_prof if asia_prof else "N/A (Awaiting Session Bars)",
-                "london": london_prof if london_prof else "N/A (Awaiting Session Bars)",
+                "london_desk": london_prof if london_prof else "N/A (Awaiting Session Bars)",
                 "overlap": overlap_prof if overlap_prof else "N/A (Awaiting Session Bars)",
+                "q2_london_quarter": q2_london_prof
+                if q2_london_prof
+                else "N/A (Awaiting Session Bars)",
             },
             "session_value_migration": session_migration,
             "ipda_data_ranges": ipda_ranges,
             "quarterly_theory": {
                 "active_quarter": active_qt["active_quarter"],
+                "active_quarter_amt": active_q_amt if active_q_amt else "N/A",
                 "active_90m_sub_quarter": active_qt["active_90m_sub_quarter"],
                 "sub_quarter_role": active_qt["sub_quarter_role"],
+                "active_90m_sub_quarter_amt": active_sub_amt if active_sub_amt else "N/A",
+                "prior_90m_sub_quarter_amt": prior_sub_amt if prior_sub_amt else "N/A",
                 "active_22m_micro_cycle": active_qt["active_22m_micro_cycle"],
                 "micro_cycle_role": active_qt["micro_cycle_role"],
+                "active_22m_micro_cycle_amt": active_micro_amt if active_micro_amt else "N/A",
                 "weekly_quarter": w_quarter,
                 "monthly_quarter": m_quarter,
             },

@@ -163,11 +163,12 @@ def get_active_quarterly_cycles(now_utc: datetime) -> dict[str, Any]:
 
     micro_cycles = subdivide_micro_22m(active_sub_bounds[0], active_sub_bounds[1])
     micro_idx = 0
+    active_micro_bounds = micro_cycles[0]
     for idx, (ms, me) in enumerate(micro_cycles):
         if ms <= now_utc < me:
             micro_idx = idx
+            active_micro_bounds = (ms, me)
             break
-
     micro_roles = [
         "MICRO_OPEN_DISCOVERY",
         "MICRO_JUDAH_PIVOT",
@@ -185,6 +186,14 @@ def get_active_quarterly_cycles(now_utc: datetime) -> dict[str, Any]:
         "sub_quarter_end_utc": active_sub_bounds[1].isoformat(timespec="seconds"),
         "active_22m_micro_cycle": f"Micro-{micro_idx + 1}",
         "micro_cycle_role": micro_roles[micro_idx],
+        "micro_cycle_start_utc": active_micro_bounds[0].isoformat(timespec="seconds"),
+        "micro_cycle_end_utc": active_micro_bounds[1].isoformat(timespec="seconds"),
+        "prior_sub_quarter_start_utc": (
+            sub_quarters[sub_idx - 1][0].isoformat(timespec="seconds") if sub_idx > 0 else None
+        ),
+        "prior_sub_quarter_end_utc": (
+            sub_quarters[sub_idx - 1][1].isoformat(timespec="seconds") if sub_idx > 0 else None
+        ),
     }
 
 

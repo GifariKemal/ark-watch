@@ -1,4 +1,5 @@
 """Public OKX derivative snapshots and bounded REST recovery."""
+
 from __future__ import annotations
 
 import json
@@ -18,7 +19,21 @@ if TYPE_CHECKING:
 BASE_URL = "https://www.okx.com/api/v5"
 SWAPS = {"BTC-USDT-SWAP": "BTC-USDT", "ETH-USDT-SWAP": "ETH-USDT"}
 SESSION = requests.Session()
-SESSION.mount("https://", HTTPAdapter(max_retries=Retry(total=3, connect=3, read=2, status=3, backoff_factor=0.6, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=("GET",), respect_retry_after_header=True)))
+SESSION.mount(
+    "https://",
+    HTTPAdapter(
+        max_retries=Retry(
+            total=3,
+            connect=3,
+            read=2,
+            status=3,
+            backoff_factor=0.6,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET",),
+            respect_retry_after_header=True,
+        )
+    ),
+)
 
 
 def _get(path: str, params: dict) -> list[dict]:
@@ -37,17 +52,28 @@ def _stamp(raw: str | int) -> str:
     return datetime.fromtimestamp(int(raw) / 1000, UTC).isoformat(timespec="milliseconds")
 
 
-def _store_metric(conn, instrument: str, metric: str, value, raw: dict, stamp: str | None = None) -> None:
+def _store_metric(
+    conn, instrument: str, metric: str, value, raw: dict, stamp: str | None = None
+) -> None:
     if value in (None, ""):
         return
     conn.execute(
         "INSERT OR IGNORE INTO crypto_derivatives VALUES (?,?,?,?,?,?)",
-        (stamp or _stamp(raw["ts"]), "OKX", instrument, metric, float(value), json.dumps(raw, sort_keys=True, separators=(",", ":"))),
+        (
+            stamp or _stamp(raw["ts"]),
+            "OKX",
+            instrument,
+            metric,
+            float(value),
+            json.dumps(raw, sort_keys=True, separators=(",", ":")),
+        ),
     )
 
 
 def _instrument_snapshot(conn, now: datetime) -> int:
-    latest = conn.execute("SELECT MAX(observed_at_utc) FROM crypto_instruments WHERE source='OKX'").fetchone()[0]
+    latest = conn.execute(
+        "SELECT MAX(observed_at_utc) FROM crypto_instruments WHERE source='OKX'"
+    ).fetchone()[0]
     if latest:
         last = datetime.fromisoformat(latest.replace("Z", "+00:00"))
         if now - last < timedelta(hours=24):
@@ -58,7 +84,10 @@ def _instrument_snapshot(conn, now: datetime) -> int:
     if not set(SWAPS).issubset(live_ids):
         raise RuntimeError("OKX instrument metadata missing BTC or ETH swap")
     stamp = now.isoformat(timespec="seconds")
-    values = [(row["instId"], "OKX", stamp, json.dumps(row, sort_keys=True, separators=(",", ":"))) for row in selected]
+    values = [
+        (row["instId"], "OKX", stamp, json.dumps(row, sort_keys=True, separators=(",", ":")))
+        for row in selected
+    ]
     conn.executemany("INSERT OR IGNORE INTO crypto_instruments VALUES (?,?,?,?)", values)
     return len(values)
 
@@ -77,14 +106,19 @@ def instrument_specs(conn) -> dict[str, dict]:
     return specs
 
 
-def normalize_contract_size(size: float, price: float | None, spec: dict) -> tuple[float | None, float | None]:
+def normalize_contract_size(
+    size: float, price: float | None, spec: dict
+) -> tuple[float | None, float | None]:
     try:
         contracts = float(size)
         contract_value = float(spec["ctVal"]) * float(spec.get("ctMult") or 1)
     except (KeyError, TypeError, ValueError):
         return None, None
     currency = str(spec.get("ctValCcy") or "").upper()
-    if currency in {str(spec.get("baseCcy") or "").upper(), str(spec.get("instId") or "").split("-")[0].upper()}:
+    if currency in {
+        str(spec.get("baseCcy") or "").upper(),
+        str(spec.get("instId") or "").split("-")[0].upper(),
+    }:
         asset_size = contracts * contract_value
         return asset_size, asset_size * price if price and price > 0 else None
     if currency in {"USD", "USDT", "USDC"}:
@@ -93,7 +127,9 @@ def normalize_contract_size(size: float, price: float | None, spec: dict) -> tup
     return None, None
 
 
-def _snapshot(conn, instrument: str, path: str, params: dict, metric_names: tuple[tuple[str, str], ...]) -> int:
+def _snapshot(
+    conn, instrument: str, path: str, params: dict, metric_names: tuple[tuple[str, str], ...]
+) -> int:
     rows = _get(path, params)
     saved = 0
     for row in rows:
@@ -102,7 +138,9 @@ def _snapshot(conn, instrument: str, path: str, params: dict, metric_names: tupl
         if raw_ts:
             age = datetime.now(UTC) - datetime.fromtimestamp(int(raw_ts) / 1000, UTC)
             if age > timedelta(minutes=10) or age < -timedelta(minutes=1):
-                raise RuntimeError(f"OKX {path} returned a stale or future snapshot for {instrument}")
+                raise RuntimeError(
+                    f"OKX {path} returned a stale or future snapshot for {instrument}"
+                )
         for field, metric in metric_names:
             before = conn.total_changes
             _store_metric(conn, instrument, metric, row.get(field), row, stamp)
@@ -120,8 +158,14 @@ def _book_snapshot(conn, instrument: str) -> int:
     ask_size = sum(float(level[1]) for level in asks[:5])
     denom = bid_size + ask_size
     spec = instrument_specs(conn).get(instrument, {})
-    bid_notional = sum((normalize_contract_size(float(level[1]), float(level[0]), spec)[1] or 0.0) for level in bids[:5])
-    ask_notional = sum((normalize_contract_size(float(level[1]), float(level[0]), spec)[1] or 0.0) for level in asks[:5])
+    bid_notional = sum(
+        (normalize_contract_size(float(level[1]), float(level[0]), spec)[1] or 0.0)
+        for level in bids[:5]
+    )
+    ask_notional = sum(
+        (normalize_contract_size(float(level[1]), float(level[0]), spec)[1] or 0.0)
+        for level in asks[:5]
+    )
     ts = _stamp(row["ts"])
     now = datetime.now(UTC).isoformat(timespec="seconds")
     raw = json.dumps(row, sort_keys=True, separators=(",", ":"))
@@ -129,7 +173,21 @@ def _book_snapshot(conn, instrument: str) -> int:
         "INSERT OR IGNORE INTO crypto_orderbook_snapshots "
         "(ts_utc,source,instrument,bid_size_top5,ask_size_top5,imbalance_top5,raw_json,fetched_at,bid_notional_usd_top5,ask_notional_usd_top5,imbalance_notional_usd_top5) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (ts, "OKX", instrument, bid_size, ask_size, (bid_size - ask_size) / denom if denom else None, raw, now, bid_notional or None, ask_notional or None, (bid_notional - ask_notional) / (bid_notional + ask_notional) if bid_notional + ask_notional else None),
+        (
+            ts,
+            "OKX",
+            instrument,
+            bid_size,
+            ask_size,
+            (bid_size - ask_size) / denom if denom else None,
+            raw,
+            now,
+            bid_notional or None,
+            ask_notional or None,
+            (bid_notional - ask_notional) / (bid_notional + ask_notional)
+            if bid_notional + ask_notional
+            else None,
+        ),
     )
     return cursor.rowcount
 
@@ -165,8 +223,22 @@ def collect(db_path: str) -> dict[str, int]:
             out["instruments"] = -1
             log_collection(conn, "okx_market", "OKX:SWAP:instruments", None, 0, err=str(ex))
         endpoints = (
-            ("open-interest", "public/open-interest", "instType", (("oi", "open_interest_contracts"), ("oiCcy", "open_interest_asset"), ("oiUsd", "open_interest_usd"))),
-            ("funding-rate", "public/funding-rate", "instId", (("fundingRate", "funding_rate"), ("nextFundingRate", "next_funding_rate"))),
+            (
+                "open-interest",
+                "public/open-interest",
+                "instType",
+                (
+                    ("oi", "open_interest_contracts"),
+                    ("oiCcy", "open_interest_asset"),
+                    ("oiUsd", "open_interest_usd"),
+                ),
+            ),
+            (
+                "funding-rate",
+                "public/funding-rate",
+                "instId",
+                (("fundingRate", "funding_rate"), ("nextFundingRate", "next_funding_rate")),
+            ),
             ("mark-price", "public/mark-price", "instType", (("markPx", "mark_price"),)),
             ("index-price", "market/index-tickers", "instId", (("idxPx", "index_price"),)),
         )
@@ -174,7 +246,11 @@ def collect(db_path: str) -> dict[str, int]:
         for instrument, index_id in SWAPS.items():
             for name, path, mode, fields in endpoints:
                 try:
-                    params = {"instType": "SWAP", "instId": instrument} if mode == "instType" else {"instId": instrument if name == "funding-rate" else index_id}
+                    params = (
+                        {"instType": "SWAP", "instId": instrument}
+                        if mode == "instType"
+                        else {"instId": instrument if name == "funding-rate" else index_id}
+                    )
                     if name == "open-interest":
                         params = {"instType": "SWAP", "instId": instrument}
                     count = _snapshot(conn, instrument, path, params, fields)
@@ -182,24 +258,49 @@ def collect(db_path: str) -> dict[str, int]:
                     log_collection(conn, "okx_market", f"OKX:{instrument}:{name}", None, count)
                 except Exception as ex:
                     out[f"{instrument}:{name}"] = -1
-                    log_collection(conn, "okx_market", f"OKX:{instrument}:{name}", None, 0, err=str(ex))
-            for name, fetch in (("orderbook-rest", _book_snapshot), ("trades-rest-recovery", _trade_recovery)):
+                    log_collection(
+                        conn, "okx_market", f"OKX:{instrument}:{name}", None, 0, err=str(ex)
+                    )
+            for name, fetch in (
+                ("orderbook-rest", _book_snapshot),
+                ("trades-rest-recovery", _trade_recovery),
+            ):
                 try:
-                    count = fetch(conn, instrument, trade_buffer) if name == "trades-rest-recovery" else fetch(conn, instrument)
+                    count = (
+                        fetch(conn, instrument, trade_buffer)
+                        if name == "trades-rest-recovery"
+                        else fetch(conn, instrument)
+                    )
                     if count is None:
                         out[f"{instrument}:{name}"] = 0
-                        log_collection(conn, "okx_market", f"OKX:{instrument}:{name}", None, 0, status="OK")
+                        log_collection(
+                            conn, "okx_market", f"OKX:{instrument}:{name}", None, 0, status="OK"
+                        )
                         continue
                     degraded = isinstance(count, tuple)
                     if degraded:
                         count, capped = count
                         degraded = bool(capped)
                     out[f"{instrument}:{name}"] = count
-                    warning = "REST returned its 500-trade cap; gap coverage is uncertain" if degraded else None
-                    log_collection(conn, "okx_market", f"OKX:{instrument}:{name}", None, count, err=warning, status="DEGRADED" if degraded else None)
+                    warning = (
+                        "REST returned its 500-trade cap; gap coverage is uncertain"
+                        if degraded
+                        else None
+                    )
+                    log_collection(
+                        conn,
+                        "okx_market",
+                        f"OKX:{instrument}:{name}",
+                        None,
+                        count,
+                        err=warning,
+                        status="DEGRADED" if degraded else None,
+                    )
                 except Exception as ex:
                     out[f"{instrument}:{name}"] = -1
-                    log_collection(conn, "okx_market", f"OKX:{instrument}:{name}", None, 0, err=str(ex))
+                    log_collection(
+                        conn, "okx_market", f"OKX:{instrument}:{name}", None, 0, err=str(ex)
+                    )
         trade_buffer.flush()
         return out
     finally:

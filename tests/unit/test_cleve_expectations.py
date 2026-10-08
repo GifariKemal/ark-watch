@@ -70,19 +70,45 @@ def patched(monkeypatch):
 
 def test_decimal_to_pct_and_column_matching(patched):
     patched(
-        [(datetime(2026, 8, 1), {"1 year Expected Inflation": 0.0239,
-                                 "10 year Expected Inflation": 0.0249,
-                                 "11 year Expected Inflation": 0.025})],
-        [(datetime(2026, 8, 1), {"Real Rate 1-year": 0.0214,
-                                 "Real Rate 10-year ": 0.0220,
-                                 "Real Rate 1-month": 0.0289})],
+        [
+            (
+                datetime(2026, 8, 1),
+                {
+                    "1 year Expected Inflation": 0.0239,
+                    "10 year Expected Inflation": 0.0249,
+                    "11 year Expected Inflation": 0.025,
+                },
+            )
+        ],
+        [
+            (
+                datetime(2026, 8, 1),
+                {
+                    "Real Rate 1-year": 0.0214,
+                    "Real Rate 10-year ": 0.0220,
+                    "Real Rate 1-month": 0.0289,
+                },
+            )
+        ],
     )
-    assert cleve.fetch_latest("CLEVE:EXPINF_1Y") == {"ts": "2026-08-01", "value": pytest.approx(2.39, abs=0.01)}
+    assert cleve.fetch_latest("CLEVE:EXPINF_1Y") == {
+        "ts": "2026-08-01",
+        "value": pytest.approx(2.39, abs=0.01),
+    }
     # digit boundary: '1 year' must NOT pick the 10y or 11y columns
-    assert cleve.fetch_latest("CLEVE:EXPINF_10Y") == {"ts": "2026-08-01", "value": pytest.approx(2.49, abs=0.01)}
+    assert cleve.fetch_latest("CLEVE:EXPINF_10Y") == {
+        "ts": "2026-08-01",
+        "value": pytest.approx(2.49, abs=0.01),
+    }
     # 'Real Rate 1-year' must not match 'Real Rate 1-month' / '10-year '
-    assert cleve.fetch_latest("CLEVE:REALRATE_1Y") == {"ts": "2026-08-01", "value": pytest.approx(2.14, abs=0.01)}
-    assert cleve.fetch_latest("CLEVE:REALRATE_10Y") == {"ts": "2026-08-01", "value": pytest.approx(2.20, abs=0.01)}
+    assert cleve.fetch_latest("CLEVE:REALRATE_1Y") == {
+        "ts": "2026-08-01",
+        "value": pytest.approx(2.14, abs=0.01),
+    }
+    assert cleve.fetch_latest("CLEVE:REALRATE_10Y") == {
+        "ts": "2026-08-01",
+        "value": pytest.approx(2.20, abs=0.01),
+    }
 
 
 def test_unsorted_dates_max_wins(patched):
@@ -108,30 +134,51 @@ def test_missing_cell_in_latest_month_survives(patched):
     patched(
         [
             (datetime(2026, 9, 1), {"10 year Expected Inflation": 0.025}),  # 1y cell empty
-            (datetime(2026, 8, 1), {"1 year Expected Inflation": 0.0239,
-                                    "10 year Expected Inflation": 0.0249}),
+            (
+                datetime(2026, 8, 1),
+                {"1 year Expected Inflation": 0.0239, "10 year Expected Inflation": 0.0249},
+            ),
         ],
         [(datetime(2026, 9, 1), {"Real Rate 1-year": 0.021})],
     )
-    assert cleve.fetch_latest("CLEVE:EXPINF_1Y") == {"ts": "2026-08-01", "value": pytest.approx(2.39, abs=0.01)}
-    assert cleve.fetch_latest("CLEVE:EXPINF_10Y")["ts"] == "2026-09-01"  # fresh leg wins its own column
+    assert cleve.fetch_latest("CLEVE:EXPINF_1Y") == {
+        "ts": "2026-08-01",
+        "value": pytest.approx(2.39, abs=0.01),
+    }
+    assert (
+        cleve.fetch_latest("CLEVE:EXPINF_10Y")["ts"] == "2026-09-01"
+    )  # fresh leg wins its own column
 
 
 def test_tolerant_key_forms(patched):
     patched(
-        [(datetime(2026, 8, 1), {"1 year Expected Inflation": 0.0239,
-                                 "10 year Expected Inflation": 0.0249,
-                                 "11 year Expected Inflation": 0.025})],
-        [(datetime(2026, 8, 1), {"Real Rate 1-year": 0.0214,
-                                 "Real Rate 10-year ": 0.022,
-                                 "Real Rate 1-month": 0.0289})],
+        [
+            (
+                datetime(2026, 8, 1),
+                {
+                    "1 year Expected Inflation": 0.0239,
+                    "10 year Expected Inflation": 0.0249,
+                    "11 year Expected Inflation": 0.025,
+                },
+            )
+        ],
+        [
+            (
+                datetime(2026, 8, 1),
+                {
+                    "Real Rate 1-year": 0.0214,
+                    "Real Rate 10-year ": 0.022,
+                    "Real Rate 1-month": 0.0289,
+                },
+            )
+        ],
     )
     # bare suffix
     assert cleve.fetch_latest("EXPINF_1Y")["value"] == pytest.approx(2.39, abs=0.01)
     # descriptive mangled ref (the verify_sources primary_source form)
-    assert cleve.fetch_latest("inflation-expectations.csv (XLSX) sheet ... EXPINF_1Y")["value"] == pytest.approx(
-        2.39, abs=0.01
-    )
+    assert cleve.fetch_latest("inflation-expectations.csv (XLSX) sheet ... EXPINF_1Y")[
+        "value"
+    ] == pytest.approx(2.39, abs=0.01)
     with pytest.raises(cleve.CleveError, match="unrouted"):
         cleve.fetch_latest("CLEVE:NOPE")
 
@@ -169,19 +216,43 @@ def test_premia_percent_native_and_routing(patched):
     sheets' ×100 must NOT apply), fetch_first_ts routes it, and 'Inflation
     Risk Premium'/'Real Risk Premium' match exactly one column each."""
     patched(
-        [(datetime(2026, 8, 1), {"1 year Expected Inflation": 0.0239,
-                                 "10 year Expected Inflation": 0.0249,
-                                 "11 year Expected Inflation": 0.025})],
-        [(datetime(2026, 8, 1), {"Real Rate 1-year": 0.0214,
-                                 "Real Rate 10-year ": 0.022,
-                                 "Real Rate 1-month": 0.0289})],
+        [
+            (
+                datetime(2026, 8, 1),
+                {
+                    "1 year Expected Inflation": 0.0239,
+                    "10 year Expected Inflation": 0.0249,
+                    "11 year Expected Inflation": 0.025,
+                },
+            )
+        ],
+        [
+            (
+                datetime(2026, 8, 1),
+                {
+                    "Real Rate 1-year": 0.0214,
+                    "Real Rate 10-year ": 0.022,
+                    "Real Rate 1-month": 0.0289,
+                },
+            )
+        ],
         premia_rows=[
-            (datetime(2026, 7, 1), {"10 year Expected Inflation": 2.50,
-                                    "Real Risk Premium": 1.30,
-                                    "Inflation Risk Premium": 0.40}),
-            (datetime(2026, 8, 1), {"10 year Expected Inflation": 2.49,
-                                    "Real Risk Premium": 1.338,
-                                    "Inflation Risk Premium": 0.4436}),
+            (
+                datetime(2026, 7, 1),
+                {
+                    "10 year Expected Inflation": 2.50,
+                    "Real Risk Premium": 1.30,
+                    "Inflation Risk Premium": 0.40,
+                },
+            ),
+            (
+                datetime(2026, 8, 1),
+                {
+                    "10 year Expected Inflation": 2.49,
+                    "Real Risk Premium": 1.338,
+                    "Inflation Risk Premium": 0.4436,
+                },
+            ),
         ],
     )
     assert cleve.fetch_latest("CLEVE:IRP_10Y_MODEL") == {"ts": "2026-08-01", "value": 0.4436}

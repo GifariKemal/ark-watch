@@ -50,7 +50,7 @@ ROUTES = {
     "NYFED:": nyfed,
     "ECB:": ecb,
     "FRB:": fedsurvey,  # Fed Board quantitative releases (charge-off/delinquency SDMX)
-    "GEO:": geo,        # free geopolitics/food indices (GPR, FAO, HARPEX)
+    "GEO:": geo,  # free geopolitics/food indices (GPR, FAO, HARPEX)
     "CAL:FOMC_DOT": sep,  # longer prefix FIRST — startswith routing is order-sensitive
     "CAL:": caldist,  # calendar-derived series (events.actual → series; DB read)
 }
@@ -72,8 +72,9 @@ EODHD_UST_XVAL = {
 }
 
 
-def _crossval_eodhd_ust(series_id: str, fred_value: float, fred_ts: str,
-                        tolerance: float | None) -> str:
+def _crossval_eodhd_ust(
+    series_id: str, fred_value: float, fred_ts: str, tolerance: float | None
+) -> str:
     """Same-date |FRED − EODHD| ≤ tol. EODHD unreachable → '·' (degradable:
     the vendor leg may never block the gate), mismatch → ✗ with the delta."""
     kind, tenor = EODHD_UST_XVAL[series_id]
@@ -140,8 +141,8 @@ def _crossval_fmp(series_id: str, fred_value: float, fred_ts: str, tolerance: fl
 # DFF deliberately ABSENT: FMP updates federalFunds monthly-only (verified
 # live 2026-09-13: last 2026-08-01 vs FRED daily) — no same-date leg exists.
 FMP_IND_XVAL = {
-    "FRED:ICSA": ("initialClaims", 21),      # weekly
-    "FRED:UNRATE": ("unemploymentRate", 75), # monthly
+    "FRED:ICSA": ("initialClaims", 21),  # weekly
+    "FRED:UNRATE": ("unemploymentRate", 75),  # monthly
     "FRED:PAYEMS": ("totalNonfarmPayroll", 75),
     "FRED:INDPRO": ("industrialProductionTotalIndex", 75),
     # RSAFS deliberately ABSENT: live-wired 2026-09-13 and immediately caught
@@ -151,8 +152,9 @@ FMP_IND_XVAL = {
 }
 
 
-def _crossval_fmp_indicator(series_id: str, fred_value: float, fred_ts: str,
-                            tolerance: float | None) -> str:
+def _crossval_fmp_indicator(
+    series_id: str, fred_value: float, fred_ts: str, tolerance: float | None
+) -> str:
     """Same-observation |FRED − FMP economic-indicator| ≤ tol. FMP mirrors the
     official initial print; same-date lookup, monthly series matched on the
     month (ts is month-start)."""
@@ -291,8 +293,10 @@ def verify(
                 ).fetchone()
                 r = Row(series_id=e["series_id"])
                 if row and row[1] is not None:
-                    r.sanity = "✓" if smin <= row[1] <= smax else (
-                        f"✗ {_fmt(row[1], e.get('value_format'))}"
+                    r.sanity = (
+                        "✓"
+                        if smin <= row[1] <= smax
+                        else (f"✗ {_fmt(row[1], e.get('value_format'))}")
                     )
                     if not (smin <= row[1] <= smax):
                         r.note = f"db-fallback sanity[{smin},{smax}] @ {row[0]}"

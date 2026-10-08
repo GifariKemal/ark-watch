@@ -18,7 +18,14 @@ def test_session_intraday_vwap_and_expansion():
     bars = [
         ("2026-10-02T13:30:00+00:00", 500.0, 502.0, 499.0, 501.0, 1000.0),
         ("2026-10-02T13:35:00+00:00", 501.0, 503.0, 500.0, 502.0, 1000.0),
-        ("2026-10-02T13:40:00+00:00", 502.0, 508.0, 501.0, 507.0, 3000.0),  # large range + volume expansion
+        (
+            "2026-10-02T13:40:00+00:00",
+            502.0,
+            508.0,
+            501.0,
+            507.0,
+            3000.0,
+        ),  # large range + volume expansion
     ]
 
     conn.executemany(
@@ -48,5 +55,7 @@ def test_intraday_signals_store_persists():
 
     n = intraday.store_intraday_signals(conn)
     assert n > 0
-    row = conn.execute("SELECT signal_id, state FROM computed_signals WHERE signal_id='intraday_vwap_spy'").fetchone()
+    row = conn.execute(
+        "SELECT signal_id, state FROM computed_signals WHERE signal_id='intraday_vwap_spy'"
+    ).fetchone()
     assert row == ("intraday_vwap_spy", "ABOVE_VWAP")

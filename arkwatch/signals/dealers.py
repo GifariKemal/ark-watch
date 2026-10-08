@@ -97,7 +97,9 @@ def _z_within(values: list[float]) -> float | None:
     return None if std == 0 else (values[-1] - mean) / std
 
 
-def _delta_4w(window: list[tuple[str, str | None, float]]) -> tuple[float | None, float | None, float | None]:
+def _delta_4w(
+    window: list[tuple[str, str | None, float]],
+) -> tuple[float | None, float | None, float | None]:
     """(delta_4w, delta_4w_pct, base) of the latest obs vs the obs closest to
     28 days back, within the same break. (None, None, None) when no obs sits
     in the ±1-week 4-week band (young series / missed harvests)."""

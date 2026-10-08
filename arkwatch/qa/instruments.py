@@ -64,9 +64,7 @@ def insert_prices(conn, symbol: str, source: str, rows: list[dict]) -> int:
     try:
         tomb = {
             (r[0], r[1], r[2])
-            for r in conn.execute(
-                "SELECT symbol, ts, source FROM price_quarantine"
-            ).fetchall()
+            for r in conn.execute("SELECT symbol, ts, source FROM price_quarantine").fetchall()
         }
     except Exception:
         tomb = set()  # pre-v17 DB (no table) — no quarantine yet
@@ -223,7 +221,11 @@ def _cross_validate(conn, db_path: str) -> int:
         from .fetch_log import log_collection
 
         log_collection(
-            conn, "instruments", "INSTRUMENTS:XVAL", None, 0,
+            conn,
+            "instruments",
+            "INSTRUMENTS:XVAL",
+            None,
+            0,
             err=f"{len(wedges)} wedge(s): " + "; ".join(wedges[:4])[:160],
         )
         print(f"  ⚠ xval: {len(wedges)} wedge(s): {'; '.join(wedges[:4])}")
@@ -247,7 +249,9 @@ def sweep(db_path: str = str(DEFAULT_DB)) -> dict[str, int]:
             try:
                 rows = fetch_eodhd_daily(tok, ins["eodhd"], days=7)
                 out[f"{sym}|EODHD"] = insert_prices(conn, sym, "EODHD", rows)
-                log_collection(conn, "instruments", f"{sym}:EODHD", rows[0] if rows else None, len(rows))
+                log_collection(
+                    conn, "instruments", f"{sym}:EODHD", rows[0] if rows else None, len(rows)
+                )
             except Exception as ex:
                 out[f"{sym}|EODHD"] = -1
                 log_collection(conn, "instruments", f"{sym}:EODHD", None, 0, err=str(ex))
@@ -255,7 +259,9 @@ def sweep(db_path: str = str(DEFAULT_DB)) -> dict[str, int]:
             try:
                 rows = yh.fetch_daily(ins["yahoo"], start_ts=start_ts)
                 out[f"{sym}|YAHOO"] = insert_prices(conn, sym, "YAHOO", rows)
-                log_collection(conn, "instruments", f"{sym}:YAHOO", rows[0] if rows else None, len(rows))
+                log_collection(
+                    conn, "instruments", f"{sym}:YAHOO", rows[0] if rows else None, len(rows)
+                )
             except Exception as ex:
                 out[f"{sym}|YAHOO"] = -1
                 log_collection(conn, "instruments", f"{sym}:YAHOO", None, 0, err=str(ex))

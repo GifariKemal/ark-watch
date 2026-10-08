@@ -11,6 +11,7 @@ Sources handled (all from federalreserve.gov):
 Each narrative source returns {'text': str, 'ts': str, 'meta': dict} that plugs
 directly into the NLP analysis layer (nlp.py analyze_tone/extract_data).
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -258,12 +259,14 @@ def fetch_chargeoff() -> list[dict]:
             val = obs.get("OBS_VALUE", "")
             if ts and val:
                 with contextlib.suppress(ValueError, TypeError):
-                    out.append({
-                        "series": label,
-                        "ts": ts,
-                        "value": float(val),
-                        "unit": "pct",
-                    })
+                    out.append(
+                        {
+                            "series": label,
+                            "ts": ts,
+                            "value": float(val),
+                            "unit": "pct",
+                        }
+                    )
     return out
 
 
@@ -338,11 +341,7 @@ def frb_fetch_window(series_id: str, days: int = 10, *, today: str | None = None
     # quarterly release ~2 months after quarter end — a 10-day window would
     # starve it; 420d always reaches the latest quarter
     cutoff = (now - timedelta(days=max(days, 420))).date().isoformat()
-    return [
-        {"ts": ts, "value": v}
-        for lb, ts, v in _chgdel_rows()
-        if lb == label and ts >= cutoff
-    ]
+    return [{"ts": ts, "value": v} for lb, ts, v in _chgdel_rows() if lb == label and ts >= cutoff]
 
 
 def frb_save_history(conn, *, verbose: bool = True) -> int:
@@ -365,7 +364,9 @@ def frb_save_history(conn, *, verbose: bool = True) -> int:
         total += n_new + n_rev
         if verbose:
             latest = max(by_label[label])
-            print(f"  {sid:16s} {len(rows):4d} obs (new {n_new}, revised {n_rev}) — latest {latest}")
+            print(
+                f"  {sid:16s} {len(rows):4d} obs (new {n_new}, revised {n_rev}) — latest {latest}"
+            )
     conn.commit()
     return total
 
@@ -380,6 +381,7 @@ def fetch_window(series_id: str, days: int = 10, **kw) -> list[dict]:
 
 
 # --- Convenience: analyze any survey with NLP ----------------------------------------
+
 
 def analyze_survey(source: str, yyyymm: str | None = None) -> dict:
     """Fetch + NLP-analyze any Federal Reserve survey/report.

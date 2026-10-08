@@ -48,8 +48,7 @@ def _require_arkwatch_database(path: str | Path) -> int:
     conn = sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True)
     try:
         names = {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         if "schema_migrations" not in names:
             raise ValueError("refusing to modify a database without ARK Watch schema_migrations")
@@ -208,7 +207,9 @@ def main(argv: list[str] | None = None) -> int:
         "--apply", action="store_true", help="compress existing raw payloads in place"
     )
     parser.add_argument("--backup", help="new SQLite backup path required with --apply")
-    parser.add_argument("--verify-only", action="store_true", help="audit stored GDELT raw payloads")
+    parser.add_argument(
+        "--verify-only", action="store_true", help="audit stored GDELT raw payloads"
+    )
     parser.add_argument(
         "--vacuum",
         action="store_true",

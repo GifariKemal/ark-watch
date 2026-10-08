@@ -87,8 +87,7 @@ def test_walkback_fires_when_frontier_stalls(conn, monkeypatch, pinned):
     assert out["ZQ"] == 1
     assert (
         conn.execute(
-            "SELECT COUNT(*) FROM cme_settlements"
-            " WHERE trade_date='2026-09-18' AND product_id=305"
+            "SELECT COUNT(*) FROM cme_settlements WHERE trade_date='2026-09-18' AND product_id=305"
         ).fetchone()[0]
         == 1
     )
@@ -110,10 +109,7 @@ def test_no_walkback_when_frontier_advances(conn, monkeypatch, pinned):
     assert len(calls) == 1
     assert out["ZQ"] == 1
     assert (
-        conn.execute(
-            "SELECT COUNT(*) FROM cme_settlements WHERE product_id=305"
-        ).fetchone()[0]
-        == 2
+        conn.execute("SELECT COUNT(*) FROM cme_settlements WHERE product_id=305").fetchone()[0] == 2
     )
 
 
@@ -133,8 +129,5 @@ def test_walkback_retry_failure_is_nonfatal(conn, monkeypatch, pinned):
 
     assert out["ZQ"] == 0
     assert (
-        conn.execute(
-            "SELECT COUNT(*) FROM cme_settlements WHERE product_id=305"
-        ).fetchone()[0]
-        == 1
+        conn.execute("SELECT COUNT(*) FROM cme_settlements WHERE product_id=305").fetchone()[0] == 1
     )

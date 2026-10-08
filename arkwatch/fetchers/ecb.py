@@ -34,8 +34,7 @@ class EcbError(RuntimeError):
     pass
 
 
-def _csv_rows(key: str, last_n: int, start: str | None,
-              first_n: int | None = None) -> list[dict]:
+def _csv_rows(key: str, last_n: int, start: str | None, first_n: int | None = None) -> list[dict]:
     params: dict[str, str | int] = {"format": "csvdata"}
     if start:
         params["startPeriod"] = start

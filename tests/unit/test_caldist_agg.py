@@ -1,4 +1,5 @@
 """Offline tests for caldist weekly-family aggregation (energy channel tier 3)."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -17,24 +18,37 @@ def _db(tmp_path, rows):
     p = tmp_path / "ev.db"
     conn = sqlite3.connect(p)
     conn.execute(SCHEMA)
-    conn.executemany(
-        "INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows
-    )
+    conn.executemany("INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
     conn.commit()
     conn.close()
     return str(p)
 
 
 def _ev(uid, ts, name, actual):
-    return (uid, ts, None, "US", name, name, "medium", None, None, actual, "FMP",
-            None, None, 0, "TEST FAM")
+    return (
+        uid,
+        ts,
+        None,
+        "US",
+        name,
+        name,
+        "medium",
+        None,
+        None,
+        actual,
+        "FMP",
+        None,
+        None,
+        0,
+        "TEST FAM",
+    )
 
 
 class TestAggModes:
     def test_sum_with_twins_and_week_tokens(self, tmp_path):
         rows = [
             _ev("1", "2026-08-06", "TEST FAM JUL 30", -4.45),
-            _ev("1b", "2026-08-06", "TEST FAM", -4.45),        # token-less TV twin
+            _ev("1b", "2026-08-06", "TEST FAM", -4.45),  # token-less TV twin
             _ev("2", "2026-08-13", "TEST FAM AUG 06", 17.42),
             _ev("3", "2026-08-20", "TEST FAM AUG 13", 4.40),
             _ev("4", "2026-08-27", "TEST FAM AUG 20", 0.10),
@@ -43,9 +57,9 @@ class TestAggModes:
         db_path = _db(tmp_path, rows)
         out = caldist.family_rows("TEST FAM", "week_ending", "sum", db_path=db_path)
         by = {r["ts"]: r["value"] for r in out}
-        assert by["2026-07-01"] == -4.45   # week-ending Jul 30, twin counted once
+        assert by["2026-07-01"] == -4.45  # week-ending Jul 30, twin counted once
         assert by["2026-08-01"] == round(17.42 + 4.40 + 0.10 - 4.45, 3)
-        assert "2026-09-01" not in by      # nothing week-ended in Sep
+        assert "2026-09-01" not in by  # nothing week-ended in Sep
 
     def test_last_mode_takes_latest_release(self, tmp_path):
         rows = [

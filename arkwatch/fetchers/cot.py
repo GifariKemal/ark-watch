@@ -154,6 +154,7 @@ def fetch_cot(dataset: str, contract_code: str, limit: int = 156) -> list[dict]:
                 continue
 
             spr = _first(_i(_pick("positions_spread")), _i(_pick("positions_spread_all")))
+
             # REGRESSION-CAUGHT (P0, review ronde-2): positions fields are
             # PREFIX-first ('m_money_positions_long_all', 'swap__positions_…')
             # but pct/traders/change are METRIC-first

@@ -31,8 +31,7 @@ def _claim_brief_rows(conn: sqlite3.Connection) -> list[tuple]:
     # newest date per channel over ALL rows — if the newest was already
     # SENT, an older pending row must not resurrect as a stale delivery
     newest = conn.execute(
-        "SELECT channel, MAX(brief_date) FROM brief_deliveries"
-        " GROUP BY channel"
+        "SELECT channel, MAX(brief_date) FROM brief_deliveries GROUP BY channel"
     ).fetchall()
     keep_ids: list[int] = []
     for channel, _max_date in newest:
@@ -196,8 +195,7 @@ def send_pending_alerts(
                     # snapshot from ever re-announcing. 'failed' is excluded
                     # from cooldown counting → the condition can re-fire.
                     conn.execute(
-                        "UPDATE alert_deliveries SET status='failed',"
-                        " last_error=? WHERE id=?",
+                        "UPDATE alert_deliveries SET status='failed', last_error=? WHERE id=?",
                         (f"send failed after {attempts + 1} attempts", row_id),
                     )
                     conn.commit()

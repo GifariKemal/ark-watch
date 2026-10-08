@@ -93,10 +93,14 @@ def test_eodhd_fetch_window_all_rows_not_max(monkeypatch):
     # dates must be RECENT (today-1) so the ronde-6 span guard passes
     today = datetime.now(UTC).date()
     monkeypatch.setattr(
-        eodhd, "_get",
+        eodhd,
+        "_get",
         lambda path, params=None: [
-            {"code": "EFFR_SOFR", "date": (today - timedelta(days=1)).isoformat(),
-             "value_bps": -3.0},
+            {
+                "code": "EFFR_SOFR",
+                "date": (today - timedelta(days=1)).isoformat(),
+                "value_bps": -3.0,
+            },
             {"code": "EFFR_SOFR", "date": today.isoformat(), "value_bps": -2.0},
             {"code": "OTHER", "date": today.isoformat(), "value_bps": 99.0},
         ],
@@ -115,7 +119,8 @@ def test_eodhd_fetch_window_stale_span_raises(monkeypatch):
 
     old_day = (datetime.now(UTC).date() - timedelta(days=30)).isoformat()
     monkeypatch.setattr(
-        eodhd, "_get",
+        eodhd,
+        "_get",
         lambda path, params=None: [
             {"code": "EFFR_SOFR", "date": old_day, "value_bps": -3.0},
         ],
@@ -130,7 +135,8 @@ def test_fiscal_fetch_window_multi_day(monkeypatch):
     from arkwatch.fetchers import fiscal
 
     monkeypatch.setattr(
-        fiscal, "_get",
+        fiscal,
+        "_get",
         lambda path, params=None, session=None: {
             "data": [
                 {"record_date": "2026-09-04", "tot_pub_debt_out_amt": "35467890123456.00"},
@@ -192,9 +198,13 @@ def test_llama_dict_shape_summed(monkeypatch):
                 # now an epoch — live it arrives as a NUMERIC STRING
                 # ("1789603200" = 2026-09-17T00:00Z), so isinstance(int)
                 # misses it
-                {"date": "1789603200",
-                 "totalCirculatingUSD": {"peggedUSD": 305_000_000_000.0,
-                                         "peggedEUR": 500_000_000.0}},
+                {
+                    "date": "1789603200",
+                    "totalCirculatingUSD": {
+                        "peggedUSD": 305_000_000_000.0,
+                        "peggedEUR": 500_000_000.0,
+                    },
+                },
             ]
 
     monkeypatch.setattr(bybit.requests, "get", lambda *a, **k: R())
@@ -211,7 +221,6 @@ def test_stablecoin_harvest_writes_and_gates(conn):
 
     today = datetime.now(UTC).date().isoformat()
     yesterday = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
-
 
     class FakeBybit:
         @staticmethod
@@ -233,13 +242,9 @@ def test_stablecoin_harvest_writes_and_gates(conn):
         "SELECT stablecoin_usd FROM flows_daily WHERE date=?", (yesterday,)
     ).fetchone()
     assert row[0] == 309_100_000_000.0
-    row = conn.execute(
-        "SELECT stablecoin_usd FROM flows_daily WHERE date=?", (today,)
-    ).fetchone()
+    row = conn.execute("SELECT stablecoin_usd FROM flows_daily WHERE date=?", (today,)).fetchone()
     assert row[0] == 309_123_456_789.0
-    log = conn.execute(
-        "SELECT status FROM fetch_log WHERE target='LLAMA:STABLECOIN'"
-    ).fetchone()
+    log = conn.execute("SELECT status FROM fetch_log WHERE target='LLAMA:STABLECOIN'").fetchone()
     assert log[0] == "OK"
 
 
@@ -262,10 +267,12 @@ def test_flows_upsert_coalesce_protects_prior_values():
         )
 
     c = sqlite3.connect(":memory:", isolation_level=None)
-    c.execute("CREATE TABLE flows_daily (date TEXT PRIMARY KEY, funding_bps REAL,"
-              " funding_eth REAL, oi_btc REAL, oi_eth REAL, stablecoin_usd REAL)")
-    mock_harvest(c, 3.5, 1000.0)     # morning success
-    mock_harvest(c, None, None)      # afternoon retry, legs dead
+    c.execute(
+        "CREATE TABLE flows_daily (date TEXT PRIMARY KEY, funding_bps REAL,"
+        " funding_eth REAL, oi_btc REAL, oi_eth REAL, stablecoin_usd REAL)"
+    )
+    mock_harvest(c, 3.5, 1000.0)  # morning success
+    mock_harvest(c, None, None)  # afternoon retry, legs dead
     row = c.execute("SELECT funding_bps, oi_btc FROM flows_daily").fetchone()
     assert row == (3.5, 1000.0)  # NULL legs never clobber (audit P1-3)
     mock_harvest(c, 4.0, 2000.0)  # next day's real update DOES win
@@ -312,14 +319,20 @@ def test_insert_prices_partial_then_final_heals(conn):
     # intraday wrong close (ES1 class) — a later final bar must overwrite it
     insert_prices(conn, "ES1", "YAHOO", [{"ts": "2026-09-16", "close": 7600.0}])
     insert_prices(conn, "ES1", "YAHOO", [{"ts": "2026-09-16", "close": 7668.5}])
-    assert conn.execute(
-        "SELECT close FROM instrument_prices WHERE symbol='ES1' AND ts='2026-09-16'"
-    ).fetchone()[0] == 7668.5
+    assert (
+        conn.execute(
+            "SELECT close FROM instrument_prices WHERE symbol='ES1' AND ts='2026-09-16'"
+        ).fetchone()[0]
+        == 7668.5
+    )
     # a NULL-close payload must NOT clobber a stored good close
     insert_prices(conn, "ES1", "YAHOO", [{"ts": "2026-09-16", "close": None}])
-    assert conn.execute(
-        "SELECT close FROM instrument_prices WHERE symbol='ES1' AND ts='2026-09-16'"
-    ).fetchone()[0] == 7668.5
+    assert (
+        conn.execute(
+            "SELECT close FROM instrument_prices WHERE symbol='ES1' AND ts='2026-09-16'"
+        ).fetchone()[0]
+        == 7668.5
+    )
     # fully-empty rows are dropped at build time
     assert insert_prices(conn, "ES1", "YAHOO", [{"ts": "2026-09-17"}]) == 0
 
@@ -354,8 +367,23 @@ def test_caldist_ref_month_and_dedup(tmp_path):
             "importance,consensus,consensus_source,actual,actual_source,previous,"
             "surprise_z,is_curated,indicator_key)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (nm + ts, ts, ts, "US", nm, nm, "high", 50.0, "FMP", actual, "FMP",
-             None, None, 0, "ISM MANUFACTURING PMI"),
+            (
+                nm + ts,
+                ts,
+                ts,
+                "US",
+                nm,
+                nm,
+                "high",
+                50.0,
+                "FMP",
+                actual,
+                "FMP",
+                None,
+                None,
+                0,
+                "ISM MANUFACTURING PMI",
+            ),
         )
     c.commit()
     c.close()
@@ -385,8 +413,12 @@ def test_demote_restores_when_values_arrive(tmp_path):
     dbp = str(tmp_path / "t.db")
     db.get_conn(dbp, allow_init=True).close()
     ev = {
-        "normalized_name": "US JOBLESS CLAIMS", "ts_utc": "2026-09-24T12:30:00",
-        "name": "x", "importance": "high", "previous": None, "source": "CME",
+        "normalized_name": "US JOBLESS CLAIMS",
+        "ts_utc": "2026-09-24T12:30:00",
+        "name": "x",
+        "importance": "high",
+        "previous": None,
+        "source": "CME",
     }
     # born empty pre-release → demoted
     save(dbp, [{**ev, "consensus": None, "actual": None}])
@@ -411,17 +443,37 @@ def test_sibling_heal_scale_guard(tmp_path):
     dbp = str(tmp_path / "t.db")
     db.get_conn(dbp, allow_init=True).close()
     # target twin: LEVEL scale (consensus ~1.4 million), empty
-    save(dbp, [{
-        "normalized_name": "US EXISTING HOME SALES", "ts_utc": "2026-09-20T14:00:00",
-        "name": "x", "importance": "low", "consensus": 1_400_000.0, "actual": None,
-        "previous": None, "source": "CME",
-    }])
+    save(
+        dbp,
+        [
+            {
+                "normalized_name": "US EXISTING HOME SALES",
+                "ts_utc": "2026-09-20T14:00:00",
+                "name": "x",
+                "importance": "low",
+                "consensus": 1_400_000.0,
+                "actual": None,
+                "previous": None,
+                "source": "CME",
+            }
+        ],
+    )
     # healer twin: %MoM scale (actual -1.5) — 6 orders of magnitude off
-    save(dbp, [{
-        "normalized_name": "EXISTING HOME SALES", "ts_utc": "2026-09-20T14:00:00",
-        "name": "x", "importance": "high", "consensus": -1.0, "actual": -1.5,
-        "previous": None, "source": "FMP",
-    }])
+    save(
+        dbp,
+        [
+            {
+                "normalized_name": "EXISTING HOME SALES",
+                "ts_utc": "2026-09-20T14:00:00",
+                "name": "x",
+                "importance": "high",
+                "consensus": -1.0,
+                "actual": -1.5,
+                "previous": None,
+                "source": "FMP",
+            }
+        ],
+    )
     c = sqlite3.connect(dbp)
     vals = dict(c.execute("SELECT normalized_name, actual FROM events").fetchall())
     assert vals["EXISTING HOME SALES"] == -1.5  # healer keeps its own
@@ -438,9 +490,15 @@ def test_fedwatch_format_brief_asof():
     from arkwatch.transforms.fedwatch import format_brief
 
     p = type(
-        "P", (),
-        {"meeting_date": date(2026, 10, 28), "prob_ease": 0.0,
-         "prob_hold": 0.1, "prob_hike": 0.9, "implied_rate": 4.08},
+        "P",
+        (),
+        {
+            "meeting_date": date(2026, 10, 28),
+            "prob_ease": 0.0,
+            "prob_hold": 0.1,
+            "prob_hike": 0.9,
+            "implied_rate": 4.08,
+        },
     )
     txt = format_brief([p], asof="2026-09-15")
     assert "(ZQ 09-15)" in txt
@@ -479,32 +537,52 @@ def test_calendar_hour_gate_and_demote(tmp_path):
         dbp,
         [
             {  # impossible hour → date-only + low
-                "normalized_name": "SOME FMP SLIPPED TZ RELEASE", "ts_utc": "2026-09-18T05:30:00",
-                "name": "x", "importance": "high", "consensus": 1.0, "actual": None,
-                "previous": None, "source": "FMP",
+                "normalized_name": "SOME FMP SLIPPED TZ RELEASE",
+                "ts_utc": "2026-09-18T05:30:00",
+                "name": "x",
+                "importance": "high",
+                "consensus": 1.0,
+                "actual": None,
+                "previous": None,
+                "source": "FMP",
             },
             {  # valueless US-stub → demoted to low, still stored
-                "normalized_name": "US BAKER HUGHES RIG COUNT", "ts_utc": "2026-09-18T17:00:00",
-                "name": "x", "importance": "high", "consensus": None, "actual": None,
-                "previous": None, "source": "CME",
+                "normalized_name": "US BAKER HUGHES RIG COUNT",
+                "ts_utc": "2026-09-18T17:00:00",
+                "name": "x",
+                "importance": "high",
+                "consensus": None,
+                "actual": None,
+                "previous": None,
+                "source": "CME",
             },
             {  # dead CME stub family → dropped
-                "normalized_name": "US EIA PETROLEUM STATUS REPORT", "ts_utc": "2026-09-18T15:30:00",
-                "name": "x", "importance": "high", "consensus": None, "actual": None,
-                "previous": None, "source": "CME",
+                "normalized_name": "US EIA PETROLEUM STATUS REPORT",
+                "ts_utc": "2026-09-18T15:30:00",
+                "name": "x",
+                "importance": "high",
+                "consensus": None,
+                "actual": None,
+                "previous": None,
+                "source": "CME",
             },
         ],
     )
     c = sqlite3.connect(dbp)
     r1 = c.execute(
-        "SELECT substr(ts_utc,12,5), importance FROM events"
-        " WHERE normalized_name LIKE 'SOME FMP%'").fetchone()
+        "SELECT substr(ts_utc,12,5), importance FROM events WHERE normalized_name LIKE 'SOME FMP%'"
+    ).fetchone()
     assert r1 == ("00:00", "low")
     r2 = c.execute(
-        "SELECT importance FROM events WHERE normalized_name='US BAKER HUGHES RIG COUNT'").fetchone()
+        "SELECT importance FROM events WHERE normalized_name='US BAKER HUGHES RIG COUNT'"
+    ).fetchone()
     assert r2 == ("low",)
-    assert c.execute(
-        "SELECT COUNT(*) FROM events WHERE normalized_name LIKE 'US EIA PETROLEUM%'").fetchone()[0] == 0
+    assert (
+        c.execute(
+            "SELECT COUNT(*) FROM events WHERE normalized_name LIKE 'US EIA PETROLEUM%'"
+        ).fetchone()[0]
+        == 0
+    )
     c.close()
 
 
@@ -520,36 +598,75 @@ def test_calendar_sibling_heal_fills_twin(tmp_path):
     db.get_conn(dbp, allow_init=True).close()
     # first ingest: TV twin, no actual yet (different name, SAME indicator_key
     # family via the existing JOBLESS CLAIMS alias path)
-    save(dbp, [
-        {"normalized_name": "INITIAL JOBLESS CLAIMS SEP 12", "ts_utc": "2026-09-17T12:30:00",
-         "name": "x", "importance": "high", "consensus": 208.0, "actual": None,
-         "previous": 206.0, "source": "TV"},
-    ])
+    save(
+        dbp,
+        [
+            {
+                "normalized_name": "INITIAL JOBLESS CLAIMS SEP 12",
+                "ts_utc": "2026-09-17T12:30:00",
+                "name": "x",
+                "importance": "high",
+                "consensus": 208.0,
+                "actual": None,
+                "previous": 206.0,
+                "source": "TV",
+            },
+        ],
+    )
     # second ingest: FMP twin arrives WITH the actual
-    save(dbp, [
-        {"normalized_name": "INITIAL JOBLESS CLAIMS SEP 12", "ts_utc": "2026-09-17T12:30:00",
-         "name": "x", "importance": "high", "consensus": 208.0, "actual": 209.0,
-         "previous": 206.0, "source": "FMP"},
-    ])
+    save(
+        dbp,
+        [
+            {
+                "normalized_name": "INITIAL JOBLESS CLAIMS SEP 12",
+                "ts_utc": "2026-09-17T12:30:00",
+                "name": "x",
+                "importance": "high",
+                "consensus": 208.0,
+                "actual": 209.0,
+                "previous": 206.0,
+                "source": "FMP",
+            },
+        ],
+    )
     # and a NAME-twin sibling (alias family, e.g. the US-prefixed CME spelling)
-    save(dbp, [
-        {"normalized_name": "US JOBLESS CLAIMS", "ts_utc": "2026-09-17T12:30:00",
-         "name": "x", "importance": "low", "consensus": None, "actual": None,
-         "previous": None, "source": "CME"},
-    ])
-    save(dbp, [  # re-deliver the FMP actual (idempotent path)
-        {"normalized_name": "INITIAL JOBLESS CLAIMS SEP 12", "ts_utc": "2026-09-17T12:30:00",
-         "name": "x", "importance": "high", "consensus": 208.0, "actual": 209.0,
-         "previous": 206.0, "source": "FMP"},
-    ])
+    save(
+        dbp,
+        [
+            {
+                "normalized_name": "US JOBLESS CLAIMS",
+                "ts_utc": "2026-09-17T12:30:00",
+                "name": "x",
+                "importance": "low",
+                "consensus": None,
+                "actual": None,
+                "previous": None,
+                "source": "CME",
+            },
+        ],
+    )
+    save(
+        dbp,
+        [  # re-deliver the FMP actual (idempotent path)
+            {
+                "normalized_name": "INITIAL JOBLESS CLAIMS SEP 12",
+                "ts_utc": "2026-09-17T12:30:00",
+                "name": "x",
+                "importance": "high",
+                "consensus": 208.0,
+                "actual": 209.0,
+                "previous": 206.0,
+                "source": "FMP",
+            },
+        ],
+    )
     c = sqlite3.connect(dbp)
     for uidless in c.execute(
         "SELECT normalized_name, actual FROM events ORDER BY normalized_name"
     ).fetchall():
         print("  row:", uidless)
     # BOTH spellings (same indicator_key, same date) carry the actual now
-    vals = dict(c.execute(
-        "SELECT normalized_name, actual FROM events").fetchall())
+    vals = dict(c.execute("SELECT normalized_name, actual FROM events").fetchall())
     assert vals["INITIAL JOBLESS CLAIMS SEP 12"] == 209.0
     assert vals["US JOBLESS CLAIMS"] == 209.0  # healed via the sibling path
     c.close()
@@ -596,12 +713,18 @@ def test_calendar_blocks_dead_philly_subcomponents(tmp_path):
     )
     assert n == 1  # only the headline landed
     c = sqlite3.connect(dbp)
-    assert c.execute(
-        "SELECT COUNT(*) FROM events WHERE normalized_name LIKE 'PHILLY FED%'"
-    ).fetchone()[0] == 0
-    assert c.execute(
-        "SELECT consensus FROM events WHERE normalized_name LIKE 'PHILADELPHIA%'"
-    ).fetchone()[0] == 30.5
+    assert (
+        c.execute(
+            "SELECT COUNT(*) FROM events WHERE normalized_name LIKE 'PHILLY FED%'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        c.execute(
+            "SELECT consensus FROM events WHERE normalized_name LIKE 'PHILADELPHIA%'"
+        ).fetchone()[0]
+        == 30.5
+    )
     c.close()
 
 
@@ -621,8 +744,11 @@ def test_copper_trigger_skips_frozen_feed(conn, capsys):
         conn.execute(
             "INSERT INTO raw_observations(series_id, ts, value, vintage_ts, source, fetched_at)"
             " VALUES ('LME:CA_STOCKS', ?, ?, 'realtime', 't', ?)",
-            ((date.fromisoformat(stale_ts) - timedelta(days=i)).isoformat(),
-             200000.0 - i * 100, stale_ts),
+            (
+                (date.fromisoformat(stale_ts) - timedelta(days=i)).isoformat(),
+                200000.0 - i * 100,
+                stale_ts,
+            ),
         )
     conn.commit()
     fired = watcher.check_all(conn)

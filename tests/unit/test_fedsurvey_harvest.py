@@ -27,18 +27,34 @@ def _seed(monkeypatch, nlp_script: list) -> list:
     returned. Returns the list of (source_type) call labels made."""
     calls: list[str] = []
 
-    monkeypatch.setattr(fedsurvey, "fetch_sloos",
-                        lambda: {"text": "banks tightened standards", "ts": "2026-08-01"})
-    monkeypatch.setattr(fedsurvey, "fetch_beige_book",
-                        lambda: {"text": "economic activity increased slightly", "ts": "2026-09-01"})
-    monkeypatch.setattr(fedsurvey, "fetch_scoos",
-                        lambda: {"text": "credit terms roughly unchanged", "ts": "2026-06-01"})
-    monkeypatch.setattr(fedsurvey, "fetch_fsr",
-                        lambda: {"text": "financial system remained resilient", "ts": "2026-04-11"})
+    monkeypatch.setattr(
+        fedsurvey, "fetch_sloos", lambda: {"text": "banks tightened standards", "ts": "2026-08-01"}
+    )
+    monkeypatch.setattr(
+        fedsurvey,
+        "fetch_beige_book",
+        lambda: {"text": "economic activity increased slightly", "ts": "2026-09-01"},
+    )
+    monkeypatch.setattr(
+        fedsurvey,
+        "fetch_scoos",
+        lambda: {"text": "credit terms roughly unchanged", "ts": "2026-06-01"},
+    )
+    monkeypatch.setattr(
+        fedsurvey,
+        "fetch_fsr",
+        lambda: {"text": "financial system remained resilient", "ts": "2026-04-11"},
+    )
     monkeypatch.setattr(minutes, "minutes_dates", lambda: ["2026-07-29"])
-    monkeypatch.setattr(minutes, "parse_minutes",
-                        lambda d: {"full_text": "participants discussed risks", "dissent_count": 1,
-                                   "dissent_direction": "hawkish"})
+    monkeypatch.setattr(
+        minutes,
+        "parse_minutes",
+        lambda d: {
+            "full_text": "participants discussed risks",
+            "dissent_count": 1,
+            "dissent_direction": "hawkish",
+        },
+    )
     monkeypatch.setattr(pressconf, "available_dates", lambda: ["2026-07-29"])
     monkeypatch.setattr(pressconf, "fetch_transcript_text", lambda d: "chair opening remarks")
 
@@ -106,8 +122,9 @@ class TestExitCodeContract:
         errors was the silent-rot bug."""
         conn_path = tmp_path / "t.db"
         _seed(monkeypatch, [])
-        monkeypatch.setattr(fedsurvey, "fetch_fsr",
-                            lambda: (_ for _ in ()).throw(RuntimeError("HTTP 404")))
+        monkeypatch.setattr(
+            fedsurvey, "fetch_fsr", lambda: (_ for _ in ()).throw(RuntimeError("HTTP 404"))
+        )
 
         rc = fh.main(["--db", str(conn_path)])
         assert rc == 1

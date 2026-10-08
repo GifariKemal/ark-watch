@@ -24,9 +24,7 @@ def test_friday_rerange_empirical_audit(tmp_path):
         )
     conn.commit()
 
-    res = friday_audit.audit_friday_rerange(
-        conn, "NQ1", lookback_weeks=3, source="TEST"
-    )
+    res = friday_audit.audit_friday_rerange(conn, "NQ1", lookback_weeks=3, source="TEST")
     assert res["weeks_evaluated"] == 2
     assert res["revert_inside_range_count"] == 1
     assert res["continuation_breakout_count"] == 1

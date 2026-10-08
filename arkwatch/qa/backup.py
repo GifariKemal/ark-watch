@@ -87,9 +87,7 @@ def main(argv: list[str] | None = None) -> int:
 
         _c = sqlite3.connect(a.db, isolation_level=None)
         _c.execute("PRAGMA busy_timeout=30000")
-        cur = _c.execute(
-            "DELETE FROM fetch_log WHERE ts < datetime('now', '-180 day')"
-        )
+        cur = _c.execute("DELETE FROM fetch_log WHERE ts < datetime('now', '-180 day')")
         _c.close()
         print(f"  fetch_log pruned: -{cur.rowcount} rows (>180d)")
     except Exception as ex:  # pruning must never fail the backup

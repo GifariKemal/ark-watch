@@ -40,17 +40,13 @@ def test_eodhd_lookback_uses_from(monkeypatch):
 
 def test_xccy_spot_falls_back_to_yahoo_on_same_date():
     conn = _conn()
-    conn.execute(
-        "INSERT INTO instrument_prices VALUES ('EURUSD','2026-09-18','YAHOO',1.15)"
-    )
+    conn.execute("INSERT INTO instrument_prices VALUES ('EURUSD','2026-09-18','YAHOO',1.15)")
     assert _get_spot(conn, "2026-09-18") == 1.15
 
 
 def test_xccy_spot_rejects_old_data():
     conn = _conn()
-    conn.execute(
-        "INSERT INTO instrument_prices VALUES ('EURUSD','2026-09-10','EODHD',1.14)"
-    )
+    conn.execute("INSERT INTO instrument_prices VALUES ('EURUSD','2026-09-10','EODHD',1.14)")
     assert _get_spot(conn, "2026-09-18") is None
 
 

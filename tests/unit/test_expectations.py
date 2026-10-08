@@ -126,9 +126,9 @@ def test_store_persists_with_model_ts_and_buckets(conn):
     assert state == "FLAT"  # within ±25bp
     # re-run: same model month → REPLACE, no duplicate history
     store_expectations_signals(conn)
-    n = conn.execute(
-        "SELECT COUNT(*) FROM computed_signals WHERE signal_id='irp_10y'"
-    ).fetchone()[0]
+    n = conn.execute("SELECT COUNT(*) FROM computed_signals WHERE signal_id='irp_10y'").fetchone()[
+        0
+    ]
     assert n == 1
 
 
@@ -136,8 +136,6 @@ def test_store_state_buckets(conn):
     _seed_full(conn, be=2.80)  # +31bp → PREMIUM
     store_expectations_signals(conn)
     assert (
-        conn.execute(
-            "SELECT state FROM computed_signals WHERE signal_id='irp_10y'"
-        ).fetchone()[0]
+        conn.execute("SELECT state FROM computed_signals WHERE signal_id='irp_10y'").fetchone()[0]
         == "PREMIUM"
     )

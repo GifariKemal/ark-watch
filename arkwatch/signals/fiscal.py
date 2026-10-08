@@ -298,10 +298,14 @@ def _fytd_row(rows: list[tuple]) -> tuple | None:
     The rows arg is (fytd_amt, catg, type, month_amt); returns
     (fytd_sum, month_sum) or None when the category is absent."""
     fytd = sum(
-        r[0] or 0.0 for r in rows if (r[1] or "").strip().upper() == "INTEREST EXPENSE ON PUBLIC ISSUES"
+        r[0] or 0.0
+        for r in rows
+        if (r[1] or "").strip().upper() == "INTEREST EXPENSE ON PUBLIC ISSUES"
     )
     month = sum(
-        r[3] or 0.0 for r in rows if (r[1] or "").strip().upper() == "INTEREST EXPENSE ON PUBLIC ISSUES"
+        r[3] or 0.0
+        for r in rows
+        if (r[1] or "").strip().upper() == "INTEREST EXPENSE ON PUBLIC ISSUES"
     )
     # FYTD is cumulative, so fytd ≥ month on valid data; a zero FYTD with a
     # nonzero month means a partial publish (NULL fytd legs) — ambiguous, not

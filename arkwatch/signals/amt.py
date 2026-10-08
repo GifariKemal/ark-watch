@@ -37,6 +37,8 @@ ASSET_TICK_SIZES: dict[str, float] = {
     "USDJPY": 0.01,
     "DXY": 0.01,
 }
+
+
 def get_asset_ib_timing(symbol: str, is_dst: bool = True) -> tuple[time, str]:
     """Determine asset-class-specific Initial Balance start time and institutional label.
 

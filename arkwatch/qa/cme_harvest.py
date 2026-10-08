@@ -60,9 +60,7 @@ def harvest_settlements(conn, products: list[str] | None = None) -> dict[str, in
                     try:
                         retry = cme.fetch_settlements(
                             code,
-                            trade_date=datetime(
-                                probe.year, probe.month, probe.day, tzinfo=UTC
-                            ),
+                            trade_date=datetime(probe.year, probe.month, probe.day, tzinfo=UTC),
                         )
                         landed = [r for r in retry if r["trade_date"] == probe.isoformat()]
                         if landed:
@@ -207,9 +205,7 @@ def harvest_voi(conn, asset_classes: list[int] | None = None) -> tuple[int, str 
                 # IR/Energy/Metals) skipped forever. The PK's INSERT OR
                 # IGNORE is the dedup; entries are bounded (~10) by CME
                 # retention, so re-fetching a stored entry is one cheap POST.
-                rows = cme.fetch_voi(
-                    ac_id, td_raw=ent["td_raw"], report_type=ent["report_type"]
-                )
+                rows = cme.fetch_voi(ac_id, td_raw=ent["td_raw"], report_type=ent["report_type"])
                 payload = [
                     (
                         r["trade_date"],
@@ -393,16 +389,18 @@ def main(argv: list[str] | None = None) -> int:
         "SELECT MAX(trade_date) FROM cme_settlements WHERE product_id=305"
     ).fetchone()[0]
     if strip_td:
-        strip_age = (
-            datetime.now(UTC).date() - datetime.fromisoformat(strip_td).date()
-        ).days
+        strip_age = (datetime.now(UTC).date() - datetime.fromisoformat(strip_td).date()).days
         if strip_age > 7:
             s_err = (s_err or "") + f" |ZQ strip stale {strip_age}d ({strip_td})"
     # ROUND-2: rows = ACTUAL inserted/gap-filled rows (the old len(s) logged
     # '14' forever — a dead product was indistinguishable from a healthy one)
     log_collection(
-        conn, "cme", "CME:settlements", None,
-        sum(v for v in s.values() if v > 0), err=s_err or None,
+        conn,
+        "cme",
+        "CME:settlements",
+        None,
+        sum(v for v in s.values() if v > 0),
+        err=s_err or None,
     )
     if not a.skip_options:
         n_opt_fail = sum(1 for v in o.values() if v < 0)

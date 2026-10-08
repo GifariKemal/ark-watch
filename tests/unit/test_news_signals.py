@@ -29,7 +29,17 @@ def test_news_velocity_detects_spike_on_burst():
     for d in range(1, 8):
         t = now - timedelta(days=d)
         base_rows.append(
-            (f"n-base-{d}", t.isoformat(), "FMP", "Crude oil market update", "{}", "c-1", 0.5, 1.0, now.isoformat())
+            (
+                f"n-base-{d}",
+                t.isoformat(),
+                "FMP",
+                "Crude oil market update",
+                "{}",
+                "c-1",
+                0.5,
+                1.0,
+                now.isoformat(),
+            )
         )
     conn.executemany(
         "INSERT INTO market_news(news_id, published_at_utc, source, title, symbols_json, cluster_id, relevance, novelty, fetched_at) "
@@ -42,7 +52,17 @@ def test_news_velocity_detects_spike_on_burst():
     for i in range(1, 7):
         t = now - timedelta(minutes=i * 4)
         burst_rows.append(
-            (f"n-burst-{i}", t.isoformat(), "EODHD", f"Breaking oil supply shock headline {i}", "{}", f"c-b-{i}", 0.8, 1.0, now.isoformat())
+            (
+                f"n-burst-{i}",
+                t.isoformat(),
+                "EODHD",
+                f"Breaking oil supply shock headline {i}",
+                "{}",
+                f"c-b-{i}",
+                0.8,
+                1.0,
+                now.isoformat(),
+            )
         )
     conn.executemany(
         "INSERT INTO market_news(news_id, published_at_utc, source, title, symbols_json, cluster_id, relevance, novelty, fetched_at) "
@@ -71,5 +91,7 @@ def test_store_news_signals_persists():
 
     n = news.store_news_signals(conn)
     assert n > 0
-    row = conn.execute("SELECT signal_id, run_id FROM computed_signals WHERE signal_id='news_velocity_oil'").fetchone()
+    row = conn.execute(
+        "SELECT signal_id, run_id FROM computed_signals WHERE signal_id='news_velocity_oil'"
+    ).fetchone()
     assert row == ("news_velocity_oil", "news_velocity")

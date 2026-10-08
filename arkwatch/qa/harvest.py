@@ -37,13 +37,13 @@ def _redact(text: str) -> str:
     if _SECRET_RE is None:
         import re as _re
 
-        _SECRET_RE = _re.compile(
-            r"(api_key|api_token|apikey|token|key)=[^&\s]+", _re.IGNORECASE
-        )
+        _SECRET_RE = _re.compile(r"(api_key|api_token|apikey|token|key)=[^&\s]+", _re.IGNORECASE)
     return _SECRET_RE.sub(r"\1=REDACTED", text)
 
 
-def _window_or_latest(mod, sid_full: str, prefix: str) -> tuple[list[tuple], dict | None, str | None]:
+def _window_or_latest(
+    mod, sid_full: str, prefix: str
+) -> tuple[list[tuple], dict | None, str | None]:
     """GAP-HEAL (audit P1-1, 2026-09-13): fetchers exposing fetch_window land
     EVERY observation in the window — a shutdown night that missed a
     publication day heals on the next run (the latest-only contract froze
@@ -70,11 +70,7 @@ def _window_or_latest(mod, sid_full: str, prefix: str) -> tuple[list[tuple], dic
             window_err = f"WINDOW_FALLBACK {str(ex)[:60]}"
     src = getattr(mod, "SOURCE", None) or prefix.rstrip(":")
     if pts:
-        rows = [
-            (sid_full, p["ts"], p["value"], src)
-            for p in pts
-            if p.get("value") is not None
-        ]
+        rows = [(sid_full, p["ts"], p["value"], src) for p in pts if p.get("value") is not None]
         first_obj = rows and {"ts": rows[-1][1], "value": rows[-1][2]} or None
         return rows, first_obj, None
     cur = mod.fetch_latest(sid_full)

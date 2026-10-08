@@ -134,7 +134,9 @@ class TestSepDotRouting:
             # oldest-first ordering ALSO covered: max-by-ts must not care
             {"ts": "2023-09-20", "series_suffix": "2026", "value": 2.9},
         ]
-        monkeypatch.setattr(sep, "series_rows", lambda: sorted(fake_rows, key=lambda r: r["ts"], reverse=True))
+        monkeypatch.setattr(
+            sep, "series_rows", lambda: sorted(fake_rows, key=lambda r: r["ts"], reverse=True)
+        )
         assert sep.fetch_latest("CAL:FOMC_DOT_2026") == {"ts": "2026-09-16", "value": 3.7}
         assert sep.fetch_latest("CAL:FOMC_DOT_2027") == {"ts": "2026-09-16", "value": 3.4}
         # routing: the longer prefix must win over CAL: → caldist
@@ -153,7 +155,8 @@ class TestSepDotRouting:
         from arkwatch.qa.harvest import _window_or_latest
 
         monkeypatch.setattr(
-            sep, "series_rows",
+            sep,
+            "series_rows",
             lambda: [{"ts": "2026-09-16", "series_suffix": "2026", "value": 4.1}],
         )
         rows, first, err = _window_or_latest(sep, "CAL:FOMC_DOT_2026", "CAL:FOMC_DOT")

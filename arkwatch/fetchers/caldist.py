@@ -53,8 +53,18 @@ FAMILIES = {
 }
 
 _MONTHS = {
-    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
-    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+    "JAN": 1,
+    "FEB": 2,
+    "MAR": 3,
+    "APR": 4,
+    "MAY": 5,
+    "JUN": 6,
+    "JUL": 7,
+    "AUG": 8,
+    "SEP": 9,
+    "OCT": 10,
+    "NOV": 11,
+    "DEC": 12,
 }
 _TOKEN = re.compile(r"\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(?:\s+\d{1,2})?\s*$")
 
@@ -103,14 +113,18 @@ def _release_events(rows, convention):
     return out
 
 
-def family_rows(indicator_key: str, convention: str = "m_minus_1", agg: str = "max",
-                db_path: str | Path = DEFAULT_DB) -> list[dict]:
+def family_rows(
+    indicator_key: str,
+    convention: str = "m_minus_1",
+    agg: str = "max",
+    db_path: str | Path | None = None,
+) -> list[dict]:
     """All months of a family: [{ts, value}] ascending.
 
     agg=max   — level series (ISM twins dedup, historical behavior)
     agg=sum   — weekly FLOWS collapsed to the true monthly total (EIA)
     agg=last  — latest release within the month (rig count)"""
-    conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{Path(db_path or DEFAULT_DB)}?mode=ro", uri=True)
     try:
         rows = conn.execute(
             "SELECT normalized_name, substr(ts_utc,1,10) d, actual FROM events"
@@ -129,10 +143,7 @@ def family_rows(indicator_key: str, convention: str = "m_minus_1", agg: str = "m
             cur = by_month.get(rm)
             if cur is None or float(actual) > cur:
                 by_month[rm] = float(actual)
-        return [
-            {"ts": f"{y:04d}-{m:02d}-01", "value": v}
-            for (y, m), v in sorted(by_month.items())
-        ]
+        return [{"ts": f"{y:04d}-{m:02d}-01", "value": v} for (y, m), v in sorted(by_month.items())]
     by_month_sum: dict[tuple[int, int], float] = {}
     by_month_last: dict[tuple[int, int], tuple[str, float]] = {}
     for d, rm, v in _release_events(rows, convention):
@@ -142,8 +153,7 @@ def family_rows(indicator_key: str, convention: str = "m_minus_1", agg: str = "m
             by_month_last[rm] = (d, v)
     src = by_month_sum if agg == "sum" else {k: v for k, (_, v) in by_month_last.items()}
     return [
-        {"ts": f"{y:04d}-{m:02d}-01", "value": round(v, 3)}
-        for (y, m), v in sorted(src.items())
+        {"ts": f"{y:04d}-{m:02d}-01", "value": round(v, 3)} for (y, m), v in sorted(src.items())
     ]
 
 
@@ -177,4 +187,3 @@ def fetch_window(series_id: str, days: int = 10) -> list[dict]:
     days_eff = max(days, 62 if fam[1] == "m_minus_1" else 130)
     cutoff = (datetime.now(UTC).date() - timedelta(days=days_eff)).isoformat()
     return [p for p in family_rows(*fam) if p["ts"] >= cutoff]
-

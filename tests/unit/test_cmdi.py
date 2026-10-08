@@ -22,13 +22,15 @@ def _page(n, base_year=2005):
     rows = []
     for i in range(n):
         d = datetime(base_year, 1, 7) + timedelta(weeks=i)
-        rows.append({
-            "as_of_date": d.date().isoformat(),
-            "market_cmdi": 0.20 + (i % 10) / 100,
-            "ig_cmdi": 0.27,
-            "hy_cmdi": 0.08,
-            "source": "ny_fed",
-        })
+        rows.append(
+            {
+                "as_of_date": d.date().isoformat(),
+                "market_cmdi": 0.20 + (i % 10) / 100,
+                "ig_cmdi": 0.27,
+                "hy_cmdi": 0.08,
+                "source": "ny_fed",
+            }
+        )
     return rows
 
 
@@ -47,7 +49,7 @@ class TestCmdi:
         monkeypatch.setattr(eodhd, "_cmdi_cache", None)
         rows = eodhd.fetch_cmdi_all()
         assert calls == [0, 100, 200, 300, 400, 500]
-        assert len(rows) == 529                  # 5×100 + 29, sorted ascending
+        assert len(rows) == 529  # 5×100 + 29, sorted ascending
         assert rows[0]["as_of_date"] < rows[-1]["as_of_date"]
 
     def test_runaway_backstop(self, monkeypatch):
@@ -67,15 +69,20 @@ class TestCmdi:
         rows = []
         for i in range(129):
             d = (newest - timedelta(weeks=128 - i)).date().isoformat()
-            rows.append({"as_of_date": d, "market_cmdi": 0.20 + (i % 10) / 100,
-                         "ig_cmdi": 0.27, "hy_cmdi": 0.08, "source": "ny_fed"})
+            rows.append(
+                {
+                    "as_of_date": d,
+                    "market_cmdi": 0.20 + (i % 10) / 100,
+                    "ig_cmdi": 0.27,
+                    "hy_cmdi": 0.08,
+                    "source": "ny_fed",
+                }
+            )
         monkeypatch.setattr(eodhd, "_cmdi_cache", rows)
         oldest = rows[0]["as_of_date"]
-        for sid, val in (("EODHD:CMDI", None),
-                         ("EODHD:CMDI_IG", 0.27),
-                         ("EODHD:CMDI_HY", 0.08)):
+        for sid, val in (("EODHD:CMDI", None), ("EODHD:CMDI_IG", 0.27), ("EODHD:CMDI_HY", 0.08)):
             pts = eodhd.fetch_window(sid, days=10)
-            assert pts and pts[0]["ts"] == oldest      # the walk IS the window
+            assert pts and pts[0]["ts"] == oldest  # the walk IS the window
             if val is not None:
                 assert pts[0]["value"] == val
         # unrouted key still honestly unsupported (empty, not an error)
@@ -85,25 +92,48 @@ class TestCmdi:
         # OBSERVED worst alive-lag is 30d (2026-09-20) — must NOT trip;
         # the guard fires only on a genuinely dead feed (>60d)
         newest = (datetime.now(UTC) - timedelta(days=30)).date().isoformat()
-        monkeypatch.setattr(eodhd, "_cmdi_cache", [{
-            "as_of_date": newest, "market_cmdi": 0.21, "ig_cmdi": 0.27, "hy_cmdi": 0.08,
-        }])
+        monkeypatch.setattr(
+            eodhd,
+            "_cmdi_cache",
+            [
+                {
+                    "as_of_date": newest,
+                    "market_cmdi": 0.21,
+                    "ig_cmdi": 0.27,
+                    "hy_cmdi": 0.08,
+                }
+            ],
+        )
         pts = eodhd.fetch_window("EODHD:CMDI", days=10)
         assert len(pts) == 1  # 30d old print must NOT trip the 60d guard
 
         dead = (datetime.now(UTC) - timedelta(days=70)).date().isoformat()
-        monkeypatch.setattr(eodhd, "_cmdi_cache", [{
-            "as_of_date": dead, "market_cmdi": 0.21, "ig_cmdi": 0.27, "hy_cmdi": 0.08,
-        }])
+        monkeypatch.setattr(
+            eodhd,
+            "_cmdi_cache",
+            [
+                {
+                    "as_of_date": dead,
+                    "market_cmdi": 0.21,
+                    "ig_cmdi": 0.27,
+                    "hy_cmdi": 0.08,
+                }
+            ],
+        )
         with pytest.raises(eodhd.EodhdError, match="stale"):
             eodhd.fetch_window("EODHD:CMDI", days=10)
 
     def test_fetch_latest_maps_columns(self, monkeypatch):
         monkeypatch.setattr(
-            eodhd, "_get",
+            eodhd,
+            "_get",
             lambda path, params=None: [
-                {"as_of_date": "2026-08-21T00:00:00+00:00",
-                 "market_cmdi": 0.21, "ig_cmdi": 0.27, "hy_cmdi": 0.08},
+                {
+                    "as_of_date": "2026-08-21T00:00:00+00:00",
+                    "market_cmdi": 0.21,
+                    "ig_cmdi": 0.27,
+                    "hy_cmdi": 0.08,
+                },
             ],
         )
         assert eodhd.fetch_latest("EODHD:CMDI") == {"ts": "2026-08-21", "value": 0.21}

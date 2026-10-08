@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from arkwatch import db
 from arkwatch.signals import crypto
 
+
 def _setup_db() -> sqlite3.Connection:
     return db.get_conn(":memory:", allow_init=True)
 
@@ -56,7 +57,18 @@ def test_cascade_detector_fires_capitulation_on_spike():
     for h in range(1, 31):
         t = now - timedelta(hours=h)
         baseline_rows.append(
-            (f"b-{h}", t.isoformat(), "OKX", "BTC-USDT-SWAP", "long", 60000.0, 0.1, 10000.0, "{}", now.isoformat())
+            (
+                f"b-{h}",
+                t.isoformat(),
+                "OKX",
+                "BTC-USDT-SWAP",
+                "long",
+                60000.0,
+                0.1,
+                10000.0,
+                "{}",
+                now.isoformat(),
+            )
         )
     conn.executemany(
         "INSERT INTO crypto_liquidations(event_uid, ts_utc, source, instrument, position_side, price, size, notional_usd, raw_json, fetched_at) "
@@ -72,7 +84,9 @@ def test_cascade_detector_fires_capitulation_on_spike():
     )
     conn.commit()
 
-    detector = crypto.liquidation_cascade_detector(conn, "BTC-USDT-SWAP", window_hours=1, lookback_days=30, as_of=now)
+    detector = crypto.liquidation_cascade_detector(
+        conn, "BTC-USDT-SWAP", window_hours=1, lookback_days=30, as_of=now
+    )
     assert detector is not None
     assert detector["signal"] == "LIQUIDATION_CAPITULATION"
     assert detector["z_score"] is not None

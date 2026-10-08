@@ -91,7 +91,8 @@ def fetch_intraday(symbol: str, *, interval: str = "5m", range_: str = "1d") -> 
     r = requests.get(
         f"{BASE}/{symbol}",
         params={"interval": interval, "range": range_, "includePrePost": "true"},
-        headers=UA, timeout=(10, 60),
+        headers=UA,
+        timeout=(10, 60),
     )
     if r.status_code != 200:
         raise YahooError(f"yahoo {symbol}: HTTP {r.status_code} â€” {r.text[:120]}")
@@ -107,12 +108,14 @@ def fetch_intraday(symbol: str, *, interval: str = "5m", range_: str = "1d") -> 
         close = quote.get("close", [None] * len(stamps))[i]
         if close is None or stamp >= current_bucket:
             continue
-        out.append({
-            "bar_ts_utc": datetime.fromtimestamp(stamp, UTC).isoformat(timespec="seconds"),
-            "open": quote.get("open", [None] * len(stamps))[i],
-            "high": quote.get("high", [None] * len(stamps))[i],
-            "low": quote.get("low", [None] * len(stamps))[i],
-            "close": close,
-            "volume": quote.get("volume", [None] * len(stamps))[i],
-        })
+        out.append(
+            {
+                "bar_ts_utc": datetime.fromtimestamp(stamp, UTC).isoformat(timespec="seconds"),
+                "open": quote.get("open", [None] * len(stamps))[i],
+                "high": quote.get("high", [None] * len(stamps))[i],
+                "low": quote.get("low", [None] * len(stamps))[i],
+                "close": close,
+                "volume": quote.get("volume", [None] * len(stamps))[i],
+            }
+        )
     return out

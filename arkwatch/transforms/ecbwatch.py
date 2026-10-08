@@ -55,8 +55,18 @@ ECB_GC_DECISIONS = [
 
 _QUARTERLY = {"MAR", "JUN", "SEP", "DEC"}
 _MONTHS = {
-    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
-    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+    "JAN": 1,
+    "FEB": 2,
+    "MAR": 3,
+    "APR": 4,
+    "MAY": 5,
+    "JUN": 6,
+    "JUL": 7,
+    "AUG": 8,
+    "SEP": 9,
+    "OCT": 10,
+    "NOV": 11,
+    "DEC": 12,
 }
 _HOLD_THRESHOLD_BP = 1.0  # |δ| below this = hold 100% (fedwatch convention)
 RMS_GATE_BP = 3.0
@@ -64,16 +74,16 @@ RMS_GATE_BP = 3.0
 
 @dataclass
 class ECBMeetingProb:
-    meeting_date: date          # decision day (Thursday)
-    impl_date: date             # effective Wednesday
+    meeting_date: date  # decision day (Thursday)
+    impl_date: date  # effective Wednesday
     prob_ease: float
     prob_hold: float
     prob_hike: float
     implied_rate: float | None  # implied DFR after this meeting (None if no DFR)
-    expected_moves: float       # signed δ/25bp
+    expected_moves: float  # signed δ/25bp
     delta_bp: float
-    exact: bool                 # sole unknown in its reference quarter
-    noise_amp: float | None     # 1/|w1−w2| when sharing a quarter
+    exact: bool  # sole unknown in its reference quarter
+    noise_amp: float | None  # 1/|w1−w2| when sharing a quarter
     sizes: dict = field(default_factory=dict)  # {move_bp: prob} on the 25bp grid
 
 
@@ -206,16 +216,14 @@ def compute(
         if not (-1.5 <= implied <= 6.5):  # €STR sanity bounds ±margin
             diag["flags"].append("outlier_dropped")
             continue
-        windows.append({"token": token, "s": s, "e": e, "N": (e - s).days,
-                        "F": implied})
+        windows.append({"token": token, "s": s, "e": e, "N": (e - s).days, "F": implied})
     windows.sort(key=lambda w: w["s"])
     diag["n_contracts"] = len(windows)
     if len(windows) < 2:
         return [], diag
 
     # unknowns: jumps at implementation dates strictly after the anchor
-    meetings = [(d, implementation_date(d))
-                for d in (decisions or ECB_GC_DECISIONS)]
+    meetings = [(d, implementation_date(d)) for d in (decisions or ECB_GC_DECISIONS)]
     unknown = [(dec, impl) for dec, impl in meetings if impl > estr_asof]
     horizon_end = max(w["e"] for w in windows)
     beyond = [dec.isoformat() for dec, impl in unknown if impl >= horizon_end]
@@ -270,8 +278,13 @@ def compute(
         diag["flags"].append("null_space_split")  # within-quarter ambiguity
 
     # residual gate (on the K solved unknowns — the tail is flat by prior)
-    rms = (sum((sum(A[k][j] * deltas[j] for j in range(len(deltas)) if j < K) - b[k]) ** 2
-               for k in range(len(A))) / len(A)) ** 0.5 * 100  # pct→bp
+    rms = (
+        sum(
+            (sum(A[k][j] * deltas[j] for j in range(len(deltas)) if j < K) - b[k]) ** 2
+            for k in range(len(A))
+        )
+        / len(A)
+    ) ** 0.5 * 100  # pct→bp
     diag["rms_bp"] = round(rms, 2)
     # fitted quarterly-average levels (consistency check vs ecb_path):
     # predicted F_k = actual F_k + residual_k
@@ -318,7 +331,8 @@ def compute(
         else:
             col = [A[k][j] for k in range(len(A))]
             shares = 1 + sum(
-                1 for i in range(len(unknown))
+                1
+                for i in range(len(unknown))
                 if i != j and all(abs(A[k][i] - col[k]) < 1e-9 for k in range(len(A)))
             )
         exact = shares == 1
@@ -326,22 +340,37 @@ def compute(
         if not exact and j < K and j_window is not None:
             k_w = next(k for k, w in enumerate(windows) if w["s"] <= impl < w["e"])
             w1 = A[k_w][j]
-            others = [A[k_w][i] for i, (_d2, im2) in enumerate(unknown)
-                      if i < K and im2 != impl and j_window["s"] <= im2 < j_window["e"]]
+            others = [
+                A[k_w][i]
+                for i, (_d2, im2) in enumerate(unknown)
+                if i < K and im2 != impl and j_window["s"] <= im2 < j_window["e"]
+            ]
             if others and abs(w1 - others[0]) > 1e-9:
                 noise = round(1.0 / abs(w1 - others[0]), 2)
-        rows.append(ECBMeetingProb(
-            meeting_date=dec, impl_date=impl,
-            prob_ease=round(ease, 4), prob_hold=round(hold, 4), prob_hike=round(hike, 4),
-            implied_rate=(round(dfr + cum, 4) if dfr is not None else None),
-            expected_moves=round(expected, 4), delta_bp=round(delta_bp, 2),
-            exact=exact, noise_amp=noise, sizes={str(kk): round(vv, 4) for kk, vv in sizes.items()},
-        ))
+        rows.append(
+            ECBMeetingProb(
+                meeting_date=dec,
+                impl_date=impl,
+                prob_ease=round(ease, 4),
+                prob_hold=round(hold, 4),
+                prob_hike=round(hike, 4),
+                implied_rate=(round(dfr + cum, 4) if dfr is not None else None),
+                expected_moves=round(expected, 4),
+                delta_bp=round(delta_bp, 2),
+                exact=exact,
+                noise_amp=noise,
+                sizes={str(kk): round(vv, 4) for kk, vv in sizes.items()},
+            )
+        )
     return rows, diag
 
 
-def format_brief(rows: list[ECBMeetingProb], diag: dict | None = None,
-                 asof: str | None = None, today: date | None = None) -> str | None:
+def format_brief(
+    rows: list[ECBMeetingProb],
+    diag: dict | None = None,
+    asof: str | None = None,
+    today: date | None = None,
+) -> str | None:
     """'ECBWatch hike ≈85% (Sep-10, +21bp → DFR 2.46%, ESR 09-09)' — the
     NEXT meeting only; later rows ride the rank-deficient within-quarter
     split and are never surfaced.

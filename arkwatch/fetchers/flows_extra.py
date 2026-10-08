@@ -96,9 +96,7 @@ def _fetch_farside(path: str) -> dict:
             per_issuer, total = dict(zip(issuers, signed, strict=True)), None
         else:
             continue
-        rows.append(
-            {"ts": date, "date_iso": iso, "net_flow_musd": total, "issuers": per_issuer}
-        )
+        rows.append({"ts": date, "date_iso": iso, "net_flow_musd": total, "issuers": per_issuer})
     if not rows:
         raise RuntimeError(f"Farside {path}: no filled date rows")
 
@@ -259,8 +257,7 @@ def fetch_pboc_gold() -> dict:
         raise RuntimeError("SAFE: gold volume row (万盎司) not found")
 
     months = [
-        {"ts": ts, "wan_oz": w, "tonnes": round(wan_oz_to_tonnes(w), 1)}
-        for ts, w in tonnage_rows
+        {"ts": ts, "wan_oz": w, "tonnes": round(wan_oz_to_tonnes(w), 1)} for ts, w in tonnage_rows
     ]
     latest = months[-1]
     gold_share = round(gold_val / total * 100, 2) if gold_val and total else None
@@ -384,10 +381,26 @@ _LBMA_MONTHS = {
 }
 
 
-_LME_OW_MONTHS = {m: f"{i:02d}" for i, m in enumerate(
-    ("january", "february", "march", "april", "may", "june", "july",
-     "august", "september", "october", "november", "december"), start=1
-)}
+_LME_OW_MONTHS = {
+    m: f"{i:02d}"
+    for i, m in enumerate(
+        (
+            "january",
+            "february",
+            "march",
+            "april",
+            "may",
+            "june",
+            "july",
+            "august",
+            "september",
+            "october",
+            "november",
+            "december",
+        ),
+        start=1,
+    )
+}
 
 
 def fetch_lme_offwarrant(session=None) -> list[dict]:
@@ -412,10 +425,15 @@ def fetch_lme_offwarrant(session=None) -> list[dict]:
     )
     if r.status_code != 200:
         raise RuntimeError(f"LME off-warrant: HTTP {r.status_code}")
-    links = sorted(set(re.findall(
-        r'href="(/-/media/files/data/reports-and-data/warehouse-and-stock-reports/'
-        r'off-warrant-stock-reporting/[^"]+\.xlsx)"', r.text
-    )))
+    links = sorted(
+        set(
+            re.findall(
+                r'href="(/-/media/files/data/reports-and-data/warehouse-and-stock-reports/'
+                r'off-warrant-stock-reporting/[^"]+\.xlsx)"',
+                r.text,
+            )
+        )
+    )
     out = []
     for href in links:
         m = re.search(r"-([a-z]+)-(\d{4})\.xlsx$", href, re.I)
@@ -583,7 +601,9 @@ def fetch_lbma_vault() -> dict:
         now = datetime.now(UTC)
         py, pm = (now.year, now.month - 1) if now.month > 1 else (now.year - 1, 12)
         name = next(n for n, mm in _LBMA_MONTHS.items() if mm == f"{pm:02d}")
-        links = [f"https://cdn.lbma.org.uk/downloads/LBMA-London-Vault-Holdings-Data-{name}-{py}.xlsx"]
+        links = [
+            f"https://cdn.lbma.org.uk/downloads/LBMA-London-Vault-Holdings-Data-{name}-{py}.xlsx"
+        ]
     r2 = s.get(links[0], timeout=(10, 60))
     if r2.status_code != 200 or r2.content[:2] != b"PK":
         raise RuntimeError(f"LBMA: HTTP {r2.status_code}")

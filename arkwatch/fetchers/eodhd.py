@@ -82,8 +82,11 @@ def fetch_sentiments(tickers: str = "btc-usd.cc,eth-usd.cc") -> dict[str, list[d
         raise EodhdError("sentiments: unrecognized response shape")
     out = {}
     for tick, rows in j.items():
-        pts = [{"ts": x["date"], "value": float(x["normalized"]), "count": x.get("count", 0)}
-               for x in rows if isinstance(x, dict) and x.get("normalized") is not None]
+        pts = [
+            {"ts": x["date"], "value": float(x["normalized"]), "count": x.get("count", 0)}
+            for x in rows
+            if isinstance(x, dict) and x.get("normalized") is not None
+        ]
         pts.sort(key=lambda x: x["ts"])
         out[tick.upper()] = pts
     return out
@@ -102,10 +105,13 @@ def _eod_rows(ticker: str, days: int) -> list[dict]:
     r = requests.get(
         f"{BASE}/eod/{ticker}",
         params={
-            "api_token": _token(), "fmt": "json",
-            "from": fr.isoformat(), "to": to.isoformat(),
+            "api_token": _token(),
+            "fmt": "json",
+            "from": fr.isoformat(),
+            "to": to.isoformat(),
         },
-        headers=UA, timeout=(10, 30),
+        headers=UA,
+        timeout=(10, 30),
     )
     if r.status_code != 200:
         raise EodhdError(f"EODHD eod/{ticker}: HTTP {r.status_code}")
@@ -135,8 +141,7 @@ def fetch_cmdi_all() -> list[dict]:
     rows: list[dict] = []
     offset = 0
     while True:
-        page = _get("/credit-risk/corporate/cmdi",
-                    {"page[limit]": 100, "page[offset]": offset})
+        page = _get("/credit-risk/corporate/cmdi", {"page[limit]": 100, "page[offset]": offset})
         if not page:
             break
         rows.extend(page)
@@ -207,7 +212,7 @@ def fetch_window(series_id: str, days: int = 12) -> list[dict]:
     rows.sort(key=lambda r: r["date"])
     out = [
         {"ts": r["date"], "value": float(r["value_bps"])}
-        for r in rows[-int(days * 1.8):]
+        for r in rows[-int(days * 1.8) :]
         if r.get("value_bps") is not None
     ]
     # ronde-6 P2-8: server-shrink guard — if the newest point is >5 days

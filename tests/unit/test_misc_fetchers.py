@@ -52,7 +52,7 @@ def test_recession_prob_picks_newest(monkeypatch):
     monkeypatch.setattr(
         misc.requests,
         "get",
-        lambda url, params=None, timeout=None: (setattr(FakeResp, "_params", params) or FakeResp()),
+        lambda url, params=None, timeout=None: setattr(FakeResp, "_params", params) or FakeResp(),
     )
     misc.fetch_recession_prob()
     assert FakeResp._params["name"] == "smoothedUSRecessionProbabilities"

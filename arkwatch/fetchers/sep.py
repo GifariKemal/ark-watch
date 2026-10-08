@@ -204,7 +204,8 @@ def save_dot_series(conn) -> int:
     from .. import db as _db
 
     registered = {
-        r[0] for r in conn.execute(
+        r[0]
+        for r in conn.execute(
             "SELECT series_id FROM series_registry WHERE series_id LIKE 'CAL:FOMC_DOT_%'"
         ).fetchall()
     }
@@ -220,6 +221,8 @@ def save_dot_series(conn) -> int:
     if not payload:
         return 0
     n = _db.insert_observations(conn, payload)
-    print(f"  dot plot: {n} obs across {len(set(p[0] for p in payload))} target-years"
-          f" ({len(set(p[1] for p in payload))} vintages)")
+    print(
+        f"  dot plot: {n} obs across {len(set(p[0] for p in payload))} target-years"
+        f" ({len(set(p[1] for p in payload))} vintages)"
+    )
     return n

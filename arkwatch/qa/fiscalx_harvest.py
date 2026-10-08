@@ -35,7 +35,9 @@ AUCTION_COLS = (
     " price_per100, avg_med_yield, bid_to_cover, allocation_pct, auction_format"
 )
 TX_COLS = "record_date, transaction_type, security_market, security_type, amount_today"
-EXP_COLS = "record_date, expense_catg_desc, expense_group_desc, expense_type_desc, month_amt, fytd_amt"
+EXP_COLS = (
+    "record_date, expense_catg_desc, expense_group_desc, expense_type_desc, month_amt, fytd_amt"
+)
 RATE_COLS = "record_date, security_desc, security_type_desc, avg_interest_rate"
 
 PUBLIC_ISSUES_CATG = "INTEREST EXPENSE ON PUBLIC ISSUES"  # headline FYTD filter —
@@ -64,7 +66,8 @@ def store_auctions(conn, rows: list[dict]) -> int:
     # (same lifecycle as fed_operations Announced→Results)
     parsed.sort(
         key=lambda p: sum(
-            v is not None for v in (p["price_per100"], p["avg_med_yield"], p["bid_to_cover"], p["allocation_pct"])
+            v is not None
+            for v in (p["price_per100"], p["avg_med_yield"], p["bid_to_cover"], p["allocation_pct"])
         )
     )
     cols = [c.strip() for c in AUCTION_COLS.split(",")]
@@ -74,13 +77,17 @@ def store_auctions(conn, rows: list[dict]) -> int:
 def store_debt_transactions(conn, rows: list[dict]) -> int:
     parsed = [p for p in (fiscal.parse_debt_tx_row(r) for r in rows) if p]
     cols = [c.strip() for c in TX_COLS.split(",")]
-    return _upsert(conn, "fd_debt_transactions", TX_COLS, [tuple(p[c] for c in cols) for p in parsed])
+    return _upsert(
+        conn, "fd_debt_transactions", TX_COLS, [tuple(p[c] for c in cols) for p in parsed]
+    )
 
 
 def store_interest_expense(conn, rows: list[dict]) -> int:
     parsed = [p for p in (fiscal.parse_interest_expense_row(r) for r in rows) if p]
     cols = [c.strip() for c in EXP_COLS.split(",")]
-    return _upsert(conn, "fd_interest_expense", EXP_COLS, [tuple(p[c] for c in cols) for p in parsed])
+    return _upsert(
+        conn, "fd_interest_expense", EXP_COLS, [tuple(p[c] for c in cols) for p in parsed]
+    )
 
 
 def store_avg_rates(conn, rows: list[dict]) -> int:
@@ -168,9 +175,7 @@ def harvest_debt_transactions(conn) -> int:
         rows = fiscal.fetch_debt_transactions()
         first_raw = rows[0] if rows else None
         n = store_debt_transactions(conn, rows)
-        net = net_marketable_today(
-            [p for p in (fiscal.parse_debt_tx_row(r) for r in rows) if p]
-        )
+        net = net_marketable_today([p for p in (fiscal.parse_debt_tx_row(r) for r in rows) if p])
         if net:
             print(
                 f"  debt transactions (14d): {n} rows upserted @ {net[0]}"

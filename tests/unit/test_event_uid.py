@@ -16,18 +16,12 @@ def test_event_uid_is_date_only():
     a = event_uid("NON FARM PAYROLLS", "2026-09-04T12:30:00+00:00")
     b = event_uid("NON FARM PAYROLLS", "2026-09-04T14:00:00+00:00")
     assert a == b
-    assert event_uid("CPI", "2026-09-11T12:30:00Z") == event_uid(
-        "CPI", "2026-09-11T16:00:00Z"
-    )
+    assert event_uid("CPI", "2026-09-11T12:30:00Z") == event_uid("CPI", "2026-09-11T16:00:00Z")
 
 
 def test_event_uid_differs_across_days_and_names():
-    assert event_uid("CPI", "2026-09-11T12:30:00Z") != event_uid(
-        "CPI", "2026-10-11T12:30:00Z"
-    )
-    assert event_uid("CPI", "2026-09-11T12:30:00Z") != event_uid(
-        "PPI", "2026-09-11T12:30:00Z"
-    )
+    assert event_uid("CPI", "2026-09-11T12:30:00Z") != event_uid("CPI", "2026-10-11T12:30:00Z")
+    assert event_uid("CPI", "2026-09-11T12:30:00Z") != event_uid("PPI", "2026-09-11T12:30:00Z")
 
 
 def test_both_writers_share_uid_construction():

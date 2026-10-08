@@ -37,7 +37,9 @@ from curl_cffi import requests as creq
 BASE = "https://markets.newyorkfed.org/api/soma"
 REQUEST_TIMEOUT = (10, 60)  # (connect, read): 431-row JSON payloads are ~150KB
 PCT_OUTSTANDING_SCALE = 100.0  # API fraction (0.6999) -> percent (69.99)
-DAYS_PER_YEAR = 365.25  # [RISET: convention for years-to-maturity; WAM cross-check 8.26y 2026-09-03]
+DAYS_PER_YEAR = (
+    365.25  # [RISET: convention for years-to-maturity; WAM cross-check 8.26y 2026-09-03]
+)
 # Bucket edges in years; a holding with y < 1 lands in "0-1y", y < 3 in "1-3y", etc.
 MATURITY_BUCKET_EDGES_Y: tuple[float, ...] = (1.0, 3.0, 5.0, 7.0, 10.0)
 MATURITY_BUCKET_LABELS = ("0-1y", "1-3y", "3-5y", "5-7y", "7-10y", "10y+")
@@ -88,7 +90,9 @@ def fetch_asof_dates(session: creq.Session | None = None) -> list[str]:
     return j.get("soma", {}).get("asOfDates", [])
 
 
-def fetch_soma_holdings(as_of: str | None = None, session: creq.Session | None = None) -> list[dict]:
+def fetch_soma_holdings(
+    as_of: str | None = None, session: creq.Session | None = None
+) -> list[dict]:
     """Latest or historical per-CUSIP Treasury holdings.
 
     Returns [{as_of_date, cusip, security_type, maturity_date, par_value,

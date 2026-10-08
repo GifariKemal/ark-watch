@@ -1,4 +1,5 @@
 """GDELT 2.0 archive window discovery and download helpers."""
+
 from __future__ import annotations
 
 import csv
@@ -101,7 +102,9 @@ def download_rows(session, feed: str, url: str) -> list[list[str]]:
         if not names:
             raise RuntimeError(f"GDELT {feed} archive is empty")
         with archive.open(names[0]) as raw:
-            rows = csv.reader(io.TextIOWrapper(raw, encoding="utf-8", errors="replace"), delimiter="\t")
+            rows = csv.reader(
+                io.TextIOWrapper(raw, encoding="utf-8", errors="replace"), delimiter="\t"
+            )
             previous_limit = csv.field_size_limit()
             csv.field_size_limit(max(previous_limit, MAX_FIELD_SIZE))
             try:

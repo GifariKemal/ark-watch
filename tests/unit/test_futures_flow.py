@@ -111,5 +111,7 @@ def test_store_futures_flow_signals():
 
     n = futures_flow.store_futures_flow_signals(conn)
     assert n > 0
-    row = conn.execute("SELECT signal_id, state FROM computed_signals WHERE signal_id='cme_flow_gc'").fetchone()
+    row = conn.execute(
+        "SELECT signal_id, state FROM computed_signals WHERE signal_id='cme_flow_gc'"
+    ).fetchone()
     assert row == ("cme_flow_gc", "NEW_LONGS")

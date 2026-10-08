@@ -91,8 +91,11 @@ class FakeSession:
 
 
 def _page(data: list[dict], total: int | None = None) -> dict:
-    return {"meta": {"count": len(data), "total-count": total if total is not None else len(data)},
-            "data": data, "links": {}}
+    return {
+        "meta": {"count": len(data), "total-count": total if total is not None else len(data)},
+        "data": data,
+        "links": {},
+    }
 
 
 class TestNullStringParsing:
@@ -158,8 +161,9 @@ class TestFetchPaging:
         p1 = [_raw_auction(cusip=f"C{i:05d}") for i in range(3)]
         p2 = [_raw_auction(cusip=f"D{i:05d}") for i in range(2)]
         sess = FakeSession([_page(p1, total=5), _page(p2, total=5)])
-        rows = fiscal._fetch_pages(fiscal.AUCTIONS, {"fields": fiscal.AUCTION_FIELDS},
-                                   page_size=3, session=sess)
+        rows = fiscal._fetch_pages(
+            fiscal.AUCTIONS, {"fields": fiscal.AUCTION_FIELDS}, page_size=3, session=sess
+        )
         assert len(rows) == 5
         assert sess.calls[0][1]["page[number]"] == 1
         assert sess.calls[1][1]["page[number]"] == 2
@@ -171,8 +175,9 @@ class TestFetchPaging:
         rows = [_raw_tx(record_date=f"2026-09-{d:02d}") for d in range(2, 12)]  # 10 dates
         rows += [_raw_tx(record_date="2026-08-31")] * 2  # page size = 12, window = 10
         sess = FakeSession([_page(rows)])
-        out = fiscal._fetch_recent(fiscal.DEBT_TRANSACTIONS, {"sort": "-record_date"},
-                                   n_dates=10, size=12, session=sess)
+        out = fiscal._fetch_recent(
+            fiscal.DEBT_TRANSACTIONS, {"sort": "-record_date"}, n_dates=10, size=12, session=sess
+        )
         assert len(out) == 12
         assert len(sess.calls) == 1
 
@@ -182,8 +187,9 @@ class TestFetchPaging:
         p1 = [_raw_tx(record_date="2026-09-02")] * 3 + [_raw_tx(record_date="2026-09-01")] * 2
         p2 = [_raw_tx(record_date="2026-09-01")] * 2 + [_raw_tx(record_date="2026-08-31")]
         sess = FakeSession([_page(p1), _page(p2)])
-        out = fiscal._fetch_recent(fiscal.DEBT_TRANSACTIONS, {"sort": "-record_date"},
-                                   n_dates=2, size=5, session=sess)
+        out = fiscal._fetch_recent(
+            fiscal.DEBT_TRANSACTIONS, {"sort": "-record_date"}, n_dates=2, size=5, session=sess
+        )
         assert len(out) == 8
         assert len(sess.calls) == 2
         # the trim then keeps exactly the 2 newest complete dates
@@ -193,8 +199,9 @@ class TestFetchPaging:
 
     def test_fetch_recent_short_page_stops(self):
         sess = FakeSession([_page([_raw_tx(), _raw_tx(record_date="2026-09-01")])])
-        out = fiscal._fetch_recent(fiscal.DEBT_TRANSACTIONS, {"sort": "-record_date"},
-                                   n_dates=14, size=500, session=sess)
+        out = fiscal._fetch_recent(
+            fiscal.DEBT_TRANSACTIONS, {"sort": "-record_date"}, n_dates=14, size=500, session=sess
+        )
         assert len(out) == 2
 
     def test_auctions_window_pages_until_cutoff_crossed(self):
@@ -236,10 +243,12 @@ class TestDebtTxParsing:
         """(Issues, Marketable, Bills) legitimately appears TWICE per day —
         Regular vs Cash Management Series. The fold keeps both rows unique
         under the locked v10 PK."""
-        reg = fiscal.parse_debt_tx_row(_raw_tx(security_type_desc="Regular Series",
-                                               transaction_today_amt="284326"))
-        cm = fiscal.parse_debt_tx_row(_raw_tx(security_type_desc="Cash Management Series",
-                                              transaction_today_amt="0"))
+        reg = fiscal.parse_debt_tx_row(
+            _raw_tx(security_type_desc="Regular Series", transaction_today_amt="284326")
+        )
+        cm = fiscal.parse_debt_tx_row(
+            _raw_tx(security_type_desc="Cash Management Series", transaction_today_amt="0")
+        )
         assert reg["security_type"] == "Bills (Regular Series)"
         assert cm["security_type"] == "Bills (Cash Management Series)"
         assert reg["security_type"] != cm["security_type"]
@@ -249,8 +258,11 @@ class TestDebtTxParsing:
     def test_amount_unit_is_millions_anchored(self):
         # live 2026-09-02: GAS issues 585,955 = $585.955B (DTS $M convention)
         p = fiscal.parse_debt_tx_row(
-            _raw_tx(security_market="Nonmarketable", security_type="Government Account Series",
-                    transaction_today_amt="585955")
+            _raw_tx(
+                security_market="Nonmarketable",
+                security_type="Government Account Series",
+                transaction_today_amt="585955",
+            )
         )
         assert p["amount_today"] == 585955.0
 
@@ -261,16 +273,22 @@ class TestDebtTxParsing:
             _raw_tx(security_type_desc="Cash Management Series", transaction_today_amt="0"),
             _raw_tx(security_type="Notes", transaction_today_amt="-2"),
             _raw_tx(security_type="Bonds", transaction_today_amt="0"),
-            _raw_tx(security_type="Inflation-Protected Securities Increment",
-                    transaction_today_amt="-9"),
+            _raw_tx(
+                security_type="Inflation-Protected Securities Increment", transaction_today_amt="-9"
+            ),
             _raw_tx(security_type="Federal Financing Bank", transaction_today_amt="0"),
-            _raw_tx(transaction_type="Redemptions", security_type="Bills",
-                    transaction_today_amt="0"),
-            _raw_tx(transaction_type="Redemptions", security_type="Notes",
-                    transaction_today_amt="0"),
+            _raw_tx(
+                transaction_type="Redemptions", security_type="Bills", transaction_today_amt="0"
+            ),
+            _raw_tx(
+                transaction_type="Redemptions", security_type="Notes", transaction_today_amt="0"
+            ),
             # nonmarketable rows must not enter the marketable net
-            _raw_tx(security_market="Nonmarketable", security_type="Government Account Series",
-                    transaction_today_amt="585955"),
+            _raw_tx(
+                security_market="Nonmarketable",
+                security_type="Government Account Series",
+                transaction_today_amt="585955",
+            ),
         ]
         parsed = [p for p in (fiscal.parse_debt_tx_row(r) for r in rows) if p]
         assert net_marketable_today(parsed) == ("2026-09-02", -20.0)
@@ -282,20 +300,40 @@ class TestDebtTxParsing:
 class TestFytdHelper:
     def test_gas_category_excluded(self):
         rows = [
-            {"record_date": "2026-07-31", "expense_catg_desc": "INTEREST EXPENSE ON PUBLIC ISSUES",
-             "expense_group_desc": "ACCRUED INTEREST EXPENSE", "expense_type_desc": "Treasury Notes",
-             "month_amt": 1.0, "fytd_amt": 410.5},
-            {"record_date": "2026-07-31", "expense_catg_desc": "INTEREST EXPENSE ON PUBLIC ISSUES",
-             "expense_group_desc": "AMORTIZED DISCOUNT", "expense_type_desc": "Treasury Bills",
-             "month_amt": 2.0, "fytd_amt": 209.2},
+            {
+                "record_date": "2026-07-31",
+                "expense_catg_desc": "INTEREST EXPENSE ON PUBLIC ISSUES",
+                "expense_group_desc": "ACCRUED INTEREST EXPENSE",
+                "expense_type_desc": "Treasury Notes",
+                "month_amt": 1.0,
+                "fytd_amt": 410.5,
+            },
+            {
+                "record_date": "2026-07-31",
+                "expense_catg_desc": "INTEREST EXPENSE ON PUBLIC ISSUES",
+                "expense_group_desc": "AMORTIZED DISCOUNT",
+                "expense_type_desc": "Treasury Bills",
+                "month_amt": 2.0,
+                "fytd_amt": 209.2,
+            },
             # intragovernmental GAS cash payments — not debt service
-            {"record_date": "2026-07-31", "expense_catg_desc": "INTEREST EXPENSE ON GOVT ACCOUNT SERIES",
-             "expense_group_desc": "CASH BASIS GAS PAYMENTS", "expense_type_desc": "Interest Payments",
-             "month_amt": 99.0, "fytd_amt": 999.0},
+            {
+                "record_date": "2026-07-31",
+                "expense_catg_desc": "INTEREST EXPENSE ON GOVT ACCOUNT SERIES",
+                "expense_group_desc": "CASH BASIS GAS PAYMENTS",
+                "expense_type_desc": "Interest Payments",
+                "month_amt": 99.0,
+                "fytd_amt": 999.0,
+            },
             # older month ignored (latest date only)
-            {"record_date": "2026-06-30", "expense_catg_desc": "INTEREST EXPENSE ON PUBLIC ISSUES",
-             "expense_group_desc": "ACCRUED INTEREST EXPENSE", "expense_type_desc": "Treasury Notes",
-             "month_amt": 1.0, "fytd_amt": 777.0},
+            {
+                "record_date": "2026-06-30",
+                "expense_catg_desc": "INTEREST EXPENSE ON PUBLIC ISSUES",
+                "expense_group_desc": "ACCRUED INTEREST EXPENSE",
+                "expense_type_desc": "Treasury Notes",
+                "month_amt": 1.0,
+                "fytd_amt": 777.0,
+            },
         ]
         assert fytd_public_issues(rows) == ("2026-07-31", pytest.approx(619.7))
 
@@ -306,12 +344,21 @@ class TestUpserts:
         shares (auction_date, cusip) with the results row that lands after the
         auction — INSERT OR IGNORE would freeze the announcement nulls forever."""
         conn = db.get_conn(tmp_path / "fx.db", allow_init=True)
-        ann = _raw_auction(auction_date="2026-09-10", cusip="912810UW6",
-                           price_per100="null", avg_med_yield="null",
-                           bid_to_cover_ratio="null", allocation_pctage="null")
+        ann = _raw_auction(
+            auction_date="2026-09-10",
+            cusip="912810UW6",
+            price_per100="null",
+            avg_med_yield="null",
+            bid_to_cover_ratio="null",
+            allocation_pctage="null",
+        )
         store_auctions(conn, [ann])
-        res = _raw_auction(auction_date="2026-09-10", cusip="912810UW6",
-                           bid_to_cover_ratio="2.410000", avg_med_yield="4.120000")
+        res = _raw_auction(
+            auction_date="2026-09-10",
+            cusip="912810UW6",
+            bid_to_cover_ratio="2.410000",
+            avg_med_yield="4.120000",
+        )
         store_auctions(conn, [res])
         row = conn.execute(
             "SELECT bid_to_cover, avg_med_yield, price_per100 FROM fd_auctions"
@@ -324,8 +371,12 @@ class TestUpserts:
     def test_same_batch_results_win_regardless_of_input_order(self, tmp_path):
         conn = db.get_conn(tmp_path / "fx.db", allow_init=True)
         res = _raw_auction(bid_to_cover_ratio="2.530000")
-        ann = _raw_auction(price_per100="null", avg_med_yield="null",
-                           bid_to_cover_ratio="null", allocation_pctage="null")
+        ann = _raw_auction(
+            price_per100="null",
+            avg_med_yield="null",
+            bid_to_cover_ratio="null",
+            allocation_pctage="null",
+        )
         # announcement LAST in the input — the fullness sort must still put it
         # first so the results row wins the REPLACE
         store_auctions(conn, [res, ann])
@@ -335,9 +386,12 @@ class TestUpserts:
 
     def test_transactions_round_trip_and_idempotency(self, tmp_path):
         conn = db.get_conn(tmp_path / "fx.db", allow_init=True)
-        rows = [_raw_tx(security_type_desc="Regular Series", transaction_today_amt="284326"),
-                _raw_tx(transaction_type="Redemptions", security_type="Notes",
-                        transaction_today_amt="0")]
+        rows = [
+            _raw_tx(security_type_desc="Regular Series", transaction_today_amt="284326"),
+            _raw_tx(
+                transaction_type="Redemptions", security_type="Notes", transaction_today_amt="0"
+            ),
+        ]
         assert store_debt_transactions(conn, rows) == 2
         assert store_debt_transactions(conn, rows) == 2  # idempotent re-run
         assert conn.execute("SELECT COUNT(*) FROM fd_debt_transactions").fetchone()[0] == 2
@@ -347,8 +401,9 @@ class TestUpserts:
         ).fetchone()
         assert got == ("Bills (Regular Series)", 284326.0)
         # DTS restatement replaces the stored value
-        store_debt_transactions(conn, [_raw_tx(security_type_desc="Regular Series",
-                                               transaction_today_amt="284327")])
+        store_debt_transactions(
+            conn, [_raw_tx(security_type_desc="Regular Series", transaction_today_amt="284327")]
+        )
         got = conn.execute(
             "SELECT amount_today FROM fd_debt_transactions WHERE transaction_type='Issues'"
         ).fetchone()
@@ -381,14 +436,19 @@ class TestUpserts:
 
     def test_avg_rates_round_trip(self, tmp_path):
         conn = db.get_conn(tmp_path / "fx.db", allow_init=True)
-        rows = [{
-            "record_date": "2026-07-31", "security_desc": "Total Marketable",
-            "security_type_desc": "Marketable", "avg_interest_rate_amt": "3.443",
-        }]
+        rows = [
+            {
+                "record_date": "2026-07-31",
+                "security_desc": "Total Marketable",
+                "security_type_desc": "Marketable",
+                "avg_interest_rate_amt": "3.443",
+            }
+        ]
         store_avg_rates(conn, rows)
         store_avg_rates(conn, rows)
-        got = conn.execute("SELECT security_type_desc, avg_interest_rate FROM fd_avg_rates"
-                           ).fetchone()
+        got = conn.execute(
+            "SELECT security_type_desc, avg_interest_rate FROM fd_avg_rates"
+        ).fetchone()
         assert got == ("Marketable", 3.443)
         assert conn.execute("SELECT COUNT(*) FROM fd_avg_rates").fetchone()[0] == 1
         conn.close()
@@ -399,10 +459,18 @@ class TestRegistryDispatch:
         # newest row carries a 'null' public split (the era pitfall) — the
         # other two fields are live 2026-09-02 values
         data = [
-            {"record_date": "2026-09-02", "debt_held_public_amt": "null",
-             "intragov_hold_amt": "7696018006644.39", "tot_pub_debt_out_amt": "40117045127072.57"},
-            {"record_date": "2026-09-01", "debt_held_public_amt": "32420529452197.11",
-             "intragov_hold_amt": "7691935141009.19", "tot_pub_debt_out_amt": "40112464593206.30"},
+            {
+                "record_date": "2026-09-02",
+                "debt_held_public_amt": "null",
+                "intragov_hold_amt": "7696018006644.39",
+                "tot_pub_debt_out_amt": "40117045127072.57",
+            },
+            {
+                "record_date": "2026-09-01",
+                "debt_held_public_amt": "32420529452197.11",
+                "intragov_hold_amt": "7691935141009.19",
+                "tot_pub_debt_out_amt": "40112464593206.30",
+            },
         ]
         return FakeSession([_page(data)])
 
@@ -438,8 +506,9 @@ class TestRegistryDispatch:
         assert fiscal.fetch_first_ts("FISCAL:DEBT_PUBLIC", session=sess) == "1997-09-30"
 
     def test_tga_path_untouched(self, monkeypatch):
-        rows = [{"record_date": "2026-09-02", "close_today_bal": "null",
-                 "open_today_bal": "812345"}]
+        rows = [
+            {"record_date": "2026-09-02", "close_today_bal": "null", "open_today_bal": "812345"}
+        ]
         sess = FakeSession([_page(rows)])
         monkeypatch.setattr(fiscal, "requests", sess)
         cur = fiscal.fetch_latest("FISCAL:TGA_DAILY")
@@ -467,9 +536,13 @@ class TestSchemaFpDeterminism:
         """The FED_OPS lesson: the fingerprinted row may be any row of a mixed
         batch (announcement 2026 vs results 1979) — the fp must be a function
         of the FIELD SET only, so batch composition cannot flip it."""
-        row_1979 = _raw_auction(auction_date="1979-10-31", cusip="912827KC5",
-                                security_type="Note", price_per100="null",
-                                bid_to_cover_ratio="null")
+        row_1979 = _raw_auction(
+            auction_date="1979-10-31",
+            cusip="912827KC5",
+            security_type="Note",
+            price_per100="null",
+            bid_to_cover_ratio="null",
+        )
         row_2026 = _raw_auction()
         assert schema_fp(row_1979) == schema_fp(row_2026)
         assert schema_fp(row_2026) is not None

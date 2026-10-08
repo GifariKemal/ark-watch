@@ -25,13 +25,15 @@ def test_parse_lastupdate_maps_all_three_archive_types():
     archives = gdelt_archive.parse_lastupdate(_updates())
 
     assert set(archives) == {"export", "mentions", "gkg"}
-    assert all(item.latest_at == datetime(2026, 9, 24, 18, 15, tzinfo=UTC) for item in archives.values())
-    assert archives["mentions"].url_at(archives["mentions"].latest_at).endswith(
-        "20260924181500.mentions.CSV.zip"
+    assert all(
+        item.latest_at == datetime(2026, 9, 24, 18, 15, tzinfo=UTC) for item in archives.values()
     )
-    assert archives["gkg"].url_at(archives["gkg"].latest_at).endswith(
-        "20260924181500.gkg.csv.zip"
+    assert (
+        archives["mentions"]
+        .url_at(archives["mentions"].latest_at)
+        .endswith("20260924181500.mentions.CSV.zip")
     )
+    assert archives["gkg"].url_at(archives["gkg"].latest_at).endswith("20260924181500.gkg.csv.zip")
 
 
 def test_parse_lastupdate_rejects_missing_or_unaligned_windows():
@@ -151,26 +153,38 @@ def test_catchup_advances_watermark_only_after_each_window_commits(tmp_path, mon
     assert first_watermark == "2026-09-24T18:00:00+00:00"
 
     downloads.clear()
-    monkeypatch.setattr(gdelt_archive, "download_rows", lambda _session, _feed, url: downloads.append(url) or [])
+    monkeypatch.setattr(
+        gdelt_archive, "download_rows", lambda _session, _feed, url: downloads.append(url) or []
+    )
     inserted, processed = market_news._collect_gdelt_feed(conn, archive, lambda rows: [], sql)
 
     assert (inserted, processed) == (0, 2)
-    assert [url.rsplit("/", 1)[-1][:14] for url in downloads] == ["20260924181500", "20260924183000"]
-    assert conn.execute(
-        "SELECT last_window_ts_utc FROM gdelt_feed_state WHERE feed='export'"
-    ).fetchone()[0] == "2026-09-24T18:30:00+00:00"
+    assert [url.rsplit("/", 1)[-1][:14] for url in downloads] == [
+        "20260924181500",
+        "20260924183000",
+    ]
+    assert (
+        conn.execute(
+            "SELECT last_window_ts_utc FROM gdelt_feed_state WHERE feed='export'"
+        ).fetchone()[0]
+        == "2026-09-24T18:30:00+00:00"
+    )
     conn.close()
 
 
 def test_catchup_duplicate_archives_are_idempotent(tmp_path, monkeypatch):
     conn = db.get_conn(tmp_path / "gdelt-idempotent.db", allow_init=True)
     latest = datetime(2026, 9, 24, 18, 30, tzinfo=UTC)
-    archive = gdelt_archive.Archive("export", latest, "https://example.com/{timestamp}.export.CSV.zip")
+    archive = gdelt_archive.Archive(
+        "export", latest, "https://example.com/{timestamp}.export.CSV.zip"
+    )
     conn.execute(
         "INSERT INTO gdelt_feed_state VALUES (?,?,?)",
         ("export", "2026-09-24T17:45:00+00:00", "now"),
     )
-    monkeypatch.setattr(gdelt_archive, "download_rows", lambda _session, _feed, _url: [["same-event"]])
+    monkeypatch.setattr(
+        gdelt_archive, "download_rows", lambda _session, _feed, _url: [["same-event"]]
+    )
     sql = (
         "INSERT OR IGNORE INTO gdelt_events "
         "(event_id,event_date,added_at_utc,fetched_at,raw_record_json,raw_record_gzip) "
@@ -191,9 +205,7 @@ def test_catchup_duplicate_archives_are_idempotent(tmp_path, monkeypatch):
 def test_stale_lastupdate_does_not_regress_watermark(tmp_path, monkeypatch):
     conn = db.get_conn(tmp_path / "gdelt-stale-list.db", allow_init=True)
     watermark = "2026-09-24T18:30:00+00:00"
-    conn.execute(
-        "INSERT INTO gdelt_feed_state VALUES (?,?,?)", ("export", watermark, "now")
-    )
+    conn.execute("INSERT INTO gdelt_feed_state VALUES (?,?,?)", ("export", watermark, "now"))
     archive = gdelt_archive.Archive(
         "export",
         datetime(2026, 9, 24, 18, 15, tzinfo=UTC),
@@ -209,9 +221,12 @@ def test_stale_lastupdate_does_not_regress_watermark(tmp_path, monkeypatch):
 
     assert market_news._collect_gdelt_feed(conn, archive, lambda rows: [], sql) == (0, 0)
     assert downloads == []
-    assert conn.execute(
-        "SELECT last_window_ts_utc FROM gdelt_feed_state WHERE feed='export'"
-    ).fetchone()[0] == watermark
+    assert (
+        conn.execute(
+            "SELECT last_window_ts_utc FROM gdelt_feed_state WHERE feed='export'"
+        ).fetchone()[0]
+        == watermark
+    )
     conn.close()
 
 
@@ -219,7 +234,9 @@ def test_catchup_drains_long_backlog_in_bounded_batches(tmp_path, monkeypatch):
     conn = db.get_conn(tmp_path / "gdelt-backlog.db", allow_init=True)
     start = datetime(2026, 9, 24, 17, 0, tzinfo=UTC)
     latest = datetime(2026, 9, 25, 3, 0, tzinfo=UTC)
-    archive = gdelt_archive.Archive("export", latest, "https://example.com/{timestamp}.export.CSV.zip")
+    archive = gdelt_archive.Archive(
+        "export", latest, "https://example.com/{timestamp}.export.CSV.zip"
+    )
     conn.execute(
         "INSERT INTO gdelt_feed_state VALUES (?,?,?)",
         ("export", start.isoformat(), "now"),
@@ -237,16 +254,21 @@ def test_catchup_drains_long_backlog_in_bounded_batches(tmp_path, monkeypatch):
     assert market_news._collect_gdelt_feed(conn, archive, lambda rows: [], sql) == (0, 8)
     assert market_news._collect_gdelt_feed(conn, archive, lambda rows: [], sql) == (0, 0)
     assert len(downloads) == 40
-    assert conn.execute(
-        "SELECT last_window_ts_utc FROM gdelt_feed_state WHERE feed='export'"
-    ).fetchone()[0] == latest.isoformat()
+    assert (
+        conn.execute(
+            "SELECT last_window_ts_utc FROM gdelt_feed_state WHERE feed='export'"
+        ).fetchone()[0]
+        == latest.isoformat()
+    )
     conn.close()
 
 
 def test_first_catchup_replays_a_day_before_advancing_its_watermark(tmp_path, monkeypatch):
     conn = db.get_conn(tmp_path / "gdelt-bootstrap.db", allow_init=True)
     latest = datetime(2026, 9, 25, 3, 0, tzinfo=UTC)
-    archive = gdelt_archive.Archive("export", latest, "https://example.com/{timestamp}.export.CSV.zip")
+    archive = gdelt_archive.Archive(
+        "export", latest, "https://example.com/{timestamp}.export.CSV.zip"
+    )
     downloads = []
     monkeypatch.setattr(
         gdelt_archive,
@@ -259,9 +281,12 @@ def test_first_catchup_replays_a_day_before_advancing_its_watermark(tmp_path, mo
         assert market_news._collect_gdelt_feed(conn, archive, lambda rows: [], sql) == (0, 16)
 
     assert len(downloads) == 96
-    assert conn.execute(
-        "SELECT last_window_ts_utc FROM gdelt_feed_state WHERE feed='export'"
-    ).fetchone()[0] == latest.isoformat()
+    assert (
+        conn.execute(
+            "SELECT last_window_ts_utc FROM gdelt_feed_state WHERE feed='export'"
+        ).fetchone()[0]
+        == latest.isoformat()
+    )
     assert market_news._collect_gdelt_feed(conn, archive, lambda rows: [], sql) == (0, 0)
     conn.close()
 

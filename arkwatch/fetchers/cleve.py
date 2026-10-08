@@ -164,7 +164,9 @@ def _column_index(header: list[str], frag: str) -> int:
     prefix matching keeps the digit boundary exact. Pinned by tests."""
     hits = [i for i, h in enumerate(header) if h.lower().startswith(frag.lower())]
     if len(hits) != 1:
-        raise CleveError(f"cleveland expectations: column '{frag}' ambiguous/missing ({len(hits)} hits)")
+        raise CleveError(
+            f"cleveland expectations: column '{frag}' ambiguous/missing ({len(hits)} hits)"
+        )
     return hits[0]
 
 
@@ -277,7 +279,14 @@ def _f12_pairs() -> list[tuple[str, float]]:
                 if 0 < abs((date.fromisoformat(t) - date.fromisoformat(target)).days) <= 5
             ]
             if near:
-                cand = fc_by_ts[min(near, key=lambda t: abs((date.fromisoformat(t) - date.fromisoformat(target)).days))]
+                cand = fc_by_ts[
+                    min(
+                        near,
+                        key=lambda t: abs(
+                            (date.fromisoformat(t) - date.fromisoformat(target)).days
+                        ),
+                    )
+                ]
         if cand is not None:
             pairs.append((ts, cand))
     return pairs
@@ -310,4 +319,3 @@ def _recprob_latest(key: str) -> dict:
         raise CleveError("cleveland recprob: F12 pairing empty")
     ts, v = max(pairs)
     return {"ts": ts, "value": round(v, 4)}
-

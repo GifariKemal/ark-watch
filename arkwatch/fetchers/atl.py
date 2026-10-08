@@ -69,14 +69,18 @@ def fetch_latest(series_id: str = "ATL:WGT") -> dict:
     # header row = the one carrying the 'Overall' label; date column is the
     # FIRST column (no 'date' text header exists in this sheet)
     header_i = next(
-        (i for i, row in enumerate(rows[:6])
-         if row and any(isinstance(c, str) and c.strip().lower() == "overall" for c in row)),
+        (
+            i
+            for i, row in enumerate(rows[:6])
+            if row and any(isinstance(c, str) and c.strip().lower() == "overall" for c in row)
+        ),
         None,
     )
     if header_i is None:
         raise AtlError("atl WGT: 'Overall' header not found")
     overall_col = next(
-        j for j, c in enumerate(rows[header_i])
+        j
+        for j, c in enumerate(rows[header_i])
         if isinstance(c, str) and c.strip().lower() == "overall"
     )
     last = None

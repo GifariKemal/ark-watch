@@ -1,4 +1,5 @@
 """Compressed OKX trade archive and one-minute taker-flow aggregates."""
+
 from __future__ import annotations
 
 import gzip
@@ -50,15 +51,21 @@ class TradeFlowBuffer:
 
     def _backfill_legacy(self) -> None:
         candidates = [
-            instrument for instrument, last_id in self.legacy.items()
-            if self.conn.execute("SELECT 1 FROM crypto_trade_flow_state WHERE instrument=?", (instrument,)).fetchone() is None
+            instrument
+            for instrument, last_id in self.legacy.items()
+            if self.conn.execute(
+                "SELECT 1 FROM crypto_trade_flow_state WHERE instrument=?", (instrument,)
+            ).fetchone()
+            is None
         ]
         if not candidates:
             return
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             for instrument in candidates:
-                if self.conn.execute("SELECT 1 FROM crypto_trade_flow_state WHERE instrument=?", (instrument,)).fetchone():
+                if self.conn.execute(
+                    "SELECT 1 FROM crypto_trade_flow_state WHERE instrument=?", (instrument,)
+                ).fetchone():
                     continue
                 grouped: dict[str, list[dict]] = defaultdict(list)
                 rows = self.conn.execute(
@@ -74,16 +81,26 @@ class TradeFlowBuffer:
                     if asset is None and notional is None:
                         asset, notional = normalize_contract_size(float(size), float(price), spec)
                     minute = stamp.replace(second=0, microsecond=0).isoformat(timespec="seconds")
-                    grouped[minute].append({
-                        "tradeId": str(trade_id), "ts": str(int(stamp.timestamp() * 1000)),
-                        "side": side, "px": str(price), "sz": str(size),
-                        "_sizeAsset": asset, "_notionalUsd": notional,
-                    })
+                    grouped[minute].append(
+                        {
+                            "tradeId": str(trade_id),
+                            "ts": str(int(stamp.timestamp() * 1000)),
+                            "side": side,
+                            "px": str(price),
+                            "sz": str(size),
+                            "_sizeAsset": asset,
+                            "_notionalUsd": notional,
+                        }
+                    )
                 for minute, trades in grouped.items():
                     self._flow_row(instrument, minute, trades)
                 self.conn.execute(
                     "INSERT INTO crypto_trade_flow_state VALUES (?,?,?)",
-                    (instrument, str(self.legacy[instrument]), datetime.now(UTC).isoformat(timespec="seconds")),
+                    (
+                        instrument,
+                        str(self.legacy[instrument]),
+                        datetime.now(UTC).isoformat(timespec="seconds"),
+                    ),
                 )
             self.conn.execute("COMMIT")
         except Exception:
@@ -140,7 +157,9 @@ class TradeFlowBuffer:
         inserted = 0
         self.conn.execute("BEGIN IMMEDIATE")
         try:
-            state = dict(self.conn.execute("SELECT instrument,last_trade_id FROM crypto_trade_flow_state"))
+            state = dict(
+                self.conn.execute("SELECT instrument,last_trade_id FROM crypto_trade_flow_state")
+            )
             for instrument, rows in accepted_by_inst.items():
                 last = max(_trade_id(state.get(instrument, "-1")), self.legacy.get(instrument, -1))
                 fresh = [row for row in rows if _trade_id(str(row["tradeId"])) > last]
@@ -150,7 +169,9 @@ class TradeFlowBuffer:
                     trade_id = str(row["tradeId"])
                     key = (instrument, trade_id)
                     prior = by_id.get(key)
-                    if prior is None or (row.get("_source") == "OKX_WS" and prior.get("_source") != "OKX_WS"):
+                    if prior is None or (
+                        row.get("_source") == "OKX_WS" and prior.get("_source") != "OKX_WS"
+                    ):
                         by_id[key] = row
                 accepted = list(by_id.values())
                 if not accepted:
@@ -158,7 +179,11 @@ class TradeFlowBuffer:
                 for row in accepted:
                     source = str(row.get("_source") or "OKX_WS")
                     persisted_by_source[(instrument, source)].append(row)
-                    minute = _utc(row["ts"]).replace(second=0, microsecond=0).isoformat(timespec="seconds")
+                    minute = (
+                        _utc(row["ts"])
+                        .replace(second=0, microsecond=0)
+                        .isoformat(timespec="seconds")
+                    )
                     flow_groups[(instrument, minute)].append(row)
                 highest = max(_trade_id(str(row["tradeId"])) for row in accepted)
                 self.conn.execute(
@@ -171,17 +196,37 @@ class TradeFlowBuffer:
                 if not rows:
                     continue
                 rows.sort(key=lambda row: _trade_id(str(row["tradeId"])))
-                raw_rows = [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
-                raw = json.dumps(raw_rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+                raw_rows = [
+                    {key: value for key, value in row.items() if not key.startswith("_")}
+                    for row in rows
+                ]
+                raw = json.dumps(
+                    raw_rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                ).encode()
                 compressed = gzip.compress(raw, compresslevel=6, mtime=0)
                 times = [_utc(row["ts"]) for row in rows]
                 trade_ids = [str(row["tradeId"]) for row in rows]
-                batch_id = hashlib.sha256(f"OKX|{source}|{instrument}|{bucket}|{trade_ids[0]}|{trade_ids[-1]}".encode()).hexdigest()
+                batch_id = hashlib.sha256(
+                    f"OKX|{source}|{instrument}|{bucket}|{trade_ids[0]}|{trade_ids[-1]}".encode()
+                ).hexdigest()
                 self.conn.execute(
                     "INSERT OR IGNORE INTO crypto_trade_raw_batches "
                     "(batch_id,batch_ts_utc,source,instrument,trade_count,first_trade_ts,last_trade_ts,first_trade_id,last_trade_id,payload_gzip,payload_sha256,fetched_at) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (batch_id, bucket, source, instrument, len(rows), min(times).isoformat(timespec="milliseconds"), max(times).isoformat(timespec="milliseconds"), trade_ids[0], trade_ids[-1], compressed, hashlib.sha256(raw).hexdigest(), datetime.now(UTC).isoformat(timespec="seconds")),
+                    (
+                        batch_id,
+                        bucket,
+                        source,
+                        instrument,
+                        len(rows),
+                        min(times).isoformat(timespec="milliseconds"),
+                        max(times).isoformat(timespec="milliseconds"),
+                        trade_ids[0],
+                        trade_ids[-1],
+                        compressed,
+                        hashlib.sha256(raw).hexdigest(),
+                        datetime.now(UTC).isoformat(timespec="seconds"),
+                    ),
                 )
             for (instrument, minute), rows in flow_groups.items():
                 inserted += self._flow_row(instrument, minute, rows)
@@ -198,12 +243,24 @@ class TradeFlowBuffer:
             side = str(row.get("side") or "").lower()
             if side not in ("buy", "sell"):
                 continue
-            trades.append((side, float(row["sz"]), row.get("_sizeAsset"), row.get("_notionalUsd"), _utc(row["ts"]), str(row["tradeId"])))
+            trades.append(
+                (
+                    side,
+                    float(row["sz"]),
+                    row.get("_sizeAsset"),
+                    row.get("_notionalUsd"),
+                    _utc(row["ts"]),
+                    str(row["tradeId"]),
+                )
+            )
         if not trades:
             return 0
         buys = [trade for trade in trades if trade[0] == "buy"]
         sells = [trade for trade in trades if trade[0] == "sell"]
-        first, last = min(trades, key=lambda trade: trade[4]), max(trades, key=lambda trade: trade[4])
+        first, last = (
+            min(trades, key=lambda trade: trade[4]),
+            max(trades, key=lambda trade: trade[4]),
+        )
         buy_asset = sum(float(trade[2]) for trade in buys if trade[2] is not None)
         sell_asset = sum(float(trade[2]) for trade in sells if trade[2] is not None)
         buy_usd = sum(float(trade[3]) for trade in buys if trade[3] is not None)
@@ -226,6 +283,26 @@ class TradeFlowBuffer:
             "first_trade_ts=MIN(first_trade_ts,excluded.first_trade_ts),last_trade_ts=MAX(last_trade_ts,excluded.last_trade_ts),"
             "first_trade_id=CASE WHEN CAST(excluded.first_trade_id AS INTEGER)<CAST(first_trade_id AS INTEGER) THEN excluded.first_trade_id ELSE first_trade_id END,"
             "last_trade_id=CASE WHEN CAST(excluded.last_trade_id AS INTEGER)>CAST(last_trade_id AS INTEGER) THEN excluded.last_trade_id ELSE last_trade_id END,fetched_at=excluded.fetched_at",
-            (minute, instrument, "OKX", len(trades), len(buys), len(sells), sum(trade[1] for trade in buys), sum(trade[1] for trade in sells), buy_asset if buy_norm_count else None, sell_asset if sell_norm_count else None, buy_usd if buy_norm_count else None, sell_usd if sell_norm_count else None, buy_norm_count, sell_norm_count, first[4].isoformat(timespec="milliseconds"), last[4].isoformat(timespec="milliseconds"), first[5], last[5], fetched_at),
+            (
+                minute,
+                instrument,
+                "OKX",
+                len(trades),
+                len(buys),
+                len(sells),
+                sum(trade[1] for trade in buys),
+                sum(trade[1] for trade in sells),
+                buy_asset if buy_norm_count else None,
+                sell_asset if sell_norm_count else None,
+                buy_usd if buy_norm_count else None,
+                sell_usd if sell_norm_count else None,
+                buy_norm_count,
+                sell_norm_count,
+                first[4].isoformat(timespec="milliseconds"),
+                last[4].isoformat(timespec="milliseconds"),
+                first[5],
+                last[5],
+                fetched_at,
+            ),
         )
         return 1

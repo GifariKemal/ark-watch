@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS soma_summary (
 );
 """
 
+
 def _wednesday(offset_weeks: int = 0) -> str:
     """A real Wednesday date `offset_weeks` back from today (0 = most recent).
 
@@ -519,9 +520,7 @@ def test_brief_line_buy_matured_detail(conn):
     """Live 2026-08-26 shape: portfolio +$4B but gross buys +$42B with $38B
     maturing — both legs ≥ the display floor → detail renders."""
     _seed_holdings(conn)
-    _seed_summary(
-        conn, prev_total_par=158e9, weekly_change=42e9, rolling_off_7d=12e9
-    )
+    _seed_summary(conn, prev_total_par=158e9, weekly_change=42e9, rolling_off_7d=12e9)
     out = soma_brief_line(conn)
     assert "ΔSOMA +$4B/wk (buy +$42B · matured $38B)" in out
 
@@ -687,9 +686,7 @@ def test_fire_per_snapshot_key_never_reannounces(conn):
     # windowed mode (every non-snapshot trigger) is unchanged by this
     assert not _cooldown_active(conn, "vix_backwardation")
     # and _fire refuses to re-announce that snapshot
-    assert not _fire(
-        conn, "soma_roll_off", "c", "x", "y", cooldown_key="soma_roll_off@2026-08-26"
-    )
+    assert not _fire(conn, "soma_roll_off", "c", "x", "y", cooldown_key="soma_roll_off@2026-08-26")
 
 
 def test_permanent_dedup_counts_pending_and_ignores_failed(conn):

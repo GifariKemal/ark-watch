@@ -61,7 +61,4 @@ def fetch_stablecoin_window(n: int = 7) -> list[dict]:
     """The last n chart points [{ts, total_usd}] — the harvest writes the
     window each run so outage-day holes heal (round-2: 09-09/14/15 stayed
     NULL for days because only the latest point was ever written)."""
-    return [
-        {"ts": ts, "total_usd": usd}
-        for ts, usd in (_norm(r) for r in _llama_rows()[-n:])
-    ]
+    return [{"ts": ts, "total_usd": usd} for ts, usd in (_norm(r) for r in _llama_rows()[-n:])]

@@ -1,4 +1,5 @@
 """Offline tests for the GEO: geopolitics fetchers (energy channel tier 4)."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -37,10 +38,12 @@ class TestGprParsers:
         assert geo.parse_fao_csv(text, column="Cereals")[-1]["value"] == 116.3
 
     def test_harpex_payload(self):
-        payload = {"harpex": [
-            {"date": "2026-09-11T00:00:00", "value": 2447.44},
-            {"date": "2026-09-18T00:00:00", "value": 2450.42},
-        ]}
+        payload = {
+            "harpex": [
+                {"date": "2026-09-11T00:00:00", "value": 2447.44},
+                {"date": "2026-09-18T00:00:00", "value": 2450.42},
+            ]
+        }
         assert geo.parse_harpex(payload)[-1] == {"ts": "2026-09-18", "value": 2450.42}
 
 

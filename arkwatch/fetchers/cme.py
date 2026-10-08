@@ -182,7 +182,9 @@ def fetch_settlements(product_code: str, trade_date: datetime | None = None) -> 
             if out:
                 return out
         td -= timedelta(days=1)
-    raise CmeError(f"CME {product_code}: empty for the last 6 days (5-day retention — possibly lost)")
+    raise CmeError(
+        f"CME {product_code}: empty for the last 6 days (5-day retention — possibly lost)"
+    )
 
 
 def fetch_cvol() -> list[dict]:
@@ -226,15 +228,21 @@ def fetch_voi_dates() -> list[dict]:
         if not td_raw:
             continue
         td_iso = f"{td_raw[:4]}-{td_raw[4:6]}-{td_raw[6:8]}" if len(td_raw) == 8 else td_raw
-        out.append({"trade_date": td_iso, "td_raw": td_raw,
-                    "report_type": e.get("reportType", "Preliminary")})
+        out.append(
+            {
+                "trade_date": td_iso,
+                "td_raw": td_raw,
+                "report_type": e.get("reportType", "Preliminary"),
+            }
+        )
     if not out:
         raise CmeError("VOI: no dates available")
     return out
 
 
-def fetch_voi(asset_class_id: int = 8, td_raw: str | None = None,
-              report_type: str | None = None) -> list[dict]:
+def fetch_voi(
+    asset_class_id: int = 8, td_raw: str | None = None, report_type: str | None = None
+) -> list[dict]:
     """Volume/OI per product for one asset class, for the LATEST date entry
     (or an explicit one from fetch_voi_dates). Products live in the nested
     voiProductsTOList key."""
@@ -253,9 +261,7 @@ def fetch_voi(asset_class_id: int = 8, td_raw: str | None = None,
     )
     if r.status_code != 200:
         raise CmeError(f"VOI assetClass {asset_class_id}: HTTP {r.status_code}")
-    td_iso = (
-        f"{td_raw[:4]}-{td_raw[4:6]}-{td_raw[6:8]}" if len(td_raw) == 8 else td_raw
-    )
+    td_iso = f"{td_raw[:4]}-{td_raw[4:6]}-{td_raw[6:8]}" if len(td_raw) == 8 else td_raw
     products = r.json().get("voiProductsTOList", [])
     out = []
     for row in products:

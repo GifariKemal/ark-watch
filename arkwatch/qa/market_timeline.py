@@ -198,9 +198,11 @@ def _valid_bar_slot(
     is_open = (
         _brent_open_minute
         if brent
-        else lambda cal, stamp: _equity_open_minute(cal, stamp, regular_only=equity_regular_only)
-        if equity_extended or equity_regular_only
-        else _open_minute
+        else lambda cal, stamp: (
+            _equity_open_minute(cal, stamp, regular_only=equity_regular_only)
+            if equity_extended or equity_regular_only
+            else _open_minute
+        )
     )
     return is_open(calendar, start) and is_open(calendar, start + timedelta(minutes=4))
 

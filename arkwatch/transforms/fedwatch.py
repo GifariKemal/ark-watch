@@ -30,9 +30,9 @@ FOMC_SCHEDULE = [
     date(2027, 1, 27),
     date(2027, 3, 17),
     date(2027, 4, 28),
-    date(2027, 6, 9),   # ROUND-4: was 06-16 — disagrees with curated_calendar
-                        # (Fed publishes Jun 8-9); a week-late meeting shifts
-                        # every ZQ day-weight after June-2027
+    date(2027, 6, 9),  # ROUND-4: was 06-16 — disagrees with curated_calendar
+    # (Fed publishes Jun 8-9); a week-late meeting shifts
+    # every ZQ day-weight after June-2027
     date(2027, 7, 28),
     date(2027, 9, 15),
     date(2027, 10, 27),

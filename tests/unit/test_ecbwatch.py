@@ -17,10 +17,22 @@ from arkwatch.transforms import ecbwatch as ew
 # Production strip 2026-09-09 (cme_settlements product 10247) — regression
 # fixture; anchor = €STR fixing 2.189 (2026-09-09), DFR 2.25.
 _PROD_STRIP = {
-    "AUG 26": 97.6225, "DEC 26": 97.2875, "DEC 27": 96.9175, "DEC 28": 96.9375,
-    "JUL 26": 97.715, "JUN 26": 97.8075, "JUN 27": 96.9575, "JUN 28": 96.94,
-    "JUN 29": 96.9175, "MAR 27": 97.0775, "MAR 28": 96.9275, "MAR 29": 96.9125,
-    "NOV 26": 98.585, "OCT 26": 98.055, "SEP 26": 97.525, "SEP 27": 96.91,
+    "AUG 26": 97.6225,
+    "DEC 26": 97.2875,
+    "DEC 27": 96.9175,
+    "DEC 28": 96.9375,
+    "JUL 26": 97.715,
+    "JUN 26": 97.8075,
+    "JUN 27": 96.9575,
+    "JUN 28": 96.94,
+    "JUN 29": 96.9175,
+    "MAR 27": 97.0775,
+    "MAR 28": 96.9275,
+    "MAR 29": 96.9125,
+    "NOV 26": 98.585,
+    "OCT 26": 98.055,
+    "SEP 26": 97.525,
+    "SEP 27": 96.91,
     "SEP 28": 96.93,
 }
 
@@ -36,9 +48,9 @@ def test_third_wednesday():
     assert ew._third_wednesday(2029, 6) == date(2029, 6, 20)
     # REVIEW-CAUGHT (P1): months starting on a THURSDAY — day 14 is itself
     # a Wednesday, so a walk starting at day 14 returns the SECOND one
-    assert ew._third_wednesday(2028, 6) == date(2028, 6, 21)   # Jun-1-2028 = Thu
-    assert ew._third_wednesday(2029, 3) == date(2029, 3, 21)   # Mar-1-2029 = Thu
-    assert ew._third_wednesday(2033, 9) == date(2033, 9, 21)   # Sep-1-2033 = Thu
+    assert ew._third_wednesday(2028, 6) == date(2028, 6, 21)  # Jun-1-2028 = Thu
+    assert ew._third_wednesday(2029, 3) == date(2029, 3, 21)  # Mar-1-2029 = Thu
+    assert ew._third_wednesday(2033, 9) == date(2033, 9, 21)  # Sep-1-2033 = Thu
 
 
 def test_reference_quarter():
@@ -69,8 +81,10 @@ def test_single_meeting_full_weight_reduces_to_fedwatch_algebra():
     1.0 → plain delta = F − anchor (the fedwatch running-rate reduction)."""
     rows, diag = ew.compute(
         {"MAR 27": 97.90, "JUN 27": 97.90},  # F = 2.10 both
-        estr=2.00, estr_asof=date(2026, 10, 1),
-        fixings=None, dfr=2.25,
+        estr=2.00,
+        estr_asof=date(2026, 10, 1),
+        fixings=None,
+        dfr=2.25,
         decisions=[date(2026, 12, 17)],  # impl 12-23 < MAR27 start 03-17
     )
     assert diag["rms_bp"] < 0.1
@@ -88,7 +102,8 @@ def test_meeting_inside_window_day_weighted():
     delta = 0.045 * 91 / 42  # the delta that makes SEP26 F = 2.045
     rows, diag = ew.compute(
         {"SEP 26": 100 - 2.045, "DEC 26": 100 - (2.00 + delta)},
-        estr=2.00, estr_asof=date(2026, 10, 1),
+        estr=2.00,
+        estr_asof=date(2026, 10, 1),
         decisions=[date(2026, 10, 29)],  # impl 11-04
     )
     assert diag["rms_bp"] < 0.1
@@ -107,7 +122,8 @@ def test_two_meetings_one_window_joint_recover():
     f2 = 2.00 + d_a + d_b
     rows, diag = ew.compute(
         {"DEC 26": 100 - f1, "MAR 27": 100 - f2},
-        estr=2.00, estr_asof=date(2026, 10, 1),
+        estr=2.00,
+        estr_asof=date(2026, 10, 1),
         decisions=[date(2026, 12, 17), date(2027, 2, 4)],
     )
     assert diag["rms_bp"] < 0.1
@@ -126,13 +142,13 @@ def test_greater_than_25bp_characteristic_mantissa():
     hike scalar is 1.0 with the split in sizes; E=2.9 → P(75)=0.9/P(50)=0.1."""
     rows, _ = ew.compute(
         {"MAR 27": 100 - 2.40, "JUN 27": 100 - 2.40},  # δ = 40bp
-        estr=2.00, estr_asof=date(2026, 10, 1),
+        estr=2.00,
+        estr_asof=date(2026, 10, 1),
         decisions=[date(2026, 12, 17)],
     )
     r = rows[0]
     assert r.prob_hike == pytest.approx(1.0, abs=1e-6)
-    assert r.sizes == {"25": pytest.approx(0.4, abs=1e-3),
-                       "50": pytest.approx(0.6, abs=1e-3)}
+    assert r.sizes == {"25": pytest.approx(0.4, abs=1e-3), "50": pytest.approx(0.6, abs=1e-3)}
 
 
 def test_front_window_running_accrual():
@@ -143,8 +159,10 @@ def test_front_window_running_accrual():
     f_sep = 2.00 + delta * 42 / 91  # impl 11-04, remaining 42/91 of window
     rows, diag = ew.compute(
         {"SEP 26": 100 - f_sep, "DEC 26": 100 - (2.00 + delta)},
-        estr=2.00, estr_asof=date(2026, 9, 23),
-        fixings=fixings, decisions=[date(2026, 10, 29)],
+        estr=2.00,
+        estr_asof=date(2026, 9, 23),
+        fixings=fixings,
+        decisions=[date(2026, 10, 29)],
     )
     assert diag["rms_bp"] < 0.1
     assert rows[0].delta_bp == pytest.approx(25.0, abs=0.05)
@@ -165,7 +183,8 @@ def test_empty_and_serial_only_and_expired():
 def test_meeting_beyond_last_contract_flagged():
     rows, diag = ew.compute(
         {"SEP 26": 97.525, "DEC 26": 97.2875},
-        estr=2.189, estr_asof=date(2026, 9, 9),
+        estr=2.189,
+        estr_asof=date(2026, 9, 9),
         decisions=[date(2026, 10, 29), date(2027, 12, 16)],
     )
     assert "2027-12-16" in diag["beyond_horizon"]
@@ -179,8 +198,12 @@ def test_meeting_beyond_last_contract_flagged():
 def test_probabilities_sum_to_one_everywhere():
     for strip, estr, asof, decs in (
         (_PROD_STRIP, 2.189, date(2026, 9, 9), None),
-        ({"DEC 26": 97.73, "MAR 27": 97.65}, 2.00, date(2026, 10, 1),
-         [date(2026, 12, 17), date(2027, 2, 4)]),
+        (
+            {"DEC 26": 97.73, "MAR 27": 97.65},
+            2.00,
+            date(2026, 10, 1),
+            [date(2026, 12, 17), date(2027, 2, 4)],
+        ),
     ):
         rows, _ = ew.compute(strip, estr=estr, estr_asof=asof, decisions=decs)
         for r in rows:
@@ -199,7 +222,7 @@ def test_production_strip_regression():
     assert diag["basis_bp"] == pytest.approx(-6.1, abs=0.1)
     assert rows[0].meeting_date == date(2026, 9, 10)
     assert 0.75 <= rows[0].prob_hike <= 0.95
-    assert 0.50 <= rows[1].prob_hike <= 0.75   # Oct-29
+    assert 0.50 <= rows[1].prob_hike <= 0.75  # Oct-29
     assert rows[0].implied_rate == pytest.approx(2.46, abs=0.02)
 
 
@@ -218,7 +241,8 @@ def test_format_brief_next_meeting_only():
 def test_format_brief_exact_has_no_approx_marker():
     rows, diag = ew.compute(
         {"MAR 27": 97.90, "JUN 27": 97.90},
-        estr=2.00, estr_asof=date(2026, 10, 1),
+        estr=2.00,
+        estr_asof=date(2026, 10, 1),
         decisions=[date(2026, 12, 17)],
     )
     txt = ew.format_brief(rows, diag, today=date(2026, 10, 1))

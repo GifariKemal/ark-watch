@@ -203,14 +203,34 @@ class TestRollOff:
 class TestSummary:
     def test_summary_from_seeded_holdings(self):
         rows = [
-            _hold(cusip="B1", security_type="Bills", maturity_date="2026-08-27",
-                  par_value=12_000_000_000.0, change_week=0.0),
-            _hold(cusip="N1", security_type="NotesBonds", maturity_date="2036-08-26",
-                  par_value=20_000_000_000.0, change_week=-2_000_000_000.0),
-            _hold(cusip="T1", security_type="TIPS", maturity_date="2046-08-26",
-                  par_value=8_000_000_000.0, change_week=1_000_000_000.0),
-            _hold(cusip="F1", security_type="FRNs", maturity_date="2027-02-15",
-                  par_value=2_000_000_000.0, change_week=None),
+            _hold(
+                cusip="B1",
+                security_type="Bills",
+                maturity_date="2026-08-27",
+                par_value=12_000_000_000.0,
+                change_week=0.0,
+            ),
+            _hold(
+                cusip="N1",
+                security_type="NotesBonds",
+                maturity_date="2036-08-26",
+                par_value=20_000_000_000.0,
+                change_week=-2_000_000_000.0,
+            ),
+            _hold(
+                cusip="T1",
+                security_type="TIPS",
+                maturity_date="2046-08-26",
+                par_value=8_000_000_000.0,
+                change_week=1_000_000_000.0,
+            ),
+            _hold(
+                cusip="F1",
+                security_type="FRNs",
+                maturity_date="2027-02-15",
+                par_value=2_000_000_000.0,
+                change_week=None,
+            ),
         ]
         s = soma.compute_soma_summary(rows, AS_OF)
         assert s["as_of_date"] == AS_OF
@@ -224,6 +244,7 @@ class TestSummary:
         assert s["rolling_off_30d"] == 12e9
         assert s["rolling_off_90d"] == 12e9
         assert s["n_cusips"] == 4
+
         # par-weighted maturity; day counts via stdlib (leap years included —
         # hand-typed day constants were wrong and hid nothing the stdlib hides)
         def _y(m: str) -> float:
@@ -295,10 +316,20 @@ class TestDbRoundTrip:
     def test_store_soma_week_writes_both_tables(self, tmp_path):
         conn = db.get_conn(tmp_path / "soma.db", allow_init=True)
         rows = [
-            _hold(cusip="A", security_type="Bills", maturity_date="2026-08-27",
-                  par_value=100.0, change_week=-5.0),
-            _hold(cusip="B", security_type="TIPS", maturity_date="2046-08-26",
-                  par_value=300.0, change_week=7.0),
+            _hold(
+                cusip="A",
+                security_type="Bills",
+                maturity_date="2026-08-27",
+                par_value=100.0,
+                change_week=-5.0,
+            ),
+            _hold(
+                cusip="B",
+                security_type="TIPS",
+                maturity_date="2046-08-26",
+                par_value=300.0,
+                change_week=7.0,
+            ),
         ]
         n_new, summary = store_soma_week(conn, rows)
         assert n_new == 2

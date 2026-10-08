@@ -158,7 +158,9 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="arkwatch calibrate")
     p.add_argument("--db", default=str(DEFAULT_DB))
     p.add_argument("--max-age", type=int, default=90, help="Max anchor age in days (default: 90)")
-    p.add_argument("--propose", action="store_true", help="Propose fresh anchors for expired/drifted rows")
+    p.add_argument(
+        "--propose", action="store_true", help="Propose fresh anchors for expired/drifted rows"
+    )
     p.add_argument("--json", action="store_true", help="Output JSON format")
     a = p.parse_args(argv)
 
@@ -172,7 +174,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.json:
         out = {
-            "summary": {"total": len(audits), "ok": ok_n, "expired": exp_n, "drifted": drf_n, "unseen": uns_n},
+            "summary": {
+                "total": len(audits),
+                "ok": ok_n,
+                "expired": exp_n,
+                "drifted": drf_n,
+                "unseen": uns_n,
+            },
             "audits": [asdict(r) for r in audits],
         }
         if a.propose:
@@ -191,15 +199,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print("=== Golden Anchors Quarterly Calibration Audit ===")
-    print(f"Total: {len(audits)} anchors | OK: {ok_n} | Expired (> {a.max_age}d): {exp_n} | Drifted: {drf_n} | Unseen: {uns_n}\n")
+    print(
+        f"Total: {len(audits)} anchors | OK: {ok_n} | Expired (> {a.max_age}d): {exp_n} | Drifted: {drf_n} | Unseen: {uns_n}\n"
+    )
 
     if exp_n > 0 or drf_n > 0:
-        print(f"{'SERIES ID':<24} {'ANCHOR DATE':<12} {'EXPECTED':>10} {'DB VAL':>10} {'STATUS':<10} {'NOTE'}")
+        print(
+            f"{'SERIES ID':<24} {'ANCHOR DATE':<12} {'EXPECTED':>10} {'DB VAL':>10} {'STATUS':<10} {'NOTE'}"
+        )
         print("-" * 100)
         for r in audits:
             if r.status in ("EXPIRED", "DRIFTED"):
                 db_s = f"{r.db_value:.4f}" if r.db_value is not None else "N/A"
-                print(f"{r.series_id:<24} {r.anchor_date:<12} {r.expected:>10.4f} {db_s:>10} {r.status:<10} {r.note}")
+                print(
+                    f"{r.series_id:<24} {r.anchor_date:<12} {r.expected:>10.4f} {db_s:>10} {r.status:<10} {r.note}"
+                )
 
     if a.propose:
         reg = {e["series_id"]: e for e in load_registry()}
@@ -211,10 +225,10 @@ def main(argv: list[str] | None = None) -> int:
                     cand = propose_fresh_anchor(conn, reg[full_sid])
                     if cand:
                         print(f"  - series_id: {cand['series_id']}")
-                        print(f"    anchor_date: \"{cand['anchor_date']}\"")
+                        print(f'    anchor_date: "{cand["anchor_date"]}"')
                         print(f"    expected: {cand['expected']}")
                         print(f"    tolerance: {cand['tolerance']}")
-                        print(f"    provenance: \"{cand['provenance']}\"")
+                        print(f'    provenance: "{cand["provenance"]}"')
 
     conn.close()
     return 0

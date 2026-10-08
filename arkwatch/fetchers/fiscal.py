@@ -130,7 +130,9 @@ def _get(path: str, params: dict, session=None) -> dict:
     return r.json()
 
 
-def _fetch_pages(path: str, params: dict, page_size: int = PAGE_SIZE_MAX, session=None) -> list[dict]:
+def _fetch_pages(
+    path: str, params: dict, page_size: int = PAGE_SIZE_MAX, session=None
+) -> list[dict]:
     """Walk ALL pages of an endpoint (full-history pulls; windowed pulls use
     _window). Stop on meta total-count or a short page."""
     rows: list[dict] = []
@@ -152,7 +154,9 @@ def _fetch_pages(path: str, params: dict, page_size: int = PAGE_SIZE_MAX, sessio
     return rows
 
 
-def _fetch_recent(path: str, params: dict, n_dates: int, size: int = WINDOW_PAGE, session=None) -> list[dict]:
+def _fetch_recent(
+    path: str, params: dict, n_dates: int, size: int = WINDOW_PAGE, session=None
+) -> list[dict]:
     """Newest-first pages until MORE than n_dates distinct record_dates are held
     or a short page ends the history. The extra older date matters because a
     page boundary can split a date's rows — with one older date in hand the
@@ -184,7 +188,9 @@ def fetch_auctions(session=None) -> list[dict]:
     )
 
 
-def fetch_auctions_window(since_days: int = 120, session=None, size: int = WINDOW_PAGE) -> list[dict]:
+def fetch_auctions_window(
+    since_days: int = 120, session=None, size: int = WINDOW_PAGE
+) -> list[dict]:
     """Daily increment. record_date = issue date and can be in the FUTURE
     (announcement rows) — the cutoff keeps future-dated rows in. Pages while
     the oldest row held is still inside the window (a page boundary must not
@@ -197,8 +203,12 @@ def fetch_auctions_window(since_days: int = 120, session=None, size: int = WINDO
     while True:
         data = _get(
             AUCTIONS,
-            {"fields": AUCTION_FIELDS, "sort": "-record_date", "page[size]": size,
-             "page[number]": number},
+            {
+                "fields": AUCTION_FIELDS,
+                "sort": "-record_date",
+                "page[size]": size,
+                "page[number]": number,
+            },
             session,
         ).get("data", [])
         rows += data
@@ -293,8 +303,11 @@ def fetch_window(series_id: str, days: int = 12, session=None) -> list[dict]:
         field = DEBT_PENNY_FIELD[series_id]
         rows = _get(
             DEBT_PENNY,
-            {"fields": f"record_date,{field}", "sort": "-record_date",
-             "page[size]": int(days * 1.8)},
+            {
+                "fields": f"record_date,{field}",
+                "sort": "-record_date",
+                "page[size]": int(days * 1.8),
+            },
             session,
         ).get("data", [])
         pts = [
@@ -306,11 +319,7 @@ def fetch_window(series_id: str, days: int = 12, session=None) -> list[dict]:
         return pts
     if series_id == "FISCAL:TGA_DAILY":
         rows = _rows(ERAS[-1][0], "-record_date", int(days * 1.8))
-        pts = [
-            {"ts": r["record_date"], "value": _close(r)}
-            for r in rows
-            if _close(r) is not None
-        ]
+        pts = [{"ts": r["record_date"], "value": _close(r)} for r in rows if _close(r) is not None]
         pts.sort(key=lambda p: p["ts"])
         return pts
     raise FiscalError(f"fetch_window: unsupported series {series_id}")

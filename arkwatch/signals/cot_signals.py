@@ -434,7 +434,9 @@ def store_cot_signals(conn: sqlite3.Connection, score: float) -> int:
         "regime_score",
         today,
         round(score, 4),
-        "RISK-ON" if score > REGIME_RISK_ON else ("RISK-OFF" if score < REGIME_RISK_OFF else "NEUTRAL"),
+        "RISK-ON"
+        if score > REGIME_RISK_ON
+        else ("RISK-OFF" if score < REGIME_RISK_OFF else "NEUTRAL"),
         {"weights": PILLAR_WEIGHTS},
     )
     for blk, p in pillars.items():

@@ -179,7 +179,11 @@ def _anxious_latest() -> dict:
     rows = list(ws.iter_rows(values_only=True))
     # header at row index 3: Obs Year | Obs Quarter | Anxious Index | RECESS
     header_i = next(
-        (i for i, r in enumerate(rows[:6]) if r and any(str(c or "").strip() == "Obs Year" for c in r)),
+        (
+            i
+            for i, r in enumerate(rows[:6])
+            if r and any(str(c or "").strip() == "Obs Year" for c in r)
+        ),
         None,
     )
     if header_i is None:

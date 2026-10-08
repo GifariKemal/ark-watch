@@ -286,7 +286,12 @@ def main(argv: list[str] | None = None) -> int:
             # the agency/WAM legs never ran (they chain on the tsy as-of) —
             # log them as skipped so the audit trail shows why, not silence
             log_collection(
-                conn, "soma", "NYFED:SOMA_AGENCY", None, 0, err=f"skipped: tsy harvest failed ({err})"
+                conn,
+                "soma",
+                "NYFED:SOMA_AGENCY",
+                None,
+                0,
+                err=f"skipped: tsy harvest failed ({err})",
             )
             log_collection(
                 conn, "soma", "NYFED:SOMA_WAM", None, 0, err=f"skipped: tsy harvest failed ({err})"

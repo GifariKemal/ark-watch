@@ -68,8 +68,16 @@ def harvest_earnings(conn, days: int = 42) -> int:
             " revenue_estimated=excluded.revenue_estimated,"
             " revenue_actual=excluded.revenue_actual,"
             " last_updated=excluded.last_updated, fetched_at=excluded.fetched_at",
-            (r["symbol"], r["date"], r["eps_estimated"], r["eps_actual"],
-             r["revenue_estimated"], r["revenue_actual"], r["last_updated"], now),
+            (
+                r["symbol"],
+                r["date"],
+                r["eps_estimated"],
+                r["eps_actual"],
+                r["revenue_estimated"],
+                r["revenue_actual"],
+                r["last_updated"],
+                now,
+            ),
         )
         n += cur.rowcount if cur.rowcount > 0 else 0
     conn.commit()
@@ -82,6 +90,7 @@ def compute_earnings_weeks(conn, weeks_ahead: int = 5) -> list[dict]:
     computed_signals (signal_id earnings_week_spx / earnings_week_ndx;
     value = weight-share in PERCENT-POINTS of the index)."""
     spx_w, ndx_w = _heavyweights()
+
     # review ronde-2 (P2): normalize ticker forms ONCE — FMP serves
     # BRK-B (dash) while the config uses BRK.B (dot); without this the
     # Berkshire weight silently never counts
@@ -114,16 +123,22 @@ def compute_earnings_weeks(conn, weeks_ahead: int = 5) -> list[dict]:
     out = []
     for wk in sorted(by_week):
         b = by_week[wk]
-        for sid, val in (("earnings_week_spx", round(b["spx"], 1)),
-                         ("earnings_week_ndx", round(b["ndx"], 1))):
+        for sid, val in (
+            ("earnings_week_spx", round(b["spx"], 1)),
+            ("earnings_week_ndx", round(b["ndx"], 1)),
+        ):
             conn.execute(
                 "INSERT OR REPLACE INTO computed_signals(signal_id, ts, run_id,"
                 " computed_at, value, state, inputs_json) VALUES (?,?,?,?,?,?,?)",
-                (sid, wk.isoformat(), run_id, now, val,
-                 "HEAVY" if val >= 15 else "QUIET",
-                 None),
+                (sid, wk.isoformat(), run_id, now, val, "HEAVY" if val >= 15 else "QUIET", None),
             )
-        out.append({"week": wk.isoformat(), "spx_pp": round(b["spx"], 1),
-                    "ndx_pp": round(b["ndx"], 1), "n_heavy": b["n"]})
+        out.append(
+            {
+                "week": wk.isoformat(),
+                "spx_pp": round(b["spx"], 1),
+                "ndx_pp": round(b["ndx"], 1),
+                "n_heavy": b["n"],
+            }
+        )
     conn.commit()
     return out

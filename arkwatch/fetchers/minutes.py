@@ -9,6 +9,7 @@ Two layers:
 URL pattern (live-verified): fomcminutes{YYYYMMDD}.htm where date = the
 meeting's END date. Minutes publish ~3 weeks after the meeting.
 """
+
 from __future__ import annotations
 
 import html as _html
@@ -23,14 +24,31 @@ CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 
 # Hawkish/dovish keyword pairs for the structural tone score
 _HAWKISH = (
-    "raise", "hike", "increase the target", "tighten", "inflation remains elevated",
-    "price stability", "upside risks to inflation", "restrictive",
-    "resilient", "solid pace", "robust", "strong demand",
+    "raise",
+    "hike",
+    "increase the target",
+    "tighten",
+    "inflation remains elevated",
+    "price stability",
+    "upside risks to inflation",
+    "restrictive",
+    "resilient",
+    "solid pace",
+    "robust",
+    "strong demand",
 )
 _DOVISH = (
-    "lower", "cut", "reduce the target", "ease", "inflation is easing",
-    "downside risks", "accommodative", "slowdown", "weakening",
-    "softening", "labor market cooling",
+    "lower",
+    "cut",
+    "reduce the target",
+    "ease",
+    "inflation is easing",
+    "downside risks",
+    "accommodative",
+    "slowdown",
+    "weakening",
+    "softening",
+    "labor market cooling",
 )
 
 
@@ -107,7 +125,17 @@ def parse_minutes(date_iso: str) -> dict:
                 if (
                     len(words) >= 2
                     and all(w[0].isupper() or w in ("van", "de", "der") for w in words if w)
-                    and not any(v in n.lower() for v in ("board", "voted", "effective", "addition", "consistent", "who preferred"))
+                    and not any(
+                        v in n.lower()
+                        for v in (
+                            "board",
+                            "voted",
+                            "effective",
+                            "addition",
+                            "consistent",
+                            "who preferred",
+                        )
+                    )
                 ):
                     voters_against.append(n)
 
@@ -130,10 +158,6 @@ def parse_minutes(date_iso: str) -> dict:
         "tone_score": round(tone, 1),
         "full_text": text,
     }
-
-
-
-
 
 
 def nlp_sentiment(text: str, api_key: str | None = None) -> dict:

@@ -175,7 +175,10 @@ class TestFedWatch:
 
         # live strip td=2026-09-15 (server cme_settlements, product 305)
         settlements = {
-            "SEP 26": 96.2625, "OCT 26": 96.125, "NOV 26": 96.02, "DEC 26": 95.895,
+            "SEP 26": 96.2625,
+            "OCT 26": 96.125,
+            "NOV 26": 96.02,
+            "DEC 26": 95.895,
         }
         probs = compute(settlements, 3.63, anchor_date=date(2026, 9, 15))
         # the passed meeting is bootstrap machinery — never returned
@@ -194,14 +197,15 @@ class TestFedWatch:
         from datetime import date
 
         settlements = {
-            "SEP 26": 96.2625, "OCT 26": 96.125, "NOV 26": 96.02, "DEC 26": 95.895,
+            "SEP 26": 96.2625,
+            "OCT 26": 96.125,
+            "NOV 26": 96.02,
+            "DEC 26": 95.895,
         }
         probs = compute(settlements, 3.63)  # no anchor_date → bootstrap + convention
         assert all(abs(p.expected_moves) <= 4.0 for p in probs)
         # the Oct row is now SANE (post = NOV implied 3.98) and therefore kept
-        oct_row = next(
-            (p for p in probs if p.meeting_date == date(2026, 10, 28)), None
-        )
+        oct_row = next((p for p in probs if p.meeting_date == date(2026, 10, 28)), None)
         assert oct_row is not None and 3.5 < oct_row.implied_rate < 4.5
 
 

@@ -195,16 +195,13 @@ def fetch_window(series_id: str, days: int = 12, *, today: str | None = None) ->
     if key in PERCENTILE_SERIES:
         col = PERCENTILE_SERIES[key].replace("percentPercentile", "p")
         rows = fetch_sofr_percentiles(days + 5)
-        pts = [
-            {"ts": r["ts"], "value": _f(r.get(col))}
-            for r in rows
-            if _f(r.get(col)) is not None
-        ]
+        pts = [{"ts": r["ts"], "value": _f(r.get(col))} for r in rows if _f(r.get(col)) is not None]
         pts.sort(key=lambda p: p["ts"])
         return pts
     if key in ("SRF_TOTAL", "ONRRP_TOTAL"):
         daily = _repo_daily(
-            "/rp/results/search.json" if key == "SRF_TOTAL"
+            "/rp/results/search.json"
+            if key == "SRF_TOTAL"
             else "/rp/reverserepo/propositions/search.json",
             full_allotment=key == "SRF_TOTAL",
         )

@@ -38,8 +38,20 @@ def _day(n: int = 0) -> str:
 #   negatives = parenthesized inside redFont spans
 # --------------------------------------------------------------------------
 
-_BTC_ISSUERS = ["IBIT", "FBTC", "BITB", "ARKB", "BTCO", "EZBC", "BRRR", "HODL",
-                "BTCW", "MSBT", "GBTC", "BTC"]
+_BTC_ISSUERS = [
+    "IBIT",
+    "FBTC",
+    "BITB",
+    "ARKB",
+    "BTCO",
+    "EZBC",
+    "BRRR",
+    "HODL",
+    "BTCW",
+    "MSBT",
+    "GBTC",
+    "BTC",
+]
 
 
 def _farside_html(rows: list[tuple[str, list[str]]], footer: list[str] | None = None) -> str:
@@ -53,9 +65,7 @@ def _farside_html(rows: list[tuple[str, list[str]]], footer: list[str] | None = 
                 tds += f'<td><span class="redFont">{v}</span></td>'
             else:
                 tds += f'<td><span class="tabletext">{v}</span></td>'
-        trs.append(
-            f'<tr>\n<td><span class="tabletext">{date}</span></td>{tds}\n</tr>'
-        )
+        trs.append(f'<tr>\n<td><span class="tabletext">{date}</span></td>{tds}\n</tr>')
     foot = ""
     if footer is not None:
         ftds = "".join(
@@ -63,9 +73,7 @@ def _farside_html(rows: list[tuple[str, list[str]]], footer: list[str] | None = 
             for v in footer
         )
         foot = f'<tr><td><span class="tabletext">Total</span>{ftds}</tr>'
-    return (
-        f"<html><table><thead><tr>{th}</tr></thead><tbody>{''.join(trs)}{foot}</tbody></table></html>"
-    )
+    return f"<html><table><thead><tr>{th}</tr></thead><tbody>{''.join(trs)}{foot}</tbody></table></html>"
 
 
 def _mock_farside(monkeypatch, html: str):
@@ -80,10 +88,12 @@ def test_farside_latest_by_parsed_date_not_dom(monkeypatch):
     """D-021 REGRESSION: rows render OLDEST-first; trs[0] was 19 days stale."""
     _mock_farside(
         monkeypatch,
-        _farside_html([
-            ("24 Aug 2026", ["1"] * 12 + ["337.6"]),
-            ("08 Sep 2026", ["10.7", "(17.1)"] + ["0.0"] * 8 + ["(65.5)", "0.0", "(46.6)"]),
-        ]),
+        _farside_html(
+            [
+                ("24 Aug 2026", ["1"] * 12 + ["337.6"]),
+                ("08 Sep 2026", ["10.7", "(17.1)"] + ["0.0"] * 8 + ["(65.5)", "0.0", "(46.6)"]),
+            ]
+        ),
     )
     r = flows_extra.fetch_farside_btc()
     assert r["latest"]["date_iso"] == "2026-09-08"
@@ -94,7 +104,9 @@ def test_farside_latest_by_parsed_date_not_dom(monkeypatch):
 def test_farside_issuer_mapping_and_signs(monkeypatch):
     _mock_farside(
         monkeypatch,
-        _farside_html([("08 Sep 2026", ["10.7", "(17.1)"] + ["0.0"] * 8 + ["(65.5)", "0.0", "(46.6)"])]),
+        _farside_html(
+            [("08 Sep 2026", ["10.7", "(17.1)"] + ["0.0"] * 8 + ["(65.5)", "0.0", "(46.6)"])]
+        ),
     )
     r = flows_extra.fetch_farside_btc()
     iss = r["latest"]["issuers"]
@@ -109,11 +121,13 @@ def test_farside_placeholder_and_partial_rows_skipped(monkeypatch):
     Neither must land (a fake zero-flow day or a misaligned mapping)."""
     _mock_farside(
         monkeypatch,
-        _farside_html([
-            ("09 Sep 2026", ["0.0"]),                       # placeholder
-            ("08 Sep 2026", ["1.0", "2.0", "3.0"]),          # partial (< issuer count)
-            ("07 Sep 2026", ["5.0"] * 12 + ["60.0"]),        # complete
-        ]),
+        _farside_html(
+            [
+                ("09 Sep 2026", ["0.0"]),  # placeholder
+                ("08 Sep 2026", ["1.0", "2.0", "3.0"]),  # partial (< issuer count)
+                ("07 Sep 2026", ["5.0"] * 12 + ["60.0"]),  # complete
+            ]
+        ),
     )
     r = flows_extra.fetch_farside_btc()
     assert [x["date_iso"] for x in r["rows"]] == ["2026-09-07"]
@@ -124,7 +138,9 @@ def test_farside_issuer_only_row_has_no_total(monkeypatch):
     guess the aggregate — the last cell is the BTC-mini issuer, not Total."""
     _mock_farside(
         monkeypatch,
-        _farside_html([("09 Sep 2026", ["0.0", "0.0", "(78.0)"] + ["0.0"] * 6 + ["(27.2)", "0.0", "(100.7)"])]),
+        _farside_html(
+            [("09 Sep 2026", ["0.0", "0.0", "(78.0)"] + ["0.0"] * 6 + ["(27.2)", "0.0", "(100.7)"])]
+        ),
     )
     r = flows_extra.fetch_farside_btc()
     assert r["latest"]["net_flow_musd"] is None
@@ -150,10 +166,12 @@ def test_farside_invalid_date_rejected(monkeypatch):
     """A non-calendar date must not poison the max-date pick."""
     _mock_farside(
         monkeypatch,
-        _farside_html([
-            ("99 Xxx 2026", ["1"] * 12 + ["9.9"]),
-            ("08 Sep 2026", ["1"] * 12 + ["46.6"]),
-        ]),
+        _farside_html(
+            [
+                ("99 Xxx 2026", ["1"] * 12 + ["9.9"]),
+                ("08 Sep 2026", ["1"] * 12 + ["46.6"]),
+            ]
+        ),
     )
     r = flows_extra.fetch_farside_btc()
     assert r["latest"]["date_iso"] == "2026-09-08"
@@ -182,8 +200,12 @@ def _window(start_days_ago: int, n_days: int):
 def _harvest_farside_only(conn, monkeypatch, window):
     from arkwatch.qa import f2_harvest
 
-    pkg = {"rows": window, "issuers": ["IBIT", "GBTC"], "latest": window[-1],
-           "cumulative": {"IBIT": 64067.0, "GBTC": -27746.0, "Total": 55539.0}}
+    pkg = {
+        "rows": window,
+        "issuers": ["IBIT", "GBTC"],
+        "latest": window[-1],
+        "cumulative": {"IBIT": 64067.0, "GBTC": -27746.0, "Total": 55539.0},
+    }
     monkeypatch.setattr(flows_extra, "fetch_farside_btc", lambda: pkg)
     monkeypatch.setattr(flows_extra, "fetch_farside_eth", lambda: pkg)
 
@@ -205,9 +227,7 @@ def test_farside_landing_window_selfheal_and_issuers(conn, monkeypatch):
     n_iss = conn.execute("SELECT COUNT(*) FROM etf_flows_issuer").fetchone()[0]
     # 13 dates x 2 issuers x 2 etfs
     assert n_iss == 13 * 2 * 2
-    cum = conn.execute(
-        "SELECT value FROM flows_periodic WHERE kind='farside_cum_btc'"
-    ).fetchone()
+    cum = conn.execute("SELECT value FROM flows_periodic WHERE kind='farside_cum_btc'").fetchone()
     assert cum[0] == 55539.0
     ok = conn.execute(
         "SELECT status FROM fetch_log WHERE target='FARSIDE:BTC' ORDER BY id DESC"
@@ -360,10 +380,12 @@ def test_safe_month_pairing_sdr_column(monkeypatch):
     Aug pair must still bind to 2026-08 — never the RUN month."""
     _mock_safe(
         monkeypatch,
-        _safe_xlsx({
-            "2026.07": ["34187.76", "3063.54", "37916.02", "7608"],
-            "2026.08": ["34383.25", "3500.80", "38548.85", "7673"],
-        }),
+        _safe_xlsx(
+            {
+                "2026.07": ["34187.76", "3063.54", "37916.02", "7608"],
+                "2026.08": ["34383.25", "3500.80", "38548.85", "7673"],
+            }
+        ),
     )
     r = flows_extra.fetch_pboc_gold()
     assert r["ts"] == "2026-08"  # NOT the run month
@@ -426,11 +448,13 @@ def test_lbma_gold_silver_full_history(monkeypatch):
 
     _mock_lbma(
         monkeypatch,
-        _lbma_xlsx([
-            ("2026-08", 309681, 914082),                      # string label era
-            (date(2026, 7, 1), 306526.610788, 907058.9632960),  # datetime era
-            ("2026-06", 304285, 902843),
-        ]),
+        _lbma_xlsx(
+            [
+                ("2026-08", 309681, 914082),  # string label era
+                (date(2026, 7, 1), 306526.610788, 907058.9632960),  # datetime era
+                ("2026-06", 304285, 902843),
+            ]
+        ),
     )
     r = flows_extra.fetch_lbma_vault()
     assert r["ts"] == "2026-08"
@@ -492,22 +516,30 @@ def _cnn_payload(score=39.0, ts=None):
             ]
         },
         "stock_price_strength": {
-            "score": 10, "rating": "extreme fear", "timestamp": 1.0,
+            "score": 10,
+            "rating": "extreme fear",
+            "timestamp": 1.0,
             "data": [{"x": 1788998395000.0, "y": 3.58, "rating": "x"}],
         },
         "junk_bond_demand": {
-            "score": 74.8, "rating": "greed", "timestamp": 1.0,
+            "score": 74.8,
+            "rating": "greed",
+            "timestamp": 1.0,
             "data": [{"x": 1788998395000.0, "y": 1.27, "rating": "x"}],
         },
         "put_call_options": {
-            "score": 61.2, "rating": "greed", "timestamp": 1.0,
+            "score": 61.2,
+            "rating": "greed",
+            "timestamp": 1.0,
             "data": [
                 {"x": 1757462400000.0, "y": 0.6607, "rating": "x"},
                 {"x": 1788998395000.0, "y": 0.7029, "rating": "x"},
             ],
         },
         "market_volatility_vix": {
-            "score": 50, "rating": "neutral", "timestamp": 1.0,
+            "score": 50,
+            "rating": "neutral",
+            "timestamp": 1.0,
             "data": [{"x": 1788998395000.0, "y": 16.2, "rating": "x"}],
         },
     }
@@ -537,7 +569,9 @@ def test_cnn_components_and_raw(monkeypatch):
     _mock_cnn(monkeypatch, _cnn_payload())
     fg = cnn.fetch_fear_greed()
     assert fg["components"]["stock_price_strength"] == {
-        "score": 10, "rating": "extreme fear", "raw": 3.58,
+        "score": 10,
+        "rating": "extreme fear",
+        "raw": 3.58,
     }
     assert fg["components"]["junk_bond_demand"]["score"] == 74.8
     # raw P/C + VIX histories converted from ms epochs
@@ -568,9 +602,7 @@ def test_cnn_landing_report_date_components_history(conn, monkeypatch):
         "SELECT COUNT(*) FROM flows_periodic WHERE kind='cnn_put_call_options'"
     ).fetchone()[0]
     assert pc == 2  # both history points landed
-    status = conn.execute(
-        "SELECT status FROM fetch_log WHERE target='CNN:FG'"
-    ).fetchone()[0]
+    status = conn.execute("SELECT status FROM fetch_log WHERE target='CNN:FG'").fetchone()[0]
     assert status == "OK"
 
 
@@ -600,14 +632,17 @@ def _brief(conn, tmp_path):
 
 def test_brief_etf_divergence_and_stale(conn, tmp_path):
     conn.execute(
-        "INSERT INTO flows_daily(date, funding_bps, btc_etf_musd, eth_etf_musd)"
-        " VALUES (?,?,?,?)",
+        "INSERT INTO flows_daily(date, funding_bps, btc_etf_musd, eth_etf_musd) VALUES (?,?,?,?)",
         (_day(1), 1.5, -46.6, 12.0),
     )
     conn.executemany(
         "INSERT INTO etf_flows_issuer(date, etf, issuer, flow_musd) VALUES (?,?,?,?)",
-        [(_day(1), "BTC", "GBTC", -65.5), (_day(1), "BTC", "IBIT", 10.7),
-         (_day(1), "ETH", "ETHE", -5.0), (_day(1), "ETH", "ETHA", 17.0)],
+        [
+            (_day(1), "BTC", "GBTC", -65.5),
+            (_day(1), "BTC", "IBIT", 10.7),
+            (_day(1), "ETH", "ETHE", -5.0),
+            (_day(1), "ETH", "ETHA", 17.0),
+        ],
     )
     conn.commit()
     text = _brief(conn, tmp_path)
@@ -618,9 +653,7 @@ def test_brief_etf_divergence_and_stale(conn, tmp_path):
 
 
 def test_brief_etf_stale_flag(conn, tmp_path):
-    conn.execute(
-        "INSERT INTO flows_daily(date, btc_etf_musd) VALUES (?,?)", (_day(9), -46.6)
-    )
+    conn.execute("INSERT INTO flows_daily(date, btc_etf_musd) VALUES (?,?)", (_day(9), -46.6))
     conn.commit()
     text = _brief(conn, tmp_path)
     line = next(ln for ln in text.splitlines() if "ETF flows" in ln)
@@ -663,8 +696,10 @@ def test_brief_fg_momentum_and_split(conn, tmp_path):
         (json.dumps({"prev_1m": 64.4}),),
     )
     for name, score in (
-        ("stock_price_strength", 10.0), ("junk_bond_demand", 74.8),
-        ("put_call_options", 61.2), ("market_volatility_vix", 50.0),
+        ("stock_price_strength", 10.0),
+        ("junk_bond_demand", 74.8),
+        ("put_call_options", 61.2),
+        ("market_volatility_vix", 50.0),
     ):
         conn.execute(
             "INSERT INTO flows_periodic(period,kind,value_raw,unit_raw,factor,value)"
@@ -780,14 +815,26 @@ def _mock_owsr(monkeypatch, set_cookie=True, listing=None, download_ok=True):
         content = b"{}"
 
         def __init__(self):
-            self._d = listing if listing is not None else {
-                "Results": [
-                    {"ItemId": "id-1", "Name": "Daily_OWSR 04 Sep 2026",
-                     "FileExtension": "xlsx", "FileSize": "0MB"},
-                    {"ItemId": "id-2", "Name": "Daily_OWSR 03 Sep 2026",
-                     "FileExtension": "xlsx", "FileSize": "0MB"},
-                ]
-            }
+            self._d = (
+                listing
+                if listing is not None
+                else {
+                    "Results": [
+                        {
+                            "ItemId": "id-1",
+                            "Name": "Daily_OWSR 04 Sep 2026",
+                            "FileExtension": "xlsx",
+                            "FileSize": "0MB",
+                        },
+                        {
+                            "ItemId": "id-2",
+                            "Name": "Daily_OWSR 03 Sep 2026",
+                            "FileExtension": "xlsx",
+                            "FileSize": "0MB",
+                        },
+                    ]
+                }
+            )
 
         def json(self):
             return self._d
@@ -813,8 +860,7 @@ def _mock_owsr(monkeypatch, set_cookie=True, listing=None, download_ok=True):
             raise AssertionError(f"unexpected url {url}")
 
     monkeypatch.setattr(flows_extra.creq, "Session", lambda **k: S())
-    monkeypatch.setenv("LME_COOKIE", "ASP.NET_SessionId=x; .AspNet.Cookies=y"
-                       if set_cookie else "")
+    monkeypatch.setenv("LME_COOKIE", "ASP.NET_SessionId=x; .AspNet.Cookies=y" if set_cookie else "")
     if not set_cookie:
         monkeypatch.delenv("LME_COOKIE", raising=False)
 

@@ -91,9 +91,7 @@ def inflation_risk_premium(conn: sqlite3.Connection) -> dict | None:
     be_fresh = be is not None and _age_days(be[0]) <= MARKET_STALE_DAYS
     dfii_fresh = dfii is not None and _age_days(dfii[0]) <= MARKET_STALE_DAYS
     irp = (
-        None
-        if (be is None or model_stale or not be_fresh)
-        else round((be[1] - m10[1]) * 100.0, 1)
+        None if (be is None or model_stale or not be_fresh) else round((be[1] - m10[1]) * 100.0, 1)
     )
     tips = (
         None

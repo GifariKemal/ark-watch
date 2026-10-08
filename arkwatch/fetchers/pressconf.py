@@ -7,6 +7,7 @@ presconf video page at /mediacenter/files/FOMCpresconf{date}.pdf (NOT at
 The press conference happens 30 min after the statement (14:30 ET); the
 transcript PDF appears on the Fed website later the same day.
 """
+
 from __future__ import annotations
 
 import re
@@ -26,9 +27,7 @@ def fetch_transcript_text(date_iso: str) -> str:
 
     date_iso: the meeting's END date (same as minutes), e.g. '2026-07-29'.
     """
-    r = requests.get(
-        f"{PDF_BASE}{date_iso.replace('-', '')}.pdf", timeout=(10, 60)
-    )
+    r = requests.get(f"{PDF_BASE}{date_iso.replace('-', '')}.pdf", timeout=(10, 60))
     if r.status_code != 200:
         raise PressConfError(f"pressconf {date_iso}: HTTP {r.status_code}")
     if r.content[:4] != b"%PDF":

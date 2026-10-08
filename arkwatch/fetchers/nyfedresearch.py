@@ -190,17 +190,22 @@ def _hhdc() -> dict[str, list[tuple[str, float]]]:
         raise NyFedResearchError(f"hhdc: header with '{must_contain}' not found")
 
     out: dict[str, list[tuple[str, float]]] = {
-        k: [] for k in (
-            "HHDC_TOTAL_DEBT", "HHDC_ORIG_MORTGAGE", "HHDC_ORIG_AUTO",
-            "HHDC_DQ90_FLOW_MORTGAGE", "HHDC_DQ90_FLOW_AUTO",
-            "HHDC_DQ90_FLOW_CC", "HHDC_DQ90_FLOW_STUDENT",
+        k: []
+        for k in (
+            "HHDC_TOTAL_DEBT",
+            "HHDC_ORIG_MORTGAGE",
+            "HHDC_ORIG_AUTO",
+            "HHDC_DQ90_FLOW_MORTGAGE",
+            "HHDC_DQ90_FLOW_AUTO",
+            "HHDC_DQ90_FLOW_CC",
+            "HHDC_DQ90_FLOW_STUDENT",
         )
     }
 
     # Page 3: balances — TRILLIONS → bn_usd (×1000, the single conversion site)
     rows = _sheet_rows("Page 3 Data")
     hi, cols = _by_header(rows, "MORTGAGE")
-    for row in rows[hi + 1:]:
+    for row in rows[hi + 1 :]:
         ts = _quarter_start(row[0]) if row and _is_quarter_label(row[0]) else None
         v = _f(row[cols["TOTAL"]]) if ts else None
         if ts and v is not None:
@@ -210,7 +215,7 @@ def _hhdc() -> dict[str, list[tuple[str, float]]]:
     for page, key in (("Page 6 Data", "HHDC_ORIG_MORTGAGE"), ("Page 8 Data", "HHDC_ORIG_AUTO")):
         rows = _sheet_rows(page)
         hi, cols = _by_header(rows, "TOTAL")
-        for row in rows[hi + 1:]:
+        for row in rows[hi + 1 :]:
             ts = _quarter_start(row[0]) if row and _is_quarter_label(row[0]) else None
             v = _f(row[cols["TOTAL"]]) if ts else None
             if ts and v is not None:
@@ -225,7 +230,7 @@ def _hhdc() -> dict[str, list[tuple[str, float]]]:
         "HHDC_DQ90_FLOW_CC": "CC",
         "HHDC_DQ90_FLOW_STUDENT": "STUDENT LOAN",
     }
-    for row in rows[hi + 1:]:
+    for row in rows[hi + 1 :]:
         ts = _quarter_start(row[0]) if row and _is_quarter_label(row[0]) else None
         if not ts:
             continue
@@ -266,7 +271,11 @@ def _sce() -> dict[str, list[tuple[str, float]]]:
         ws = wb[sheet]
         rows = [list(r) for r in ws.iter_rows(values_only=True)]
         col = next(
-            (j for j, c in enumerate(rows[3]) if isinstance(c, str) and c.strip().startswith(label)),
+            (
+                j
+                for j, c in enumerate(rows[3])
+                if isinstance(c, str) and c.strip().startswith(label)
+            ),
             None,
         )
         if col is None:
@@ -440,14 +449,10 @@ def _lw() -> dict[str, list[tuple[str, float]]]:
     if rstar_col is None:
         raise NyFedResearchError("lw: rstar column not found")
     gap_col = next(
-        (
-            j
-            for j, c in enumerate(names)
-            if j > rstar_col and "gap" in str(c or "").strip().lower()
-        ),
+        (j for j, c in enumerate(names) if j > rstar_col and "gap" in str(c or "").strip().lower()),
         rstar_col + 3,
     )
-    for row in rows[hi + 1:]:
+    for row in rows[hi + 1 :]:
         if not row or not isinstance(row[0], datetime):
             continue
         ts = f"{row[0].year}-{(row[0].month - 1) // 3 * 3 + 1:02d}-01"
@@ -475,7 +480,7 @@ def _lw() -> dict[str, list[tuple[str, float]]]:
     )
     if rstar_col is None:
         raise NyFedResearchError("hlw: US r* column (Natural Rate group) not found")
-    for row in rows[hi + 1:]:
+    for row in rows[hi + 1 :]:
         if not row or not isinstance(row[0], datetime):
             continue
         v = _f(row[rstar_col]) if rstar_col < len(row) else None
@@ -533,26 +538,51 @@ FAMILY_PARSERS = {
 
 # series key (sans NYFED:) → family. Keys must match the parser outputs above.
 SERIES_FAMILY = {
-    "HHDC_TOTAL_DEBT": "hhdc", "HHDC_ORIG_MORTGAGE": "hhdc", "HHDC_ORIG_AUTO": "hhdc",
-    "HHDC_DQ90_FLOW_MORTGAGE": "hhdc", "HHDC_DQ90_FLOW_AUTO": "hhdc",
-    "HHDC_DQ90_FLOW_CC": "hhdc", "HHDC_DQ90_FLOW_STUDENT": "hhdc",
-    "SCE_INFL_1Y": "sce", "SCE_INFL_3Y": "sce", "SCE_INFL_5Y": "sce", "SCE_EARN": "sce",
-    "SCE_JOBLOSS": "sce", "SCE_JOBFIND": "sce",
+    "HHDC_TOTAL_DEBT": "hhdc",
+    "HHDC_ORIG_MORTGAGE": "hhdc",
+    "HHDC_ORIG_AUTO": "hhdc",
+    "HHDC_DQ90_FLOW_MORTGAGE": "hhdc",
+    "HHDC_DQ90_FLOW_AUTO": "hhdc",
+    "HHDC_DQ90_FLOW_CC": "hhdc",
+    "HHDC_DQ90_FLOW_STUDENT": "hhdc",
+    "SCE_INFL_1Y": "sce",
+    "SCE_INFL_3Y": "sce",
+    "SCE_INFL_5Y": "sce",
+    "SCE_EARN": "sce",
+    "SCE_JOBLOSS": "sce",
+    "SCE_JOBFIND": "sce",
     "GSCPI": "gscpi",
-    "ESMS_HEADLINE": "empire", "ESMS_NEW_ORDERS": "empire", "ESMS_SHIPMENTS": "empire",
-    "ESMS_PRICES_PAID": "empire", "ESMS_PRICES_RECEIVED": "empire",
-    "ESMS_EMPLOYMENT": "empire", "ESMS_AVG_WORKWEEK": "empire",
-    "ACMTP01": "acm", "ACMTP02": "acm", "ACMTP05": "acm", "ACMTP10": "acm",
+    "ESMS_HEADLINE": "empire",
+    "ESMS_NEW_ORDERS": "empire",
+    "ESMS_SHIPMENTS": "empire",
+    "ESMS_PRICES_PAID": "empire",
+    "ESMS_PRICES_RECEIVED": "empire",
+    "ESMS_EMPLOYMENT": "empire",
+    "ESMS_AVG_WORKWEEK": "empire",
+    "ACMTP01": "acm",
+    "ACMTP02": "acm",
+    "ACMTP05": "acm",
+    "ACMTP10": "acm",
     "HPW_IDX_M": "hpw",
-    "LW_RSTAR": "lw", "LW_GAP": "lw", "HLW_RSTAR": "lw",
-    "MCT": "mct", "MCT_BAND_LO": "mct", "MCT_BAND_HI": "mct",
+    "LW_RSTAR": "lw",
+    "LW_GAP": "lw",
+    "HLW_RSTAR": "lw",
+    "MCT": "mct",
+    "MCT_BAND_LO": "mct",
+    "MCT_BAND_HI": "mct",
 }
 
 # window floors: a 10-day default would starve monthly/quarterly families —
 # the window must always reach at least the latest observation
 FLOOR_DAYS = {
-    "hhdc": 420, "sce": 120, "gscpi": 150, "empire": 150, "hpw": 150,
-    "lw": 550, "mct": 150, "acm": 10,
+    "hhdc": 420,
+    "sce": 120,
+    "gscpi": 150,
+    "empire": 150,
+    "hpw": 150,
+    "lw": 550,
+    "mct": 150,
+    "acm": 10,
 }
 
 _parsed_cache: dict[str, dict[str, list[tuple[str, float]]]] = {}
@@ -617,6 +647,8 @@ def save_history(conn, *, verbose: bool = True) -> int:
         n_rev = db.apply_realtime_revisions(conn, payload)
         total += n_new + n_rev
         if verbose and rows:
-            print(f"  {sid:28s} {len(rows):4d} obs (new {n_new}, revised {n_rev}) — latest {rows[-1]}")
+            print(
+                f"  {sid:28s} {len(rows):4d} obs (new {n_new}, revised {n_rev}) — latest {rows[-1]}"
+            )
     conn.commit()
     return total

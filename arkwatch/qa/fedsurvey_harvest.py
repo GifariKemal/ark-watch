@@ -20,6 +20,7 @@ minutes dissent) still land, the tone row does NOT — so _latest_stored still
 sees the source as pending and the next day's run retries the analysis
 automatically. Any error → exit 1 → the daemon's dated alert pages the owner.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -100,15 +101,26 @@ def _harvest_text_source(conn, kind: str, fetch_fn, source_type: str) -> tuple[s
     tone = _nlp_tone(data["text"], source_type)
     if tone.get("score") is None:
         if metrics:
-            _store_row(conn, f"fedsurvey_{kind}_bias", data["ts"], _bias_value(metrics),
-                       metrics.get("net_bias", ""))
+            _store_row(
+                conn,
+                f"fedsurvey_{kind}_bias",
+                data["ts"],
+                _bias_value(metrics),
+                metrics.get("net_bias", ""),
+            )
         return f"nlp-failed @ {data['ts']} ({tone.get('summary', '')[:60]}) — retry next run", False
 
-    _store_row(conn, f"fedsurvey_{kind}_tone", data["ts"], tone.get("score"),
-               tone.get("summary", ""))
+    _store_row(
+        conn, f"fedsurvey_{kind}_tone", data["ts"], tone.get("score"), tone.get("summary", "")
+    )
     if metrics:
-        _store_row(conn, f"fedsurvey_{kind}_bias", data["ts"], _bias_value(metrics),
-                   metrics.get("net_bias", ""))
+        _store_row(
+            conn,
+            f"fedsurvey_{kind}_bias",
+            data["ts"],
+            _bias_value(metrics),
+            metrics.get("net_bias", ""),
+        )
     bias = f", bias={metrics.get('net_bias')}" if metrics else ""
     return f"new @ {data['ts']} (tone={tone.get('score')}{bias})", True
 
@@ -151,15 +163,34 @@ def harvest_all(conn) -> dict[str, str]:
             tone = _nlp_tone(p["full_text"], "minutes")
             dissent_metrics = {"net_bias": p["dissent_direction"] or "none"}
             if tone.get("score") is None:
-                _store_row(conn, "fedsurvey_minutes_bias", latest, _bias_value(dissent_metrics),
-                           f"dissent={p['dissent_count']} {p['dissent_direction'] or 'none'}")
-                out["minutes"] = f"nlp-failed @ {latest} (dissent={p['dissent_count']} stored) — retry next run"
+                _store_row(
+                    conn,
+                    "fedsurvey_minutes_bias",
+                    latest,
+                    _bias_value(dissent_metrics),
+                    f"dissent={p['dissent_count']} {p['dissent_direction'] or 'none'}",
+                )
+                out["minutes"] = (
+                    f"nlp-failed @ {latest} (dissent={p['dissent_count']} stored) — retry next run"
+                )
             else:
-                _store_row(conn, "fedsurvey_minutes_tone", latest, tone.get("score"),
-                           tone.get("summary", ""))
-                _store_row(conn, "fedsurvey_minutes_bias", latest, _bias_value(dissent_metrics),
-                           f"dissent={p['dissent_count']} {p['dissent_direction'] or 'none'}")
-                out["minutes"] = f"new @ {latest} (tone={tone.get('score')}, dissent={p['dissent_count']})"
+                _store_row(
+                    conn,
+                    "fedsurvey_minutes_tone",
+                    latest,
+                    tone.get("score"),
+                    tone.get("summary", ""),
+                )
+                _store_row(
+                    conn,
+                    "fedsurvey_minutes_bias",
+                    latest,
+                    _bias_value(dissent_metrics),
+                    f"dissent={p['dissent_count']} {p['dissent_direction'] or 'none'}",
+                )
+                out["minutes"] = (
+                    f"new @ {latest} (tone={tone.get('score')}, dissent={p['dissent_count']})"
+                )
                 n_new += 1
         else:
             out["minutes"] = f"unchanged (stored {stored})"
@@ -176,10 +207,17 @@ def harvest_all(conn) -> dict[str, str]:
             text = fetch_transcript_text(latest_pc)
             tone = _nlp_tone(text, "press conference")
             if tone.get("score") is None:
-                out["pressconf"] = f"nlp-failed @ {latest_pc} ({tone.get('summary', '')[:60]}) — retry next run"
+                out["pressconf"] = (
+                    f"nlp-failed @ {latest_pc} ({tone.get('summary', '')[:60]}) — retry next run"
+                )
             else:
-                _store_row(conn, "fedsurvey_pressconf_tone", latest_pc, tone.get("score"),
-                           tone.get("summary", ""))
+                _store_row(
+                    conn,
+                    "fedsurvey_pressconf_tone",
+                    latest_pc,
+                    tone.get("score"),
+                    tone.get("summary", ""),
+                )
                 out["pressconf"] = f"new @ {latest_pc} (tone={tone.get('score')})"
                 n_new += 1
         else:
@@ -189,7 +227,11 @@ def harvest_all(conn) -> dict[str, str]:
 
     n_err = sum(1 for v in out.values() if v.startswith(("error:", "nlp-failed")))
     log_collection(
-        conn, "fedsurvey", "FEDSURVEY:ALL", None, n_new,
+        conn,
+        "fedsurvey",
+        "FEDSURVEY:ALL",
+        None,
+        n_new,
         err=None if n_err == 0 else f"{n_err}/{len(out)} sources failed",
         # a checked-and-unchanged day is HEALTHY, not EMPTY (audit round-2:
         # the EMPTY badge belongs to fetches that returned zero observations)
@@ -210,7 +252,9 @@ def main(argv: list[str] | None = None) -> int:
     results = harvest_all(conn)
     # errors LAST: the daemon's success summary keeps the tail lines, so a sick
     # source must not be scrolled away by healthy ones
-    for source, status in sorted(results.items(), key=lambda kv: kv[1].startswith(("error:", "nlp-failed"))):
+    for source, status in sorted(
+        results.items(), key=lambda kv: kv[1].startswith(("error:", "nlp-failed"))
+    ):
         print(f"  {source:12s} {status}")
     n_new = sum(1 for v in results.values() if v.startswith("new"))
     n_err = sum(1 for v in results.values() if v.startswith(("error:", "nlp-failed")))

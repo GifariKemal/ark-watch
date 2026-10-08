@@ -27,6 +27,7 @@ from .amt import (
     compute_dynamic_cva,
     compute_tpo_profile,
     compute_value_area,
+    detect_market_structure_pivots,
     evaluate_auction_extremes,
     evaluate_time_acceptance,
     evaluate_vpoc_tpoc_relationship,
@@ -277,7 +278,9 @@ def compute_session_reference_levels(
         prior_prior_va["val"] if prior_prior_va else None,
         prior_prior_va["poc"] if prior_prior_va else None,
     )
-
+    target_d = target_dt.date()
+    active_qt = get_active_quarterly_cycles(target_dt)
+    q_bounds = get_quarterly_session_bounds(target_d)
     # Pilar 4: Dynamic N-Day CVA (Contiguous Balance Expansion & 100% Measured Move)
     dynamic_cva = compute_dynamic_cva(session_bars, min_sessions=2, max_sessions=8)
 
@@ -294,14 +297,13 @@ def compute_session_reference_levels(
             sq_bars[b_id].append(
                 (r[0], float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5]))
             )
-    intraday_90m_npocs = find_naked_pocs(sq_bars, last_price, lookback_sessions=32)
+    intraday_90m_npocs = find_naked_pocs(sq_bars, last_price, lookback_sessions=48)
 
-    # Tier 2: Session Naked POCs (25 sessions lookback)
-    session_naked_pocs = find_naked_pocs(session_bars, last_price, lookback_sessions=25)
+    # Tier 2: Session Naked POCs (anchored to IPDA 20D lookback)
+    session_naked_pocs = find_naked_pocs(session_bars, last_price, lookback_sessions=20)
 
-    # Tier 3: Weekly Virgin POCs (8 weeks lookback)
-    weekly_naked_pocs = find_naked_pocs(week_bars, last_price, lookback_sessions=8)
-
+    # Tier 3: Weekly Virgin POCs (anchored to IPDA 60D = ~12 weeks lookback)
+    weekly_naked_pocs = find_naked_pocs(week_bars, last_price, lookback_sessions=12)
     # Tier 4 & 5: Monthly and Yearly Virgin POCs (from instrument_prices)
     month_bars_dict = defaultdict(list)
     year_bars_dict = defaultdict(list)
@@ -356,6 +358,31 @@ def compute_session_reference_levels(
     london_ib = analyze_initial_balance(curr_bars, time(7, 0))
     us_rth_ib = analyze_initial_balance(curr_bars, ib_open_time)
 
+    # 90m Sub-Quarter Micro-IB (Micro-1: First 22.5m)
+    active_sub_bars = [
+        b
+        for b in curr_bars
+        if b[0] >= active_qt["sub_quarter_start_utc"] and b[0] <= active_qt["sub_quarter_end_utc"]
+    ]
+    if active_sub_bars:
+        m1_bars = active_sub_bars[:5]
+        m1_h = max(b[2] for b in m1_bars)
+        m1_l = min(b[3] for b in m1_bars)
+        sub_90m_ib = {
+            "ib_window": "Micro-1 (First 22.5m of Sub-Quarter)",
+            "ib_high": round(m1_h, 4),
+            "ib_low": round(m1_l, 4),
+            "ib_range": round(m1_h - m1_l, 4),
+            "status": "COMPLETED" if len(active_sub_bars) >= 5 else "FORMING",
+        }
+    else:
+        sub_90m_ib = {
+            "ib_window": "Micro-1",
+            "ib_high": "AWAITING_BARS",
+            "ib_low": "AWAITING_BARS",
+            "ib_range": 0.0,
+            "status": "AWAITING_BARS",
+        }
     # Overnight CVA (Low-Horizon CVA: Asia + London Merged)
     on_cva_bars = [
         b for b in curr_bars if datetime.fromisoformat(b[0]).astimezone(UTC).time() < ib_open_time
@@ -398,7 +425,106 @@ def compute_session_reference_levels(
             },
             "total_volume": 0.0,
         }
-    q_bounds = get_quarterly_session_bounds(target_d)
+
+    # Micro-CVA 45m (Micro-1 + Micro-2 Merged)
+    mic_45m_bars = [
+        b
+        for b in curr_bars
+        if b[0] >= active_qt["sub_quarter_start_utc"]
+        and b[0]
+        <= (
+            datetime.fromisoformat(active_qt["sub_quarter_start_utc"]) + timedelta(minutes=45)
+        ).isoformat(timespec="seconds")
+    ]
+    if mic_45m_bars:
+        m45_cva = compute_value_area(mic_45m_bars, tick_size=ASSET_TICK_SIZES.get(sym))
+        m45_rng = (
+            (m45_cva["vah"] - m45_cva["val"]) if m45_cva.get("vah") and m45_cva.get("val") else 0.0
+        )
+        micro_45m_cva = {
+            "status": "COMPLETED",
+            "c_poc": m45_cva.get("poc"),
+            "c_vah": m45_cva.get("vah"),
+            "c_val": m45_cva.get("val"),
+            "c_range": round(m45_rng, 4),
+            "dalton_measured_move": {
+                "upside_target": (
+                    round(m45_cva["vah"] + m45_rng, 4) if m45_cva.get("vah") else None
+                ),
+                "downside_target": (
+                    round(m45_cva["val"] - m45_rng, 4) if m45_cva.get("val") else None
+                ),
+            },
+            "total_volume": m45_cva.get("total_volume", 0.0),
+        }
+    else:
+        micro_45m_cva = {
+            "status": "AWAITING_BARS",
+            "c_poc": "AWAITING_BARS",
+            "c_vah": "AWAITING_BARS",
+            "c_val": "AWAITING_BARS",
+            "c_range": 0.0,
+            "dalton_measured_move": {
+                "upside_target": "AWAITING_BARS",
+                "downside_target": "AWAITING_BARS",
+            },
+            "total_volume": 0.0,
+        }
+
+    # Multi-Timeframe Market Structure Detector (M15, H1, H4, Daily based on PineScript strategy)
+    all_intraday_bars = [
+        (r[0], float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5] or 0.0)) for r in rows
+    ]
+
+    def _resample(bar_list, sec):
+        b_dict = defaultdict(list)
+        for b in bar_list:
+            dt_b = datetime.fromisoformat(b[0]).astimezone(UTC)
+            ep = (int(dt_b.timestamp()) // sec) * sec
+            b_dict[ep].append(b)
+        res = []
+        for ep in sorted(b_dict.keys()):
+            bl = b_dict[ep]
+            res.append(
+                (
+                    datetime.fromtimestamp(ep, tz=UTC).isoformat(),
+                    bl[0][1],
+                    max(x[2] for x in bl),
+                    min(x[3] for x in bl),
+                    bl[-1][4],
+                    sum(x[5] for x in bl),
+                )
+            )
+        return res
+
+    m15_b = _resample(all_intraday_bars, 15 * 60)
+    h1_b = _resample(all_intraday_bars, 60 * 60)
+    h4_b = _resample(all_intraday_bars, 4 * 60 * 60)
+
+    st_m15 = detect_market_structure_pivots(m15_b, lb=4, rb=4)
+    st_h1 = detect_market_structure_pivots(h1_b, lb=4, rb=4)
+    st_h4 = detect_market_structure_pivots(h4_b, lb=3, rb=3)
+    daily_hist_rows = conn.execute(
+        "SELECT ts, open, high, low, close, COALESCE(volume, 0.0) FROM instrument_prices WHERE symbol=? AND source IN ('YAHOO', 'EODHD') ORDER BY ts DESC LIMIT 65",
+        (sym,),
+    ).fetchall()
+    daily_b = [
+        (r[0], float(r[1] or r[4]), float(r[2]), float(r[3]), float(r[4]), float(r[5] or 0.0))
+        for r in reversed(daily_hist_rows)
+        if r[2] is not None and r[3] is not None and r[4] is not None
+    ]
+    st_daily = (
+        detect_market_structure_pivots(daily_b, lb=2, rb=2)
+        if len(daily_b) >= 6
+        else {"trend": "CONSOLIDATION", "latest_point": "NONE", "recent_points": []}
+    )
+
+    multi_tf_market_structure = {
+        "m15_structure": st_m15,
+        "h1_structure": st_h1,
+        "h4_structure": st_h4,
+        "daily_structure": st_daily,
+    }
     q2_s, q2_e = q_bounds["Q2_LONDON"]
     q2_london_prof = compute_horizon_amt(conn, sym, q2_s, min(q2_e, target_dt))
     # Session-to-Session Value Migration (London Desk vs Asia)
@@ -981,8 +1107,34 @@ def compute_session_reference_levels(
                     ),
                     "status": monthly_quarter_blocks.get("WEEK_1_Q1", {}).get("status", "ACTIVE"),
                 },
+                "yearly_initial_balance_q1": {
+                    "ib_period": "Yearly_Q1",
+                    "ib_poc": prior_yearly_quarters_amt.get(f"{target_d.year}_Q1", {}).get(
+                        "composite_poc", "FORMING"
+                    ),
+                    "status": ("COMPLETED" if target_d.month > 3 else "ACTIVE"),
+                },
+                "sub_quarter_90m_micro_ib": sub_90m_ib,
             },
             "multi_horizon_open_types": {
+                "sub_quarter_90m_open_type": (
+                    "OPEN_ABOVE_PRIOR_90M_VAH"
+                    if isinstance(prior_sub_amt, dict)
+                    and prior_sub_amt.get("vah")
+                    and last_price > prior_sub_amt["vah"]
+                    else (
+                        "OPEN_BELOW_PRIOR_90M_VAL"
+                        if isinstance(prior_sub_amt, dict)
+                        and prior_sub_amt.get("val")
+                        and last_price < prior_sub_amt["val"]
+                        else "OPEN_IN_PRIOR_90M_VALUE"
+                    )
+                ),
+                "daily_globex_open_type": (
+                    "OPEN_OUTSIDE_PRIOR_DAY_RANGE"
+                    if last_price > pdh or last_price < pdl
+                    else "OPEN_INSIDE_PRIOR_DAY_RANGE"
+                ),
                 "us_cash_open_type": open_type_info["open_type"],
                 "us_cash_conviction": open_type_info["conviction"],
                 "london_open_type": (
@@ -1014,9 +1166,19 @@ def compute_session_reference_levels(
                     or last_price < (weekly_va.get("val") or last_price)
                     else "OPEN_INSIDE_WEEKLY_VALUE"
                 ),
+                "monthly_open_type": (
+                    "OPEN_ABOVE_PRIOR_MONTH_VAH"
+                    if prior_months_amt.get(f"M-1_{m1_y}_{m1_m:02d}", {}).get("composite_vah")
+                    and last_price > prior_months_amt[f"M-1_{m1_y}_{m1_m:02d}"]["composite_vah"]
+                    else "OPEN_IN_PRIOR_MONTH_VALUE"
+                ),
             },
+            "multi_timeframe_market_structure": multi_tf_market_structure,
             "multi_horizon_cva_map": {
-                "low_horizon_cvas": {"overnight_cva": overnight_cva},
+                "low_horizon_cvas": {
+                    "overnight_cva": overnight_cva,
+                    "micro_45m_cva": micro_45m_cva,
+                },
                 "mid_horizon_cvas": {
                     "midweek_72h_composite": midweek_72h_composite,
                     "dynamic_n_day_cva": dynamic_cva,
@@ -1047,7 +1209,7 @@ def compute_session_reference_levels(
                         midweek_72h_composite["composite_val"],
                     )["status"]
                     if midweek_72h_composite
-                    and isinstance(midweek_72h_composite.get("composite_vah"), (int, float))
+                    and isinstance(midweek_72h_composite.get("composite_vah"), int | float)
                     else "AWAITING_BARS"
                 ),
                 "weekly_value_acceptance": (

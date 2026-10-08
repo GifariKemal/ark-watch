@@ -37,6 +37,8 @@ ASSET_TICK_SIZES: dict[str, float] = {
     "USDJPY": 0.01,
     "DXY": 0.01,
 }
+
+
 def get_asset_ib_timing(symbol: str, is_dst: bool = True) -> tuple[time, str]:
     """Determine asset-class-specific Initial Balance start time and institutional label.
 
@@ -864,4 +866,68 @@ def evaluate_time_acceptance(
         "consecutive_bars_outside": max(above_count, below_count),
         "duration_minutes": duration_mins,
         "acceptance_level": level,
+    }
+
+
+def detect_market_structure_pivots(
+    bars: list[tuple[str, float, float, float, float, float]],
+    lb: int = 4,
+    rb: int = 4,
+) -> dict[str, Any]:
+    """Detect fractal market structure pivots (HH, HL, LH, LL) based on PineScript strategy.
+
+    Identifies whether price action is in:
+      - BULLISH_STRUCTURE (HH + HL) -> Acceptance of higher prices
+      - BEARISH_STRUCTURE (LL + LH) -> Acceptance of lower prices
+      - VOLATILITY_CHOP / EXPANSION (HH + LL) -> Widening range
+      - ROTATIONAL_CHOP -> Range-bound auction
+    """
+    if len(bars) < (lb + rb + 2):
+        return {
+            "trend": "INSUFFICIENT_BARS",
+            "latest_point": "NONE",
+            "recent_points": [],
+        }
+
+    highs = [b[2] for b in bars]
+    lows = [b[3] for b in bars]
+    n = len(bars)
+    pivots = []
+    for i in range(lb, n - rb):
+        wh = highs[i - lb : i + rb + 1]
+        if highs[i] == max(wh) and wh.count(highs[i]) == 1:
+            pivots.append((i, 1, highs[i], bars[i][0]))
+        wl = lows[i - lb : i + rb + 1]
+        if lows[i] == min(wl) and wl.count(lows[i]) == 1:
+            pivots.append((i, -1, lows[i], bars[i][0]))
+
+    pts = []
+    last_ph = None
+    last_pl = None
+    for p in pivots:
+        idx, p_type, price, ts = p
+        if p_type == 1:
+            tag = "HH" if (last_ph and price > last_ph[2]) else "LH"
+            pts.append({"type": tag, "price": price, "ts": ts})
+            last_ph = p
+        else:
+            tag = "HL" if (last_pl and price > last_pl[2]) else "LL"
+            pts.append({"type": tag, "price": price, "ts": ts})
+            last_pl = p
+
+    if len(pts) >= 2:
+        last_types = [x["type"] for x in pts[-2:]]
+        if "HH" in last_types and "HL" in last_types:
+            trend = "BULLISH_STRUCTURE (HH + HL)"
+        elif "LL" in last_types and "LH" in last_types:
+            trend = "BEARISH_STRUCTURE (LL + LH)"
+        else:
+            trend = f"ROTATIONAL_CHOP ({last_types[-2]} -> {last_types[-1]})"
+    else:
+        trend = "CONSOLIDATION"
+
+    return {
+        "trend": trend,
+        "latest_point": pts[-1] if pts else "NONE",
+        "recent_points": pts[-4:],
     }

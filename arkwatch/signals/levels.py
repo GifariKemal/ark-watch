@@ -281,9 +281,10 @@ def compute_session_reference_levels(
     # Pilar 4: Dynamic N-Day CVA (Contiguous Balance Expansion & 100% Measured Move)
     dynamic_cva = compute_dynamic_cva(session_bars, min_sessions=2, max_sessions=8)
 
-    # Pilar 5: Naked POCs (Virgin POC Liquidity Magnets)
-    naked_pocs = find_naked_pocs(session_bars, last_price, lookback_sessions=25)
-
+    # Pilar 5: Hierarchical Naked POCs (Session & Weekly Virgin POCs)
+    session_naked_pocs = find_naked_pocs(session_bars, last_price, lookback_sessions=25)
+    weekly_naked_pocs = find_naked_pocs(week_bars, last_price, lookback_sessions=8)
+    naked_pocs = session_naked_pocs
     # Multi-Horizon Session Profiles (Asia, London, Overlap)
     target_d = target_dt.date()
     as_s, as_e = get_session_window("ASIA", target_d)
@@ -308,7 +309,49 @@ def compute_session_reference_levels(
     ny_s, ny_e = get_session_window("NY_REGULAR", target_d)
     ny_regular_prof = compute_horizon_amt(conn, sym, ny_s, min(ny_e, target_dt))
 
-    # Separate London Desk vs London Quarterly Theory Q2
+    # Multi-Desk Initial Balance (Asia, London, and US Cash Open)
+    asia_ib = analyze_initial_balance(curr_bars, time(0, 0))
+    london_ib = analyze_initial_balance(curr_bars, time(7, 0))
+    us_rth_ib = analyze_initial_balance(curr_bars, ib_open_time)
+
+    # Overnight CVA (Low-Horizon CVA: Asia + London Merged)
+    on_cva_bars = [
+        b for b in curr_bars if datetime.fromisoformat(b[0]).astimezone(UTC).time() < ib_open_time
+    ]
+    if on_cva_bars:
+        on_cva = compute_value_area(on_cva_bars, tick_size=ASSET_TICK_SIZES.get(sym))
+        on_range = (
+            (on_cva["vah"] - on_cva["val"]) if on_cva.get("vah") and on_cva.get("val") else 0.0
+        )
+        overnight_cva = {
+            "status": "COMPLETED",
+            "c_poc": on_cva.get("poc"),
+            "c_vah": on_cva.get("vah"),
+            "c_val": on_cva.get("val"),
+            "c_range": round(on_range, 4),
+            "dalton_measured_move": {
+                "upside_breakout_target": (
+                    round(on_cva["vah"] + on_range, 4) if on_cva.get("vah") else None
+                ),
+                "downside_breakout_target": (
+                    round(on_cva["val"] - on_range, 4) if on_cva.get("val") else None
+                ),
+            },
+            "total_volume": on_cva.get("total_volume"),
+        }
+    else:
+        overnight_cva = {
+            "status": "AWAITING_BARS",
+            "c_poc": "AWAITING_BARS",
+            "c_vah": "AWAITING_BARS",
+            "c_val": "AWAITING_BARS",
+            "c_range": 0.0,
+            "dalton_measured_move": {
+                "upside_breakout_target": "AWAITING_BARS",
+                "downside_breakout_target": "AWAITING_BARS",
+            },
+            "total_volume": 0.0,
+        }
     q_bounds = get_quarterly_session_bounds(target_d)
     q2_s, q2_e = q_bounds["Q2_LONDON"]
     q2_london_prof = compute_horizon_amt(conn, sym, q2_s, min(q2_e, target_dt))
@@ -802,6 +845,47 @@ def compute_session_reference_levels(
             "value_migration_bias": value_migration["bias"],
             "dynamic_cva_days": dynamic_cva["composite_days_count"] if dynamic_cva else 1,
             "naked_pocs_count": naked_pocs["total_naked_pocs"],
+            "hierarchical_naked_pocs": {
+                "session_naked_pocs": session_naked_pocs,
+                "weekly_virgin_pocs": weekly_naked_pocs,
+            },
+            "multi_desk_initial_balance": {
+                "asia_open_ib": asia_ib,
+                "london_open_ib": london_ib,
+                "us_cash_open_ib": us_rth_ib,
+            },
+            "overnight_cva": overnight_cva,
+            "multi_horizon_time_acceptance": {
+                "prior_day_value_acceptance": time_acc["status"],
+                "london_desk_value_acceptance": (
+                    evaluate_time_acceptance(
+                        [b[4] for b in curr_bars[-12:]],
+                        london_prof["vah"],
+                        london_prof["val"],
+                    )["status"]
+                    if london_prof and london_prof.get("vah") and london_prof.get("val")
+                    else "AWAITING_BARS"
+                ),
+                "midweek_72h_value_acceptance": (
+                    evaluate_time_acceptance(
+                        [b[4] for b in curr_bars[-12:]],
+                        midweek_72h_composite["composite_vah"],
+                        midweek_72h_composite["composite_val"],
+                    )["status"]
+                    if midweek_72h_composite
+                    and isinstance(midweek_72h_composite.get("composite_vah"), (int, float))
+                    else "AWAITING_BARS"
+                ),
+                "weekly_value_acceptance": (
+                    evaluate_time_acceptance(
+                        [b[4] for b in curr_bars[-12:]],
+                        weekly_va["vah"],
+                        weekly_va["val"],
+                    )["status"]
+                    if weekly_va and weekly_va.get("vah") and weekly_va.get("val")
+                    else "AWAITING_BARS"
+                ),
+            },
             "profile_shape": shape_data["shape"],
             "profile_meaning": shape_data["meaning"],
             "time_acceptance_status": time_acc["status"],

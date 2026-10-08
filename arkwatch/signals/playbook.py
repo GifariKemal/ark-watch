@@ -861,6 +861,76 @@ def generate_trading_playbook(
                     },
                 }
             )
+    # [B1] INTRADAY SCENARIO: Value Area 80% Rule Rotation (Inside Value Auction)
+    if val and vah:
+        if abs(last_price - val) <= (0.25 * daily_atr) and last_price >= (val - 0.05 * daily_atr):
+            rot_target = round((poc if poc and poc > last_price else vah) + cfd_basis_offset, 2)
+            rot_inval = round(val - (0.05 * daily_atr) + cfd_basis_offset, 2)
+            rot_reward = abs(rot_target - last_price)
+            rot_risk = max(0.01, abs(last_price - rot_inval))
+            rr_rot = round(rot_reward / rot_risk, 2)
+            if rr_rot >= 1.5:
+                intraday_scenarios.append(
+                    {
+                        "id": "SCENARIO_INTRADAY_VAL_ROTATION_LONG",
+                        "horizon": "INTRADAY",
+                        "title": "Value Area 80% Rule Rotation Long (VAL Support to POC/VAH)",
+                        "direction": "LONG",
+                        "trigger_condition": f"Price respects and accepts above VAL ({val}); holds within prior Value Area",
+                        "trigger_price": val,
+                        "target_profit": rot_target,
+                        "invalidation_level": rot_inval,
+                        "risk_reward_ratio": rr_rot,
+                        "timing_gate": {
+                            "recommended_quarter": "Q3_NY_AM",
+                            "recommended_sub_quarter": "Sub-1 or Sub-2 (Initial Range Defense)",
+                            "recommended_micro_cycle": "Micro-1 or Micro-2",
+                            "current_cycle": f"{active_q} | {active_sub} ({sub_role}) | {active_micro} ({micro_role})",
+                            "is_optimal_window": bool(active_sub in ("Sub-1", "Sub-2", "Sub-3")),
+                            "execution_notes": "Value Area rotation long triggered as price tests and holds VAL boundary.",
+                        },
+                        "invalidation_rationale": "Breakdown and acceptance below VAL turns thesis into breakdown expansion.",
+                        "empirical_support": {
+                            "rule": "Dalton 80% Rule of Value Area Rotation",
+                            "target_magnet": "POC / Opposite Value Area High",
+                            "source": "Auction Market Theory Mind over Markets",
+                        },
+                    }
+                )
+        elif abs(last_price - vah) <= (0.25 * daily_atr) and last_price <= (vah + 0.05 * daily_atr):
+            rot_target_s = round((poc if poc and poc < last_price else val) + cfd_basis_offset, 2)
+            rot_inval_s = round(vah + (0.05 * daily_atr) + cfd_basis_offset, 2)
+            rot_reward_s = abs(last_price - rot_target_s)
+            rot_risk_s = max(0.01, abs(rot_inval_s - last_price))
+            rr_rot_s = round(rot_reward_s / rot_risk_s, 2)
+            if rr_rot_s >= 1.5:
+                intraday_scenarios.append(
+                    {
+                        "id": "SCENARIO_INTRADAY_VAH_ROTATION_SHORT",
+                        "horizon": "INTRADAY",
+                        "title": "Value Area 80% Rule Rotation Short (VAH Resistance to POC/VAL)",
+                        "direction": "SHORT",
+                        "trigger_condition": f"Price fails to break above VAH ({vah}); accepts back inside prior Value Area",
+                        "trigger_price": vah,
+                        "target_profit": rot_target_s,
+                        "invalidation_level": rot_inval_s,
+                        "risk_reward_ratio": rr_rot_s,
+                        "timing_gate": {
+                            "recommended_quarter": "Q3_NY_AM",
+                            "recommended_sub_quarter": "Sub-1 or Sub-2 (Initial Range Defense)",
+                            "recommended_micro_cycle": "Micro-1 or Micro-2",
+                            "current_cycle": f"{active_q} | {active_sub} ({sub_role}) | {active_micro} ({micro_role})",
+                            "is_optimal_window": bool(active_sub in ("Sub-1", "Sub-2", "Sub-3")),
+                            "execution_notes": "Value Area rotation short triggered as price rejects VAH boundary.",
+                        },
+                        "invalidation_rationale": "Breakout and acceptance above VAH turns thesis into breakout expansion.",
+                        "empirical_support": {
+                            "rule": "Dalton 80% Rule of Value Area Rotation",
+                            "target_magnet": "POC / Opposite Value Area Low",
+                            "source": "Auction Market Theory Mind over Markets",
+                        },
+                    }
+                )
     # [B2] INTRADAY SCENARIO: TPO Single Print Imbalance Repair Magnet
     if single_prints and abs(last_price - single_prints[0]["price_mid"]) <= (1.5 * atr_14):
         target_sp = round(single_prints[0]["price_mid"] + cfd_basis_offset, 2)

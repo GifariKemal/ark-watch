@@ -208,6 +208,14 @@ def generate_trading_playbook(
     participant_activity = ctx.get("participant_activity", "ROTATIONAL_AUCTION")
     value_migration = ctx.get("value_migration", "INSIDE_VALUE")
     vpoc_tpoc_align = ctx.get("vpoc_tpoc_alignment", {})
+    qt_ctx = ctx.get("quarterly_theory", {})
+    active_q = qt_ctx.get("active_quarter", "Q3_NY_AM")
+    active_sub = qt_ctx.get("active_90m_sub_quarter", "Sub-3")
+    active_micro = qt_ctx.get("active_22m_micro_cycle", "Micro-3")
+    sub_role = qt_ctx.get("sub_quarter_role", "DISTRIBUTION_EXPANSION_DRIVE")
+    micro_role = qt_ctx.get("micro_cycle_role", "MICRO_DIRECTIONAL_RUN")
+    w_quarter = qt_ctx.get("weekly_quarter", {})
+    m_quarter = qt_ctx.get("monthly_quarter", {})
     # 2. Fetch Intraday Price Action (VWAP and ATR)
     pa = session_intraday_intelligence(conn, sym, as_of=as_of)
     vwap = (pa.get("session_vwap") or pa.get("vwap")) if pa else None
@@ -778,6 +786,17 @@ def generate_trading_playbook(
                     "target_profit": intra_target,
                     "invalidation_level": intra_inval,
                     "risk_reward_ratio": rr_long,
+                    "timing_gate": {
+                        "recommended_quarter": "Q3_NY_AM",
+                        "recommended_sub_quarter": "Sub-3 (DISTRIBUTION_EXPANSION_DRIVE) or Sub-4",
+                        "recommended_micro_cycle": "Micro-3 (MICRO_DIRECTIONAL_RUN)",
+                        "current_cycle": f"{active_q} | {active_sub} ({sub_role}) | {active_micro} ({micro_role})",
+                        "is_optimal_window": bool(
+                            active_sub in ("Sub-3", "Sub-4")
+                            and active_micro in ("Micro-3", "Micro-4")
+                        ),
+                        "execution_notes": "Breakout momentum requires active volume expansion window (Sub-3 / Micro-3). Avoid executing during Sub-1/Sub-2 traps.",
+                    },
                     "invalidation_rationale": "Loss of Session VWAP or close back inside Value Area rejects continuation.",
                     "empirical_support": {
                         "continuation_median_atr": cont_atr,
@@ -821,6 +840,17 @@ def generate_trading_playbook(
                     "target_profit": intra_target,
                     "invalidation_level": intra_inval,
                     "risk_reward_ratio": rr_short,
+                    "timing_gate": {
+                        "recommended_quarter": "Q3_NY_AM",
+                        "recommended_sub_quarter": "Sub-3 (DISTRIBUTION_EXPANSION_DRIVE) or Sub-4",
+                        "recommended_micro_cycle": "Micro-3 (MICRO_DIRECTIONAL_RUN)",
+                        "current_cycle": f"{active_q} | {active_sub} ({sub_role}) | {active_micro} ({micro_role})",
+                        "is_optimal_window": bool(
+                            active_sub in ("Sub-3", "Sub-4")
+                            and active_micro in ("Micro-3", "Micro-4")
+                        ),
+                        "execution_notes": "Breakout momentum requires active volume expansion window (Sub-3 / Micro-3). Avoid executing during Sub-1/Sub-2 traps.",
+                    },
                     "invalidation_rationale": "Reclaim of Session VWAP or close back inside Value Area invalidates short.",
                     "empirical_support": {
                         "continuation_median_atr": emp.get("low_continuation_median_atr", cont_atr),
@@ -850,6 +880,14 @@ def generate_trading_playbook(
                     "trigger_price": last_price,
                     "target_profit": target_sp,
                     "invalidation_level": sp_inval,
+                    "timing_gate": {
+                        "recommended_quarter": "Q3_NY_AM",
+                        "recommended_sub_quarter": "Sub-3 (DISTRIBUTION_EXPANSION_DRIVE)",
+                        "recommended_micro_cycle": "Micro-1 or Micro-3",
+                        "current_cycle": f"{active_q} | {active_sub} ({sub_role}) | {active_micro} ({micro_role})",
+                        "is_optimal_window": bool(active_sub in ("Sub-3", "Sub-4")),
+                        "execution_notes": "Single print voids act as rapid vacuum magnets as regular market volume floods in.",
+                    },
                     "risk_reward_ratio": rr_sp,
                     "invalidation_rationale": "Reversal away from single print void invalidates repair thesis.",
                     "empirical_support": {
@@ -888,6 +926,17 @@ def generate_trading_playbook(
                     "trigger_price": pdh,
                     "target_profit": sweep_target,
                     "invalidation_level": sweep_inval,
+                    "timing_gate": {
+                        "recommended_quarter": "Q3_NY_AM",
+                        "recommended_sub_quarter": "Sub-2 (MANIPULATION_TRAP_SETUP) or Sub-1",
+                        "recommended_micro_cycle": "Micro-2 (MICRO_PIVOT_SWEEP)",
+                        "current_cycle": f"{active_q} | {active_sub} ({sub_role}) | {active_micro} ({micro_role})",
+                        "is_optimal_window": bool(
+                            active_sub in ("Sub-1", "Sub-2")
+                            or active_micro in ("Micro-1", "Micro-2")
+                        ),
+                        "execution_notes": "Sweep and liquidity trap reversals peak during Sub-2 Judah probe and Micro-2 liquidity grabs.",
+                    },
                     "risk_reward_ratio": rr_sweep_short,
                     "invalidation_rationale": f"Price accepts and sustains above {sweep_inval} (PDH + 0.05*ATR) proves breakout.",
                     "empirical_support": {
@@ -929,6 +978,17 @@ def generate_trading_playbook(
                     "trigger_price": pdl,
                     "target_profit": sweep_target,
                     "invalidation_level": sweep_inval,
+                    "timing_gate": {
+                        "recommended_quarter": "Q3_NY_AM",
+                        "recommended_sub_quarter": "Sub-2 (MANIPULATION_TRAP_SETUP) or Sub-1",
+                        "recommended_micro_cycle": "Micro-2 (MICRO_PIVOT_SWEEP)",
+                        "current_cycle": f"{active_q} | {active_sub} ({sub_role}) | {active_micro} ({micro_role})",
+                        "is_optimal_window": bool(
+                            active_sub in ("Sub-1", "Sub-2")
+                            or active_micro in ("Micro-1", "Micro-2")
+                        ),
+                        "execution_notes": "Sweep and liquidity trap reversals peak during Sub-2 Judah probe and Micro-2 liquidity grabs.",
+                    },
                     "risk_reward_ratio": rr_sweep_long,
                     "invalidation_rationale": f"Price breaks below {sweep_inval} (PDL - 0.05*ATR) confirms breakdown.",
                     "empirical_support": {
@@ -967,6 +1027,12 @@ def generate_trading_playbook(
                     "target_profit": cva_target,
                     "invalidation_level": cva_inval,
                     "risk_reward_ratio": rr_cva_long,
+                    "timing_gate": {
+                        "recommended_window": f"{w_quarter.get('weekday', 'Thursday')} ({w_quarter.get('quarter', 'Q4')}) | {m_quarter.get('quarter', 'Q1')}",
+                        "current_cycle": f"Weekly {w_quarter.get('quarter', 'Q4')} ({w_quarter.get('theory_role', 'CONTINUATION')}) | Monthly {m_quarter.get('quarter', 'Q1')}",
+                        "is_optimal_window": True,
+                        "execution_notes": f"Swing trade aligns with {m_quarter.get('description', 'Monthly Cycle')}.",
+                    },
                     "invalidation_rationale": "Loss of Composite Balance Area POC indicates failed breakout.",
                     "empirical_support": {
                         "rule": "Dalton 100% Measured Move of Balance Range",
@@ -998,6 +1064,12 @@ def generate_trading_playbook(
                     "target_profit": cva_target,
                     "invalidation_level": cva_inval,
                     "risk_reward_ratio": rr_cva_short,
+                    "timing_gate": {
+                        "recommended_window": f"{w_quarter.get('weekday', 'Thursday')} ({w_quarter.get('quarter', 'Q4')}) | {m_quarter.get('quarter', 'Q1')}",
+                        "current_cycle": f"Weekly {w_quarter.get('quarter', 'Q4')} ({w_quarter.get('theory_role', 'CONTINUATION')}) | Monthly {m_quarter.get('quarter', 'Q1')}",
+                        "is_optimal_window": True,
+                        "execution_notes": f"Swing trade aligns with {m_quarter.get('description', 'Monthly Cycle')}.",
+                    },
                     "invalidation_rationale": "Reclaim of Composite Balance Area POC indicates failed breakdown.",
                     "empirical_support": {
                         "rule": "Dalton 100% Measured Move of Balance Range",
@@ -1030,6 +1102,12 @@ def generate_trading_playbook(
                     "target_profit": target_npoc_s,
                     "invalidation_level": inval_npoc_s,
                     "risk_reward_ratio": rr_npoc_s,
+                    "timing_gate": {
+                        "recommended_window": f"{w_quarter.get('weekday', 'Thursday')} ({w_quarter.get('quarter', 'Q4')}) | {m_quarter.get('quarter', 'Q1')}",
+                        "current_cycle": f"Weekly {w_quarter.get('quarter', 'Q4')} ({w_quarter.get('theory_role', 'CONTINUATION')}) | Monthly {m_quarter.get('quarter', 'Q1')}",
+                        "is_optimal_window": True,
+                        "execution_notes": f"Swing trade aligns with {m_quarter.get('description', 'Monthly Cycle')}.",
+                    },
                     "invalidation_rationale": "Break above prior session high proves bullish reversal.",
                     "empirical_support": {
                         "target_type": "Virgin / Naked POC Magnet",
@@ -1060,6 +1138,12 @@ def generate_trading_playbook(
                     "target_profit": target_npoc_l,
                     "invalidation_level": inval_npoc_l,
                     "risk_reward_ratio": rr_npoc_l,
+                    "timing_gate": {
+                        "recommended_window": f"{w_quarter.get('weekday', 'Thursday')} ({w_quarter.get('quarter', 'Q4')}) | {m_quarter.get('quarter', 'Q1')}",
+                        "current_cycle": f"Weekly {w_quarter.get('quarter', 'Q4')} ({w_quarter.get('theory_role', 'CONTINUATION')}) | Monthly {m_quarter.get('quarter', 'Q1')}",
+                        "is_optimal_window": True,
+                        "execution_notes": f"Swing trade aligns with {m_quarter.get('description', 'Monthly Cycle')}.",
+                    },
                     "invalidation_rationale": "Break below prior session low proves bearish reversal.",
                     "empirical_support": {
                         "target_type": "Virgin / Naked POC Magnet",

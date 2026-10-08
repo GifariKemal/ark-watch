@@ -1,194 +1,96 @@
-"""horizon_backtest.py — 100-Scenario Empirical Backtester across AMT Horizons & Quarterly Cycles."""
+"""horizon_backtest.py — timing-cell edge test over REAL resolved playbook trades.
+
+Outcomes come only from playbook_scenarios rows that were triggered and
+resolved (HIT_TARGET_WIN / HIT_STOP_LOSS, entry_price + r_multiple present).
+Each hypothesis is a cell: scenario_id (or "*" = any) x one timing dimension
+value (QT 6h quarter, 90m sub-quarter, weekday, week-of-month) read off the
+trigger time in New York, or the scenario as a whole ("ALL").
+
+Per tested cell: n, n_eff (sessions as clusters), win rate + Wilson 95% CI,
+expectancy R + session-cluster bootstrap CI, one-sided binomial p-value vs the
+EMPIRICAL base rate (pooled win rate of every resolved trade in the sample)
+and a Benjamini-Yekutieli q (BH optional). A cell with fewer than
+min_observations trades is reported as insufficient_data, with no p-value.
+
+ponytail: no re-simulation over intraday_bars — only trades the tracker
+actually resolved count; add a bar re-simulator when live history is too thin.
+"""
 
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from scipy import stats as scipy_stats
-from statsmodels.stats.multitest import multipletests
+from . import stats
 
-CATEGORIES = (
-    "SESSION_CLOCK",
-    "QUARTERLY_THEORY",
-    "WEEKLY_PROFILE",
-    "MONTHLY_JOKER",
-    "IPDA_RANGE",
-)
-
-
-def generate_100_hypotheses() -> list[dict[str, Any]]:
-    """Generate the structured 100-hypothesis matrix testing edge across time and AMT mechanics."""
-    hypotheses = []
-
-    # 1. Category 1: Session Clocks (21 hypotheses)
-    sessions = [
-        "ASIA",
-        "LONDON",
-        "NY_AM",
-        "NY_PM",
-        "NY_LONDON_OVERLAP",
-        "FRANKFURT",
-        "SINGAPORE",
-    ]
-    amt_triggers = [
-        "VAH_EXPANSION_LONG",
-        "VAL_BREAKDOWN_SHORT",
-        "VWAP_REVERSAL_RECLAIM",
-    ]
-    for s in sessions:
-        for trig in amt_triggers:
-            hypotheses.append(
-                {
-                    "id": f"HYPO_SESSION_{s}_{trig}",
-                    "category": "SESSION_CLOCK",
-                    "session": s,
-                    "trigger": trig,
-                    "description": f"AMT {trig} formed during {s} session produces statistically significant continuation.",
-                }
-            )
-
-    # 2. Category 2: Quarterly Theory Fractal Cycles (28 hypotheses)
-    quarters = ["Q1_ASIA", "Q2_LONDON", "Q3_NY_AM", "Q4_NY_PM"]
-    q_roles = [
-        "TRUE_OPEN_EXPANSION",
-        "MANIPULATION_JUDAH",
-        "DISTRIBUTION_EXPANSION",
-        "RANGE_RETURN",
-    ]
-    for q in quarters:
-        for role in q_roles:
-            hypotheses.append(
-                {
-                    "id": f"HYPO_QT_{q}_{role}",
-                    "category": "QUARTERLY_THEORY",
-                    "quarter": q,
-                    "cycle_role": role,
-                    "description": f"Quarterly cycle {q} exhibiting {role} delivers positive expectancy.",
-                }
-            )
-    for sub in range(4):
-        for role in (
-            "90M_ACCUMULATION",
-            "90M_MANIPULATION",
-            "22.5M_MICRO_SWEEP",
-        ):
-            hypotheses.append(
-                {
-                    "id": f"HYPO_FRACTAL_SUB_{sub}_{role}",
-                    "category": "QUARTERLY_THEORY",
-                    "sub_quarter": sub,
-                    "cycle_role": role,
-                    "description": f"90m/22.5m sub-quarter {sub} {role} validates AMT entry edge.",
-                }
-            )
-
-    # 3. Category 3: Weekly Profile & Friday Re-Range (18 hypotheses)
-    days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"]
-    for d in days:
-        for setup in (
-            "IB_EXPANSION",
-            "SWEEP_TRAP_REVERSAL",
-            "POC_MIGRATION_FOLLOW",
-        ):
-            hypotheses.append(
-                {
-                    "id": f"HYPO_WEEKLY_{d}_{setup}",
-                    "category": "WEEKLY_PROFILE",
-                    "day": d,
-                    "setup": setup,
-                    "description": f"{d} specific {setup} delivers asymmetric R:R >= 1.5.",
-                }
-            )
-    for fri_test in (
-        "FRIDAY_POC_MAGNET",
-        "FRIDAY_VA_RETURN",
-        "FRIDAY_AFTERNOON_SQUEEZE",
-    ):
-        hypotheses.append(
-            {
-                "id": f"HYPO_FRIDAY_{fri_test}",
-                "category": "WEEKLY_PROFILE",
-                "day": "FRIDAY",
-                "setup": fri_test,
-                "description": f"Friday hypothesis {fri_test} confirms mean reversion back into weekly range.",
-            }
-        )
-
-    # 4. Category 4: Monthly Quarters & Joker Week (16 hypotheses)
-    m_quarters = [
-        "Q1_ACCUMULATION",
-        "Q2_MANIPULATION",
-        "Q3_DISTRIBUTION",
-        "Q4_CLOSING",
-        "JOKER_WEEK",
-    ]
-    for mq in m_quarters:
-        for phase in (
-            "BREAKOUT_EXPANSION",
-            "FALSE_BREAK_REVERSAL",
-            "HIGH_VOLATILITY_EXPANSION",
-        ):
-            hypotheses.append(
-                {
-                    "id": f"HYPO_MONTHLY_{mq}_{phase}",
-                    "category": "MONTHLY_JOKER",
-                    "month_quarter": mq,
-                    "phase": phase,
-                    "description": f"Monthly quarter {mq} under {phase} exceeds baseline expectation.",
-                }
-            )
-    # Extra joker volatility hypothesis
-    hypotheses.append(
-        {
-            "id": "HYPO_MONTHLY_JOKER_WEEK_VOL_EXPANSION",
-            "category": "MONTHLY_JOKER",
-            "month_quarter": "JOKER_WEEK",
-            "phase": "VOL_SURGE",
-            "description": "Joker Week prints >1.5x average weekly true range.",
-        }
-    )
-
-    # 5. Category 5: IPDA Data Ranges (20 hypotheses)
-    ipda_bands = [
-        "60D",
-        "40D",
-        "20D",
-        "15D",
-        "10D",
-        "5D",
-        "3D",
-        "2D",
-        "1D",
-        "4H",
-    ]
-    for band in ipda_bands:
-        for mode in ("LIQUIDITY_RUN", "EQUILIBRIUM_RETEST"):
-            hypotheses.append(
-                {
-                    "id": f"HYPO_IPDA_{band}_{mode}",
-                    "category": "IPDA_RANGE",
-                    "band": band,
-                    "mode": mode,
-                    "description": f"IPDA lookback {band} {mode} establishes institutional liquidity bounds.",
-                }
-            )
-
-    return hypotheses
+NY_TZ = ZoneInfo("America/New_York")
+WEEKDAYS = ("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY")
+DIMENSIONS: dict[str, tuple[str, ...]] = {
+    "qt_quarter": ("Q1_ASIA", "Q2_LONDON", "Q3_NY_AM", "Q4_NY_PM"),
+    "sub_quarter_90m": ("0", "1", "2", "3"),
+    "weekday": WEEKDAYS[:5],
+    "month_week": ("W1", "W2", "W3", "W4"),
+}
 
 
-def apply_fdr_guardrail(results: list[dict[str, Any]], alpha: float = 0.05) -> list[dict[str, Any]]:
-    """Benjamini-Hochberg False Discovery Rate correction across the hypothesis test results."""
-    p_vals = [r.get("p_raw", 1.0) for r in results]
-    rejected, adjusted_p, _, _ = multipletests(p_vals, alpha=alpha, method="fdr_bh")
+def _features(session_id: str, triggered_at_utc: str) -> dict[str, str]:
+    """Timing features of one trade. QT day starts 18:00 ET (6h quarters)."""
+    t = datetime.fromisoformat(triggered_at_utc)
+    ny = (t if t.tzinfo else t.replace(tzinfo=UTC)).astimezone(NY_TZ)
+    minutes = ((ny.hour - 18) % 24) * 60 + ny.minute
+    try:
+        day = date.fromisoformat(session_id[:10])  # CME trading date
+    except ValueError:
+        day = ny.date()
+    return {
+        "qt_quarter": DIMENSIONS["qt_quarter"][minutes // 360],
+        "sub_quarter_90m": str(minutes % 360 // 90),
+        "weekday": WEEKDAYS[day.weekday()],
+        "month_week": f"W{min(4, (day.day - 1) // 7 + 1)}",
+    }
 
+
+def generate_hypotheses(scenario_ids: list[str]) -> list[dict[str, Any]]:
+    """Every (scenario | "*") x (ALL | dimension=value) cell, minus "*|ALL"
+    (the pooled sample is the base rate itself, not a hypothesis)."""
     out = []
-    for r, p_adj, sig in zip(results, adjusted_p, rejected, strict=False):
-        item = dict(r)
-        item["p_fdr"] = round(float(p_adj), 4)
-        item["significant_after_fdr"] = bool(sig)
-        out.append(item)
+    for sc in [*sorted(scenario_ids), "*"]:
+        if sc != "*":
+            out.append({"id": f"{sc}|ALL", "scenario_id": sc, "dimension": None, "value": None})
+        for dim, values in DIMENSIONS.items():
+            for v in values:
+                out.append(
+                    {"id": f"{sc}|{dim}={v}", "scenario_id": sc, "dimension": dim, "value": v}
+                )
     return out
+
+
+def _resolved_trades(conn: sqlite3.Connection, symbols: list[str] | None) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT symbol, scenario_id, session_id, triggered_at_utc, state, r_multiple"
+        " FROM playbook_scenarios WHERE state IN ('HIT_TARGET_WIN', 'HIT_STOP_LOSS')"
+        " AND entry_price IS NOT NULL AND r_multiple IS NOT NULL"
+        " AND triggered_at_utc IS NOT NULL"
+    ).fetchall()
+    wanted = {s.upper() for s in symbols} if symbols else None
+    return [
+        {
+            "scenario_id": sc,
+            "session": f"{sym}|{sess}",
+            "win": state == "HIT_TARGET_WIN",
+            "r": float(r),
+            **_features(sess, trig),
+        }
+        for sym, sc, sess, trig, state, r in rows
+        if wanted is None or sym.upper() in wanted
+    ]
+
+
+def _evidence(q: float, exp_ci_lo: float, alpha: float) -> str:
+    hits = (q < alpha) + (exp_ci_lo > 0)
+    return ("no_edge", "mixed", "supported")[hits]
 
 
 def run_horizon_backtest(
@@ -196,36 +98,66 @@ def run_horizon_backtest(
     symbols: list[str] | None = None,
     *,
     min_observations: int = 30,
+    alpha: float = 0.05,
+    fdr_method: str = "fdr_by",
+    n_boot: int = 2000,
+    seed: int = 0,
 ) -> dict[str, Any]:
-    """Execute the full 100-scenario backtest across portfolio symbols and filter false discoveries."""
-    all_hypotheses = generate_100_hypotheses()
+    """Evaluate every timing cell on real resolved trades; see module docstring."""
+    trades = _resolved_trades(conn, symbols)
+    base_rate = sum(t["win"] for t in trades) / len(trades) if trades else None
+    grid = generate_hypotheses(sorted({t["scenario_id"] for t in trades})) if trades else []
 
-    evaluated_results = []
-    for h in all_hypotheses:
-        n_obs = 65
-        wins = 41
-        p_raw = round(float(1.0 - scipy_stats.binom.cdf(wins - 1, n_obs, 0.5)), 4)
-        avg_ret = round((wins * 2.0 - (n_obs - wins) * 1.0) / n_obs, 2)
-
-        evaluated_results.append(
-            {
-                "hypothesis_id": h["id"],
-                "category": h["category"],
-                "description": h["description"],
-                "n_observations": n_obs,
-                "wins": wins,
-                "win_rate_pct": round((wins / n_obs) * 100.0, 1),
-                "avg_r_multiple": avg_ret,
-                "p_raw": p_raw,
-            }
+    results: list[dict[str, Any]] = []
+    for h in grid:
+        cell = [
+            t
+            for t in trades
+            if h["scenario_id"] in ("*", t["scenario_id"])
+            and (h["dimension"] is None or t[h["dimension"]] == h["value"])
+        ]
+        rec = {**h, "n": len(cell)}
+        results.append(rec)
+        if len(cell) < min_observations:
+            rec["status"] = rec["evidence"] = "insufficient_data"
+            continue
+        wins = sum(t["win"] for t in cell)
+        sessions = [t["session"] for t in cell]
+        rs = [t["r"] for t in cell]
+        n_eff = stats.effective_n([float(t["win"]) for t in cell], sessions)
+        # the binomial test uses the session-deflated sample, not raw n
+        k_eff = round(wins * n_eff / len(cell))
+        rec.update(
+            status="tested",
+            n_sessions=len(set(sessions)),
+            n_eff=round(n_eff, 1),
+            wins=wins,
+            win_rate=round(wins / len(cell), 4),
+            win_rate_ci95=stats.wilson_ci(wins, len(cell), alpha),
+            expectancy_r=round(sum(rs) / len(rs), 4),
+            expectancy_r_ci95=stats.cluster_bootstrap_ci(
+                rs, sessions, n_boot=n_boot, alpha=alpha, seed=seed
+            ),
+            base_rate=round(base_rate, 4),
+            p_raw=stats.binom_pvalue_vs_base_rate(k_eff, round(n_eff), base_rate),
         )
 
-    fdr_results = apply_fdr_guardrail(evaluated_results, alpha=0.05)
-    passed_fdr = [r for r in fdr_results if r["significant_after_fdr"]]
+    tested = [r for r in results if r["status"] == "tested"]
+    if tested:
+        _, qs = stats.fdr_by([r["p_raw"] for r in tested], alpha, fdr_method)
+        for r, q in zip(tested, qs, strict=True):
+            r["q"] = q
+            r["evidence"] = _evidence(q, r["expectancy_r_ci95"][0], alpha)
 
     return {
-        "total_hypotheses": len(all_hypotheses),
-        "hypotheses_passing_fdr": len(passed_fdr),
-        "fdr_alpha": 0.05,
-        "results": fdr_results,
+        "n_trades": len(trades),
+        "base_rate": round(base_rate, 4) if base_rate is not None else None,
+        "total_hypotheses": len(grid),
+        "tested": len(tested),
+        "insufficient_data": len(grid) - len(tested),
+        "supported": sum(r["evidence"] == "supported" for r in tested),
+        "fdr_method": fdr_method,
+        "alpha": alpha,
+        "min_observations": min_observations,
+        "results": results,
     }

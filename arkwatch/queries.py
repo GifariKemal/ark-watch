@@ -39,11 +39,12 @@ def flows_latest(conn: sqlite3.Connection, days: int = 1) -> list[tuple]:
 def cot_category_window(
     conn: sqlite3.Connection, contract_code: str, category: str, limit: int = 156
 ) -> list[tuple]:
-    """Futures-only cot_raw rows per category — ordered ASCENDING (a time series)."""
-    return conn.execute(
+    """Latest `limit` futures-only cot_raw rows per category — ordered ASCENDING."""
+    rows = conn.execute(
         "SELECT report_date, long, short FROM cot_raw "
         "WHERE contract_code=? AND category=? AND long IS NOT NULL AND long > 0 "
         "AND report_type NOT LIKE '%_c' "
-        "ORDER BY report_date LIMIT ?",
+        "ORDER BY report_date DESC LIMIT ?",
         (contract_code, category, limit),
     ).fetchall()
+    return rows[::-1]

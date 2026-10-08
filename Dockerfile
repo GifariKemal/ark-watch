@@ -41,8 +41,8 @@ LABEL org.opencontainers.image.revision=${GIT_SHA}
 COPY --from=sqlite /opt/sqlite/lib/ /opt/sqlite/lib/
 COPY --from=builder /app/.venv /app/.venv
 WORKDIR /app
-COPY arkwatch ./arkwatch
-COPY config ./config
+COPY --chmod=a+rX arkwatch ./arkwatch
+COPY --chmod=a+rX config ./config
 
 # /app/data -> /data: ~25 job modules still resolve ROOT/data/arkwatch.db
 # (or cwd-relative data/arkwatch.db); the symlink keeps every path on the volume

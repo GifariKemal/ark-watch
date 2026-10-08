@@ -66,10 +66,11 @@ def test_quarterly_theory_and_ipda_partitioning():
     m_info = horizons.get_monthly_quarter(target)
     assert m_info["quarter"] == "Q1"
 
-    # Joker Week: 2026-11-03 -> Joker Week (01-08)
-    joker_info = horizons.get_monthly_quarter(date(2026, 11, 3))
+    # Joker Week: 2026-11-30 is Week 5 of November 2026 (5-week month) -> Joker Week
+    joker_info = horizons.get_monthly_quarter(date(2026, 11, 30))
     assert joker_info["is_joker_week"] is True
-
+    assert joker_info["total_weeks_in_month"] == 5
+    assert joker_info["quarter"] == "Q0"
     # IPDA Lookbacks
     now_utc = datetime(2026, 10, 8, 14, 0, tzinfo=UTC)
     ipda = horizons.get_ipda_ranges(now_utc)

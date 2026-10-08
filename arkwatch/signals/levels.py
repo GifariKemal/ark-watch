@@ -36,10 +36,12 @@ from .amt import (
 from .amt_horizons import compute_horizon_amt
 from .horizons import (
     get_active_quarterly_cycles,
+    get_month_week_anchor_ny,
     get_monthly_quarter,
     get_quarterly_session_bounds,
     get_session_window,
     get_weekly_quarter,
+    get_yearly_cycle,
     subdivide_micro_22m,
     subdivide_quarter_90m,
 )
@@ -581,20 +583,86 @@ def compute_session_reference_levels(
             "total_volume": 0.0,
         }
 
-    # Monthly Quarters Composite Blocks (Q1: 01-07, Q2: 08-14, Q3: 15-21, Q4: 22-end, Joker: 01-08)
-    year_str = target_d.strftime("%Y-%m")
-    import calendar
+    # 1. Yearly Cycle & Prior Yearly Quarters Lookback
+    yearly_cycle = get_yearly_cycle(target_d)
+    y_curr = target_d.year
+    prior_yearly_quarters_amt = {}
+    curr_q_num = ((target_d.month - 1) // 3) + 1
+    for q_idx, (q_lbl, q_m_start, q_m_end) in enumerate(
+        [("Q1", 1, 3), ("Q2", 4, 6), ("Q3", 7, 9), ("Q4", 10, 12)]
+    ):
+        if q_idx + 1 < curr_q_num:
+            import calendar as _cal
 
-    _, last_day_num = calendar.monthrange(target_d.year, target_d.month)
-    monthly_blocks_dates = {
-        "JOKER_WEEK": (f"{year_str}-01", f"{year_str}-08"),
-        "Q1_WEEK_1": (f"{year_str}-01", f"{year_str}-07"),
-        "Q2_WEEK_2": (f"{year_str}-08", f"{year_str}-14"),
-        "Q3_WEEK_3": (f"{year_str}-15", f"{year_str}-21"),
-        "Q4_WEEK_4": (f"{year_str}-22", f"{year_str}-{last_day_num:02d}"),
-    }
+            q_start_str = f"{y_curr}-{q_m_start:02d}-01"
+            _, last_q_day = _cal.monthrange(y_curr, q_m_end)
+            q_end_str = f"{y_curr}-{q_m_end:02d}-{last_q_day:02d}"
+            rows_yq = conn.execute(
+                "SELECT ts, open, high, low, close, COALESCE(volume, 0.0) FROM instrument_prices WHERE symbol=? AND ts >= ? AND ts <= ? AND source IN ('YAHOO', 'EODHD') ORDER BY ts ASC",
+                (sym, q_start_str, q_end_str),
+            ).fetchall()
+            b_yq = [
+                (r[0], float(r[1] or r[4]), float(r[2]), float(r[3]), float(r[4]), float(r[5]))
+                for r in rows_yq
+                if r[2] is not None and r[3] is not None and r[4] is not None
+            ]
+            if b_yq:
+                va_yq = compute_value_area(b_yq, tick_size=ASSET_TICK_SIZES.get(sym))
+                prior_yearly_quarters_amt[f"{y_curr}_{q_lbl}"] = {
+                    "period": f"{q_start_str} -> {q_end_str}",
+                    "high": max(b[2] for b in b_yq),
+                    "low": min(b[3] for b in b_yq),
+                    "composite_poc": va_yq.get("poc"),
+                    "composite_vah": va_yq.get("vah"),
+                    "composite_val": va_yq.get("val"),
+                    "total_volume": va_yq.get("total_volume"),
+                }
+
+    # 2. Prior Months Lookback (M-1 and M-2) using PineScript Anchors
+    prior_months_amt = {}
+    curr_y = target_d.year
+    curr_m = target_d.month
+    m1_y = curr_y if curr_m > 1 else curr_y - 1
+    m1_m = curr_m - 1 if curr_m > 1 else 12
+    m2_y = m1_y if m1_m > 1 else m1_y - 1
+    m2_m = m1_m - 1 if m1_m > 1 else 12
+
+    m1_anc = get_month_week_anchor_ny(m1_y, m1_m)
+    curr_anc = get_month_week_anchor_ny(curr_y, curr_m)
+    m2_anc = get_month_week_anchor_ny(m2_y, m2_m)
+
+    for m_lbl, (anc_s, anc_e) in [
+        (f"M-1_{m1_y}_{m1_m:02d}", (m1_anc, curr_anc)),
+        (f"M-2_{m2_y}_{m2_m:02d}", (m2_anc, m1_anc)),
+    ]:
+        rows_pm = conn.execute(
+            "SELECT ts, open, high, low, close, COALESCE(volume, 0.0) FROM instrument_prices WHERE symbol=? AND ts >= ? AND ts <= ? AND source IN ('YAHOO', 'EODHD') ORDER BY ts ASC",
+            (sym, anc_s.strftime("%Y-%m-%d"), anc_e.strftime("%Y-%m-%d")),
+        ).fetchall()
+        b_pm = [
+            (r[0], float(r[1] or r[4]), float(r[2]), float(r[3]), float(r[4]), float(r[5]))
+            for r in rows_pm
+            if r[2] is not None and r[3] is not None and r[4] is not None
+        ]
+        if b_pm:
+            va_pm = compute_value_area(b_pm, tick_size=ASSET_TICK_SIZES.get(sym))
+            prior_months_amt[m_lbl] = {
+                "anchor_start": anc_s.strftime("%Y-%m-%d %H:%M ET"),
+                "anchor_end": anc_e.strftime("%Y-%m-%d %H:%M ET"),
+                "high": max(b[2] for b in b_pm),
+                "low": min(b[3] for b in b_pm),
+                "composite_poc": va_pm.get("poc"),
+                "composite_vah": va_pm.get("vah"),
+                "composite_val": va_pm.get("val"),
+                "total_volume": va_pm.get("total_volume"),
+            }
+
+    # 3. Monthly Weeks Schedule Composite Blocks (PineScript Weeks 1-4 / Joker)
     monthly_quarter_blocks = {}
-    for b_name, (b_start, b_end) in monthly_blocks_dates.items():
+    for w_info in m_quarter.get("weeks_schedule", []):
+        b_name = f"WEEK_{w_info['week_index']}_{w_info['quarter']}"
+        b_start = w_info["start_et"][:10]
+        b_end = w_info["end_et"][:10]
         rows = conn.execute(
             "SELECT ts, open, high, low, close, COALESCE(volume, 0.0) FROM instrument_prices WHERE symbol=? AND ts >= ? AND ts <= ? AND source IN ('YAHOO', 'EODHD') ORDER BY ts ASC",
             (sym, b_start, b_end),
@@ -609,7 +677,7 @@ def compute_session_reference_levels(
             monthly_quarter_blocks[b_name] = {
                 "start_date": b_start,
                 "end_date": b_end,
-                "status": "COMPLETED" if target_d.isoformat() > b_end else "ACTIVE",
+                "status": "COMPLETED" if target_d.isoformat() >= b_end else "ACTIVE",
                 "composite_poc": va_mb.get("poc"),
                 "composite_vah": va_mb.get("vah"),
                 "composite_val": va_mb.get("val"),
@@ -626,7 +694,6 @@ def compute_session_reference_levels(
                 "composite_val": lbl,
                 "total_volume": 0.0,
             }
-
     return {
         "symbol": sym,
         "as_of": target_dt.isoformat(timespec="seconds"),
@@ -771,6 +838,9 @@ def compute_session_reference_levels(
                 "weekly_days_profile": weekly_days_profile,
                 "midweek_72h_composite": midweek_72h_composite,
                 "monthly_quarter_blocks": monthly_quarter_blocks,
+                "prior_months_amt": prior_months_amt,
+                "prior_yearly_quarters_amt": prior_yearly_quarters_amt,
+                "yearly_cycle": yearly_cycle,
                 "weekly_quarter": w_quarter,
                 "monthly_quarter": m_quarter,
             },

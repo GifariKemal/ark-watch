@@ -220,37 +220,149 @@ def get_weekly_quarter(target_date: date) -> dict[str, Any]:
     }
 
 
-def get_monthly_quarter(target_date: date) -> dict[str, Any]:
-    """Map calendar day to Monthly Quarters (Q1: 04-11, Q2: 11-18, Q3: 18-25, Q4: 25-01, Joker: 01-08)."""
-    d = target_date.day
-    if 4 <= d <= 11:
-        return {
-            "quarter": "Q1",
-            "is_joker_week": False,
-            "description": "Monthly Accumulation / Initial Balance",
-        }
-    if 11 < d <= 18:
-        return {
-            "quarter": "Q2",
-            "is_joker_week": False,
-            "description": "Monthly Manipulation / Trend Inception",
-        }
-    if 18 < d <= 25:
-        return {
-            "quarter": "Q3",
-            "is_joker_week": False,
-            "description": "Monthly Distribution / Trend Peak",
-        }
-    if d > 25:
-        return {
-            "quarter": "Q4",
-            "is_joker_week": False,
-            "description": "Monthly Profit Taking / Range Return",
-        }
+def get_month_week_anchor_ny(year: int, month: int) -> datetime:
+    """Exact implementation of PineScript monthWeekAnchorNy:
+    A month's Week 1 begins on Sunday 18:00 ET immediately before its first Monday.
+    """
+    month_start = datetime(year, month, 1, 0, 0, tzinfo=NY_TZ)
+    days_to_monday = (0 - month_start.weekday() + 7) % 7
+    first_monday = month_start + timedelta(days=days_to_monday)
+    sunday_before = first_monday - timedelta(days=1)
+    return datetime(sunday_before.year, sunday_before.month, sunday_before.day, 18, 0, tzinfo=NY_TZ)
+
+
+def get_monthly_quarter(target_date: date | datetime) -> dict[str, Any]:
+    """Calculate exact Quarterly Theory Monthly Week and Quarters based on PineScript formula:
+    - Week 1 begins on Sunday 18:00 ET before the first Monday of the month.
+    - Span to next month anchor is exactly 4 or 5 weeks.
+    - Week 1 = Q1, Week 2 = Q2, Week 3 = Q3, Week 4 = Q4, Week 5 = Joker Week (Q0).
+    """
+    if isinstance(target_date, datetime):
+        dt_ny = target_date.astimezone(NY_TZ)
+    else:
+        dt_ny = datetime(target_date.year, target_date.month, target_date.day, 12, 0, tzinfo=NY_TZ)
+
+    year_ny = dt_ny.year
+    month_ny = dt_ny.month
+
+    anchor = get_month_week_anchor_ny(year_ny, month_ny)
+    if dt_ny < anchor:
+        year_ny = year_ny - 1 if month_ny == 1 else year_ny
+        month_ny = 12 if month_ny == 1 else month_ny - 1
+        anchor = get_month_week_anchor_ny(year_ny, month_ny)
+    else:
+        next_y = year_ny + 1 if month_ny == 12 else year_ny
+        next_m = 1 if month_ny == 12 else month_ny + 1
+        next_anchor = get_month_week_anchor_ny(next_y, next_m)
+        if dt_ny >= next_anchor:
+            year_ny = next_y
+            month_ny = next_m
+            anchor = next_anchor
+
+    next_y = year_ny + 1 if month_ny == 12 else year_ny
+    next_m = 1 if month_ny == 12 else month_ny + 1
+    next_anchor = get_month_week_anchor_ny(next_y, next_m)
+
+    total_days = (next_anchor - anchor).days
+    total_weeks = total_days // 7
+
+    elapsed_ms = (dt_ny - anchor).total_seconds() * 1000
+    week_no = int(elapsed_ms // (7 * 24 * 3600 * 1000)) + 1
+    cycle_num = week_no if 1 <= week_no <= 4 else 0
+
+    roles = {
+        1: ("Q1", "WEEK_1", "Monthly Accumulation / Initial Balance"),
+        2: ("Q2", "WEEK_2", "Monthly Manipulation / Trend Inception"),
+        3: ("Q3", "WEEK_3", "Monthly Distribution / Trend Peak"),
+        4: ("Q4", "WEEK_4", "Monthly Reversal or Continuation / Close"),
+        0: ("Q0", "JOKER_WEEK", "Monthly Joker Week / Anomaly Rebalancing"),
+    }
+    q_code, w_label, desc = roles.get(cycle_num, ("UNKNOWN", "UNKNOWN", "Unknown"))
+
+    weeks_schedule = []
+    for w in range(total_weeks):
+        w_start = anchor + timedelta(days=w * 7)
+        w_end = w_start + timedelta(days=7)
+        c_num = (w + 1) if (w + 1) <= 4 else 0
+        w_q, _, w_desc = roles.get(c_num, ("UNKNOWN", "UNKNOWN", "Unknown"))
+        weeks_schedule.append(
+            {
+                "week_index": w + 1,
+                "quarter": w_q,
+                "start_et": w_start.strftime("%Y-%m-%d %H:%M ET"),
+                "end_et": w_end.strftime("%Y-%m-%d %H:%M ET"),
+                "start_utc": w_start.astimezone(UTC).isoformat(timespec="seconds"),
+                "end_utc": w_end.astimezone(UTC).isoformat(timespec="seconds"),
+                "is_active": (w + 1) == week_no,
+                "status": (
+                    "COMPLETED"
+                    if dt_ny >= w_end
+                    else ("ACTIVE" if dt_ny >= w_start else "UPCOMING")
+                ),
+                "description": w_desc,
+            }
+        )
+
     return {
-        "quarter": "JOKER_WEEK",
-        "is_joker_week": True,
-        "description": "Transition / Expansion Anomaly",
+        "owning_year_month": f"{year_ny}-{month_ny:02d}",
+        "active_week_number": week_no,
+        "quarter": q_code,
+        "week_label": w_label,
+        "is_joker_week": cycle_num == 0,
+        "description": desc,
+        "total_weeks_in_month": total_weeks,
+        "has_joker_week": total_weeks == 5,
+        "month_anchor_start_utc": anchor.astimezone(UTC).isoformat(timespec="seconds"),
+        "month_anchor_end_utc": next_anchor.astimezone(UTC).isoformat(timespec="seconds"),
+        "weeks_schedule": weeks_schedule,
+    }
+
+
+def get_yearly_cycle(target_date: date | datetime) -> dict[str, Any]:
+    """Calculate Quarterly Theory Yearly Cycle:
+    1 Year divided into 4 quarters: Q1 (Jan-Mar), Q2 (Apr-Jun), Q3 (Jul-Sep), Q4 (Oct-Dec).
+    """
+    y = target_date.year
+    m = target_date.month
+    q_num = ((m - 1) // 3) + 1
+    roles = {
+        1: ("Q1", "Jan - Mar", "Yearly Accumulation / True Open Range"),
+        2: ("Q2", "Apr - Jun", "Yearly Manipulation / Spring-Summer Trend Inception"),
+        3: ("Q3", "Jul - Sep", "Yearly Distribution / Late-Summer Peak"),
+        4: (
+            "Q4",
+            "Oct - Dec",
+            "Yearly Continuation or Reversal / Year-End Settlement",
+        ),
+    }
+    q_code, period_str, desc = roles[q_num]
+    return {
+        "year": y,
+        "quarter": q_code,
+        "months": period_str,
+        "description": desc,
+        "all_quarters": [
+            {
+                "quarter": "Q1",
+                "months": "Jan - Mar",
+                "status": "COMPLETED" if q_num > 1 else ("ACTIVE" if q_num == 1 else "UPCOMING"),
+            },
+            {
+                "quarter": "Q2",
+                "months": "Apr - Jun",
+                "status": "COMPLETED" if q_num > 2 else ("ACTIVE" if q_num == 2 else "UPCOMING"),
+            },
+            {
+                "quarter": "Q3",
+                "months": "Jul - Sep",
+                "status": "COMPLETED" if q_num > 3 else ("ACTIVE" if q_num == 3 else "UPCOMING"),
+            },
+            {
+                "quarter": "Q4",
+                "months": "Oct - Dec",
+                "status": "ACTIVE" if q_num == 4 else "UPCOMING",
+            },
+        ],
     }
 
 

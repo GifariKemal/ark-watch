@@ -320,12 +320,23 @@ def compute_session_reference_levels(
     ).fetchall()
     ipda_ranges = {}
     for days in [1, 2, 3, 5, 10, 15, 20, 40, 60]:
-        s_rows = daily_rows[:days]
+        s_rows = [
+            r
+            for r in daily_rows[:days]
+            if r[2] is not None and r[3] is not None and r[4] is not None
+        ]
         if s_rows:
-            h = max(float(r[2]) for r in s_rows if r[2] is not None)
-            l_val = min(float(r[3]) for r in s_rows if r[3] is not None)
+            h = max(float(r[2]) for r in s_rows)
+            l_val = min(float(r[3]) for r in s_rows)
             bars = [
-                (r[0], float(r[1] or r[4]), float(r[2]), float(r[3]), float(r[4]), float(r[5]))
+                (
+                    r[0],
+                    float(r[1] if r[1] is not None else r[4]),
+                    float(r[2]),
+                    float(r[3]),
+                    float(r[4]),
+                    float(r[5] if r[5] is not None else 0.0),
+                )
                 for r in reversed(s_rows)
             ]
             cva = compute_value_area(bars, tick_size=ASSET_TICK_SIZES.get(sym))

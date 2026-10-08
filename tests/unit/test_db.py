@@ -94,6 +94,9 @@ def test_gdelt_gzip_migration_preserves_existing_raw_json(tmp_path):
         "sigma_low_conf",
     ):
         conn.execute(f"ALTER TABLE events DROP COLUMN {column}")
+    # undo v33's non-idempotent parts too (the replay re-runs 28..latest)
+    conn.execute("ALTER TABLE series_registry DROP COLUMN locked_by_ui")
+    conn.execute("ALTER TABLE playbook_scenarios DROP COLUMN note")
     conn.execute("DELETE FROM schema_migrations WHERE version>=28")
     conn.close()
 

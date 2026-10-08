@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
+from ..db import get_conn
 from .base import active_channels
 
 CLAIM_STALE_MIN = 10  # re-claim a sending row only after >10 min
@@ -83,7 +84,7 @@ def _claim_brief_rows(conn: sqlite3.Connection) -> list[tuple]:
 
 def send_pending(db_path: str) -> dict:
     """Read pending outbox rows → dispatch per channel → update status."""
-    conn = sqlite3.connect(db_path)
+    conn = get_conn(db_path)
     results = {"sent": 0, "failed": 0, "messages": []}
     try:
         rows = _claim_brief_rows(conn)
@@ -149,7 +150,7 @@ def send_pending_alerts(
     Success = ≥1 channel received it (the first channel's id is stored).
     last_attempt pacing: the watch cycle calls this every 60s; each row
     retries at most once per 5 minutes."""
-    conn = sqlite3.connect(db_path)
+    conn = get_conn(db_path)
     now = datetime.now(UTC)
     summary = {"sent": 0, "still_pending": 0}
     try:

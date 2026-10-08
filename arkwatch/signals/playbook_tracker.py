@@ -182,7 +182,7 @@ def evaluate_active_playbooks(
         # Fetch subsequent bars since creation
         bars = conn.execute(
             """
-            SELECT bar_ts_utc, open, high, low, close
+            SELECT bar_ts_utc, open, high, low, close, COALESCE(volume, 0.0)
             FROM intraday_bars
             WHERE symbol = ?
               AND bar_ts_utc >= ?
@@ -251,9 +251,9 @@ def evaluate_active_playbooks(
                 continue
 
             if activated and activation_bar:
-                entry_price = activation_bar[4]
+                # Option 1: Trigger Fill at intended trigger price
+                entry_price = trig_p if trig_p is not None else activation_bar[4]
                 trig_time = activation_bar[0]
-
                 target_already_passed = (direction == "LONG" and target_p <= entry_price) or (
                     direction == "SHORT" and target_p >= entry_price
                 )
@@ -396,6 +396,25 @@ def evaluate_active_playbooks(
 
             risk_dist = abs(entry_p - inval_p) or 1.0
             be_ratchet_active = False
+            partial_tp_taken = False
+            partial_pnl_pts = 0.0
+            consecutive_vwap_losses = 0
+
+            cum_pv = 0.0
+            cum_vol = 0.0
+
+            cur_payload_row = conn.execute(
+                "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+            ).fetchone()
+            try:
+                cur_p = json.loads(cur_payload_row[0]) if cur_payload_row else {}
+            except Exception:
+                cur_p = {}
+
+            if any(log.get("event") == "PARTIAL_TP_50" for log in cur_p.get("decision_log", [])):
+                partial_tp_taken = True
+                be_ratchet_active = True
+                partial_pnl_pts = round(0.5 * (1.0 * risk_dist), 2)
 
             # Multi-Domain Catalyst Defense
             try:
@@ -424,21 +443,55 @@ def evaluate_active_playbooks(
             for b in bars:
                 b_high = b[2]
                 b_low = b[3]
+                b_close = b[4]
+                b_vol = max(1.0, float(b[5]) if len(b) > 5 and b[5] is not None else 1.0)
+
+                typical = (b_high + b_low + b_close) / 3.0
+                cum_pv += typical * b_vol
+                cum_vol += b_vol
+                session_vwap = cum_pv / cum_vol if cum_vol > 0 else b_close
 
                 if direction == "LONG":
                     fav = b_high - entry_p
                     adv = entry_p - b_low
                     current_mfe = max(current_mfe, fav)
                     current_mae = max(current_mae, adv)
-                    if current_mfe >= 1.0 * risk_dist:
-                        be_ratchet_active = True
 
+                    ratcheted_this_bar = False
+                    # 1. Partial TP 50% at +1.0R Extension
+                    if current_mfe >= 1.0 * risk_dist and not partial_tp_taken:
+                        partial_tp_taken = True
+                        be_ratchet_active = True
+                        ratcheted_this_bar = True
+                        partial_pnl_pts = round(0.5 * (1.0 * risk_dist), 2)
+                        cur_p.setdefault("decision_log", []).append(
+                            {
+                                "ts_utc": b[0],
+                                "event": "PARTIAL_TP_50",
+                                "details": f"Hit +1.0R milestone (+{round(current_mfe, 2)} pts): scaled out 50% position (+0.50R / +{partial_pnl_pts} pts profit), moved remaining stop loss to Break-Even at {entry_p}",
+                            }
+                        )
+
+                    # 2. Target Hit (Full Win)
                     if b_high >= target_p and target_p > entry_p:
                         resolved_state = "HIT_TARGET_WIN"
                         exit_price = target_p
                         resolved_time = b[0]
                         break
-                    if be_ratchet_active and b_low <= entry_p:
+
+                    # 3. Early Full TP on Consecutive Session VWAP Loss (Structural Failure)
+                    if partial_tp_taken and b_close < session_vwap:
+                        consecutive_vwap_losses += 1
+                        if consecutive_vwap_losses >= 2 and b_close > entry_p:
+                            resolved_state = "EARLY_FULL_TP"
+                            exit_price = b_close
+                            resolved_time = b[0]
+                            break
+                    else:
+                        consecutive_vwap_losses = 0
+
+                    # 4. Stop Loss / Break-Even Hit
+                    if be_ratchet_active and not ratcheted_this_bar and b_low <= entry_p:
                         resolved_state = "HIT_BREAKEVEN"
                         exit_price = entry_p
                         resolved_time = b[0]
@@ -455,15 +508,41 @@ def evaluate_active_playbooks(
                     current_mfe = max(current_mfe, fav)
                     current_mae = max(current_mae, adv)
 
-                    if current_mfe >= 1.0 * risk_dist:
+                    ratcheted_this_bar = False
+                    # 1. Partial TP 50% at +1.0R Extension
+                    if current_mfe >= 1.0 * risk_dist and not partial_tp_taken:
+                        partial_tp_taken = True
                         be_ratchet_active = True
+                        ratcheted_this_bar = True
+                        partial_pnl_pts = round(0.5 * (1.0 * risk_dist), 2)
+                        cur_p.setdefault("decision_log", []).append(
+                            {
+                                "ts_utc": b[0],
+                                "event": "PARTIAL_TP_50",
+                                "details": f"Hit +1.0R milestone (+{round(current_mfe, 2)} pts): scaled out 50% position (+0.50R / +{partial_pnl_pts} pts profit), moved remaining stop loss to Break-Even at {entry_p}",
+                            }
+                        )
 
+                    # 2. Target Hit (Full Win)
                     if b_low <= target_p and target_p < entry_p:
                         resolved_state = "HIT_TARGET_WIN"
                         exit_price = target_p
                         resolved_time = b[0]
                         break
-                    if be_ratchet_active and b_high >= entry_p:
+
+                    # 3. Early Full TP on Consecutive Session VWAP Loss (Structural Failure)
+                    if partial_tp_taken and b_close > session_vwap:
+                        consecutive_vwap_losses += 1
+                        if consecutive_vwap_losses >= 2 and b_close < entry_p:
+                            resolved_state = "EARLY_FULL_TP"
+                            exit_price = b_close
+                            resolved_time = b[0]
+                            break
+                    else:
+                        consecutive_vwap_losses = 0
+
+                    # 4. Stop Loss / Break-Even Hit
+                    if be_ratchet_active and not ratcheted_this_bar and b_high >= entry_p:
                         resolved_state = "HIT_BREAKEVEN"
                         exit_price = entry_p
                         resolved_time = b[0]
@@ -473,30 +552,41 @@ def evaluate_active_playbooks(
                         exit_price = inval_p
                         resolved_time = b[0]
                         break
-            if resolved_state:
-                pnl = (exit_price - entry_p) if direction == "LONG" else (entry_p - exit_price)
-                risk_dist = abs(entry_p - inval_p) or 1.0
-                r_mult = round(pnl / risk_dist, 2)
 
-                if resolved_state == "HIT_TARGET_WIN" and pnl <= 0.0:
+            if resolved_state:
+                raw_exit_pnl = (
+                    (exit_price - entry_p) if direction == "LONG" else (entry_p - exit_price)
+                )
+                if partial_tp_taken:
+                    total_pnl = partial_pnl_pts + (0.5 * raw_exit_pnl)
+                else:
+                    total_pnl = raw_exit_pnl
+
+                risk_dist = abs(entry_p - inval_p) or 1.0
+                r_mult = round(total_pnl / risk_dist, 2)
+
+                if resolved_state == "HIT_TARGET_WIN" and total_pnl <= 0.0:
                     resolved_state = "CANCELLED_EXPIRED"
-                cur_payload_row = conn.execute(
-                    "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
-                ).fetchone()
-                try:
-                    cur_p = json.loads(cur_payload_row[0]) if cur_payload_row else {}
-                except Exception:
-                    cur_p = {}
+
                 cur_p.setdefault("decision_log", []).append(
                     {
                         "ts_utc": resolved_time,
                         "event": resolved_state,
-                        "details": f"Exit reached at {exit_price}. PnL: {round(pnl, 2)} pts ({r_mult}R). MFE: +{round(current_mfe, 2)}, MAE: -{round(current_mae, 2)}",
+                        "details": f"Exit reached at {exit_price}. Net PnL: {round(total_pnl, 2)} pts ({r_mult}R). MFE: +{round(current_mfe, 2)}, MAE: -{round(current_mae, 2)}",
                     }
                 )
 
                 db_state = (
-                    "CANCELLED_EXPIRED" if resolved_state == "HIT_BREAKEVEN" else resolved_state
+                    "HIT_TARGET_WIN"
+                    if (
+                        resolved_state in ("HIT_TARGET_WIN", "EARLY_FULL_TP")
+                        or (resolved_state == "HIT_BREAKEVEN" and total_pnl > 0)
+                    )
+                    else (
+                        "HIT_STOP_LOSS"
+                        if resolved_state == "HIT_STOP_LOSS"
+                        else "CANCELLED_EXPIRED"
+                    )
                 )
                 conn.execute(
                     """
@@ -512,13 +602,13 @@ def evaluate_active_playbooks(
                         exit_price,
                         round(current_mfe, 2),
                         round(current_mae, 2),
-                        round(pnl, 2),
+                        round(total_pnl, 2),
                         r_mult,
                         json.dumps(cur_p),
                         uid,
                     ),
                 )
-                if resolved_state == "HIT_TARGET_WIN":
+                if db_state == "HIT_TARGET_WIN":
                     stats["resolved_wins"] += 1
                 elif resolved_state == "HIT_BREAKEVEN":
                     stats["resolved_breakeven"] += 1
@@ -528,10 +618,10 @@ def evaluate_active_playbooks(
                 conn.execute(
                     """
                     UPDATE playbook_scenarios
-                    SET mfe_points = ?, mae_points = ?
+                    SET mfe_points = ?, mae_points = ?, payload_json = ?
                     WHERE scenario_uid = ?
                     """,
-                    (round(current_mfe, 2), round(current_mae, 2), uid),
+                    (round(current_mfe, 2), round(current_mae, 2), json.dumps(cur_p), uid),
                 )
     conn.commit()
     return stats

@@ -6,7 +6,13 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
-from .amt import ASSET_TICK_SIZES, compute_value_area
+from .amt import (
+    ASSET_TICK_SIZES,
+    compute_tpo_profile,
+    compute_value_area,
+    evaluate_auction_extremes,
+    evaluate_vpoc_tpoc_relationship,
+)
 
 
 def compute_horizon_amt(
@@ -60,6 +66,24 @@ def compute_horizon_amt(
     ]
     tick_sz = ASSET_TICK_SIZES.get(sym)
     va = compute_value_area(bar_tuples, num_bins=num_bins, va_volume_ratio=0.70, tick_size=tick_sz)
+    tpo_data = compute_tpo_profile(bar_tuples, num_bins=num_bins) if len(bar_tuples) >= 6 else {}
+    ib_high = max(b[2] for b in bar_tuples[:6]) if len(bar_tuples) >= 6 else h_max
+    ib_low = min(b[3] for b in bar_tuples[:6]) if len(bar_tuples) >= 6 else l_min
+
+    vpoc_align = (
+        evaluate_vpoc_tpoc_relationship(
+            va["poc"] or h_max,
+            tpo_data.get("tpo_poc") or h_max,
+            max(0.01, total_range) * 0.1,
+        )
+        if len(bar_tuples) >= 6
+        else {"relationship": "ALIGNED", "bias": "NEUTRAL"}
+    )
+    extremes = (
+        evaluate_auction_extremes(bar_tuples, max(0.01, total_range))
+        if len(bar_tuples) >= 6
+        else {"high_structure": "NORMAL", "low_structure": "NORMAL"}
+    )
 
     first_bar = rows[0]
     last_bar = rows[-1]
@@ -79,4 +103,14 @@ def compute_horizon_amt(
         "vah": va["vah"],
         "val": va["val"],
         "poc": va["poc"],
+        "tpo_vah": tpo_data.get("tpo_vah"),
+        "tpo_val": tpo_data.get("tpo_val"),
+        "tpo_poc": tpo_data.get("tpo_poc"),
+        "single_prints_count": len(tpo_data.get("single_prints", [])),
+        "initial_balance_high": round(ib_high, 4),
+        "initial_balance_low": round(ib_low, 4),
+        "vpoc_alignment": vpoc_align.get("relationship", "ALIGNED"),
+        "vpoc_bias": vpoc_align.get("bias", "NEUTRAL"),
+        "high_auction_structure": extremes.get("high_structure", "NORMAL"),
+        "low_auction_structure": extremes.get("low_structure", "NORMAL"),
     }

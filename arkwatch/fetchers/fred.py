@@ -3,7 +3,8 @@
 API conventions honored here:
   - key via env FRED_API_KEY (never hard-coded)
   - sort_order=asc&limit for history depth; sort_order=desc for latest values
-  - FRED rejects unusual user agents -> send a browser-like UA
+  - NO custom User-Agent: FRED's Akamai edge tarpits custom/browser UAs from datacenter
+    IPs (read timeout, verified from the VPS 2026-10-08); the default python-requests UA is fine
 """
 
 from __future__ import annotations
@@ -13,11 +14,28 @@ import time
 from urllib.parse import urlencode
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 BASE = "https://api.stlouisfed.org/fred/series/observations"
 # FRED's official limit is 120 req/min; 0.55s spacing keeps batches safely below it.
 THROTTLE_S = 0.55
 _last_call = 0.0
+# transient network/5xx/429 blips (container boot, DNS) must not blank a series until tomorrow
+_SESSION = requests.Session()
+_SESSION.mount(
+    "https://",
+    HTTPAdapter(
+        max_retries=Retry(
+            total=4,
+            read=1,  # a tarpitted read costs 30s; do not multiply it
+            backoff_factor=1.0,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET",),
+            respect_retry_after_header=True,
+        )
+    ),
+)
 
 
 class FredError(RuntimeError):
@@ -68,11 +86,10 @@ def fetch_observations(
         time.sleep(wait)
     _last_call = time.monotonic()
 
-    s = session or requests
+    s = session or _SESSION
     resp = s.get(
         f"{BASE}?{urlencode(params)}",
         timeout=(10, 30),
-        headers={"User-Agent": "arkwatch/0.1 (personal research)"},
     )
     if resp.status_code != 200:
         raise FredError(f"FRED {series_id}: HTTP {resp.status_code} — {resp.text[:200]}")

@@ -48,6 +48,7 @@ COPY --chmod=a+rX config ./config
 # (or cwd-relative data/arkwatch.db); the symlink keeps every path on the volume
 RUN groupadd -g 10001 arkwatch \
  && useradd -u 10001 -g arkwatch -M -d /app -s /usr/sbin/nologin arkwatch \
+ && chmod -R a+rX /app/arkwatch /app/config \
  && mkdir /data && chown arkwatch:arkwatch /data && ln -s /data /app/data \
  && python -c "import sqlite3, sys; print('sqlite', sqlite3.sqlite_version); sys.exit(sqlite3.sqlite_version_info < (3, 51, 3))" \
  && python -c "from zoneinfo import ZoneInfo; ZoneInfo('Asia/Jakarta')"

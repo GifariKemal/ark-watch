@@ -12,6 +12,10 @@ x-app: &app
   # least privilege: no extra capabilities, no setuid escalation
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
+  # docker's json-file driver has no default cap: bound the container logs
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
   volumes:
     - arkwatch-data:/data
 
@@ -80,6 +84,9 @@ services:
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     mem_limit: 128m
 
   # Offsite replication to Cloudflare R2. Opt-in: `docker compose --profile
@@ -90,6 +97,9 @@ services:
     profiles: ["litestream"]
     command: ["replicate", "-config", "/etc/litestream.yml"]
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     # same uid as the app: a root sidecar would create root-owned -wal/-shm
     user: "10001:10001"
     environment:

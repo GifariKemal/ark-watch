@@ -570,14 +570,28 @@ def run(db_path: str) -> dict[str, int]:
             "GDELT:GKG",
         ),
     )
-    try:
-        archives = _gdelt_updates()
-    except Exception as ex:
+    archives: dict = {}
+    if os.environ.get("GDELT_ENABLED", "1") == "0":
+        # raw archive nothing consumes (~1.5 GB/day): opt out without touching the network
         for name, _, _, _, log_name in gdelt_feeds:
-            out[name] = -1
-            print(f"{name}: {type(ex).__name__}: {str(ex)[:160]}")
-            log_collection(conn, "market_news", log_name, None, 0, err=str(ex))
-        archives = {}
+            out[name] = 0
+            log_collection(
+                conn,
+                "market_news",
+                log_name,
+                None,
+                0,
+                err="disabled: GDELT_ENABLED=0",
+                status="SKIPPED",
+            )
+    else:
+        try:
+            archives = _gdelt_updates()
+        except Exception as ex:
+            for name, _, _, _, log_name in gdelt_feeds:
+                out[name] = -1
+                print(f"{name}: {type(ex).__name__}: {str(ex)[:160]}")
+                log_collection(conn, "market_news", log_name, None, 0, err=str(ex))
     for name, feed, transform, sql, log_name in gdelt_feeds:
         if feed not in archives:
             continue

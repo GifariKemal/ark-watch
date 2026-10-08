@@ -127,3 +127,23 @@ def test_redact_scrubs_bot_tokens_webhooks_and_cookies():
     for secret in ("AAH-x_y", "987/abcDEF", "k1", "s3cr3t"):
         assert secret not in out
     assert "x=1" in out
+
+
+def test_gdelt_disabled_by_env_skips_collection(tmp_path, offline_news, monkeypatch):
+    """GDELT is a raw archive nothing consumes (~1.5 GB/day): GDELT_ENABLED=0 must not
+    touch the network or the gdelt tables, and must say so as SKIPPED, not ERROR."""
+    monkeypatch.setenv("GDELT_ENABLED", "0")
+
+    def boom():
+        raise AssertionError("GDELT must not be contacted when disabled")
+
+    monkeypatch.setattr(market_news, "_gdelt_updates", boom)
+    db = tmp_path / "arkwatch.db"
+    out = market_news.run(str(db))
+    assert out["GDELT"] == out["GDELT_MENTIONS"] == out["GDELT_GKG"] == 0
+    conn = sqlite3.connect(db)
+    rows = conn.execute(
+        "SELECT status, error FROM fetch_log WHERE target LIKE 'GDELT:%'"
+    ).fetchall()
+    assert len(rows) == 3 and all(s == "SKIPPED" and "GDELT_ENABLED=0" in e for s, e in rows)
+    assert conn.execute("SELECT COUNT(*) FROM gdelt_events").fetchone()[0] == 0

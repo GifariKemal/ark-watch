@@ -297,7 +297,7 @@ def test_playbook_macro_quadrant_and_net_liquidity(tmp_path):
     # Seed intraday bars and observations
     conn.execute(
         "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('NQ1', ?, '5m', 'YAHOO', 31000.0, 31100.0, 30900.0, 31050.0, 100.0, ?)",
-        (now_iso, now_iso),
+        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
     )
     conn.execute(
         "INSERT INTO series_registry (series_id, name, block, tier, unit, value_format, freq, primary_source) VALUES ('FRED:DFII10', '10Y Real TIPS', 'B', 1, 'pct', 'pct', 'D', 'FRED')"
@@ -330,7 +330,7 @@ def test_playbook_rich_cot_and_positioning_integration(tmp_path):
 
     conn.execute(
         "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('GC1', ?, '5m', 'YAHOO', 4180.0, 4190.0, 4175.0, 4185.0, 100.0, ?)",
-        (now_iso, now_iso),
+        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
     )
     conn.commit()
     conn.close()
@@ -350,7 +350,7 @@ def test_playbook_broad_dollar_and_smile_integration(tmp_path):
 
     conn.execute(
         "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('DXY', ?, '5m', 'YAHOO', 102.0, 102.3, 101.9, 102.2, 100.0, ?)",
-        (now_iso, now_iso),
+        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
     )
     conn.execute(
         "INSERT INTO series_registry (series_id, name, block, tier, unit, value_format, freq, primary_source) VALUES ('FRED:DTWEXBGS', 'Broad Dollar Index', 'A', 1, 'index', 'index', 'D', 'FRED')"
@@ -375,7 +375,7 @@ def test_playbook_news_velocity_and_event_gates(tmp_path):
 
     conn.execute(
         "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('CL1', ?, '5m', 'YAHOO', 90.0, 91.0, 89.5, 90.5, 100.0, ?)",
-        (now_iso, now_iso),
+        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
     )
     # High-impact event scheduled in 1.5 hours
     event_time = (now + timedelta(hours=1, minutes=30)).isoformat(timespec="seconds")
@@ -401,7 +401,7 @@ def test_playbook_single_print_repair_scenario(tmp_path):
 
     conn.execute(
         "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('NQ1', ?, '5m', 'YAHOO', 31200.0, 31250.0, 31180.0, 31210.0, 100.0, ?)",
-        (now_iso, now_iso),
+        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
     )
     conn.commit()
     conn.close()
@@ -420,7 +420,7 @@ def test_playbook_full_power_signals_integration(tmp_path):
 
     conn.execute(
         "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('NQ1', ?, '5m', 'YAHOO', 31200.0, 31250.0, 31180.0, 31210.0, 100.0, ?)",
-        (now_iso, now_iso),
+        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
     )
     conn.commit()
     conn.close()

@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+from .asof import parse_as_of
+from .horizons import cme_session_date
 
 
 def _intraday_ready(conn: sqlite3.Connection) -> bool:
@@ -29,28 +32,30 @@ def session_intraday_intelligence(
     if not _intraday_ready(conn):
         return None
 
-    date_filter = ""
-    if as_of:
-        date_str = as_of[:10] if isinstance(as_of, str) else as_of.strftime("%Y-%m-%d")
-        date_filter = f"AND substr(bar_ts_utc, 1, 10) = '{date_str}'"
-
-    query = f"""
+    # Closed bars only (bar open + 5m <= as_of); 1000 rows covers one 23h session x 3 sources
+    upper = (parse_as_of(as_of) - timedelta(minutes=5)).isoformat(timespec="seconds")
+    raw = conn.execute(
+        """
         SELECT bar_ts_utc, open, high, low, close, COALESCE(volume, 0.0)
         FROM intraday_bars
-        WHERE symbol = ? {date_filter}
-        ORDER BY bar_ts_utc ASC
-    """
-    rows = conn.execute(query, (symbol,)).fetchall()
-    if not rows:
+        WHERE symbol = ? AND interval = '5m' AND bar_ts_utc <= ?
+        ORDER BY bar_ts_utc DESC, source ASC
+        LIMIT 1000
+        """,
+        (symbol, upper),
+    ).fetchall()
+    if not raw:
         return None
+    # One row per timestamp across providers
+    rows: dict[str, tuple] = {}
+    for r in raw:
+        rows.setdefault(r[0], r)
 
-    # Group by trading session date (take the latest session date)
-    sessions = sorted(dict.fromkeys(r[0][:10] for r in rows))
-    latest_session = sessions[-1]
-    session_rows = [r for r in rows if r[0][:10] == latest_session]
-
-    if not session_rows:
-        return None
+    # Latest CME Globex session (18:00 ET start), so VWAP resets at the Globex open.
+    # ponytail: cash ETFs (SPY) roll 18:00-20:00 ET post-market bars into the next session;
+    # add a per-asset session map if that skews their VWAP.
+    latest_session = cme_session_date(raw[0][0])
+    session_rows = [r for ts, r in sorted(rows.items()) if cme_session_date(ts) == latest_session]
 
     # Compute Session VWAP
     cum_vol = 0.0
@@ -92,7 +97,7 @@ def session_intraday_intelligence(
 
     return {
         "symbol": symbol,
-        "trade_date": latest_session,
+        "trade_date": latest_session.isoformat(),
         "latest_bar_ts": latest_bar[0],
         "close": round(latest_close, 4),
         "session_vwap": round(vwap, 4),

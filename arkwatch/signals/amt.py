@@ -17,8 +17,11 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
+
+from .asof import parse_as_of
+from .horizons import cme_session_date, cme_session_start
 
 TPO_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
@@ -69,6 +72,26 @@ def get_asset_ib_timing(symbol: str, is_dst: bool = True) -> tuple[time, str]:
     # Default: US Equity Cash Open 09:30 ET = 13:30 UTC (EDT) or 14:30 UTC (EST)
     t = time(13, 30) if is_dst else time(14, 30)
     return t, "US_CASH_OPEN_0930ET"
+
+
+def split_rth(
+    bars: list[tuple[str, float, float, float, float, float]],
+    open_utc: time,
+) -> tuple[list, list]:
+    """Split one CME Globex session (opens 18:00 ET prior day) into (pre-open, RTH) bars.
+
+    The open is anchored to the session start instant: comparing UTC time-of-day alone files
+    the 22:00-23:59 UTC Globex-open bars as RTH. An open equal to the session start (crypto)
+    makes the whole session RTH.
+    """
+    if not bars:
+        return [], []
+    start = cme_session_start(cme_session_date(bars[-1][0]))
+    rth_open = datetime.combine(start.date(), open_utc, UTC)
+    if rth_open < start:
+        rth_open += timedelta(days=1)
+    pre = [b for b in bars if parse_as_of(b[0]) < rth_open]
+    return pre, [b for b in bars if parse_as_of(b[0]) >= rth_open]
 
 
 def compute_value_area(
@@ -205,13 +228,13 @@ def compute_tpo_profile(
 
     bin_size = (max_p - min_p) / float(num_bins)
 
-    first_dt = datetime.fromisoformat(bars[0][0]).astimezone(UTC)
+    first_dt = parse_as_of(bars[0][0])
     tpo_counts_by_bin = [0] * num_bins
     bracket_letters_by_bin: dict[int, set[str]] = defaultdict(set)
     used_brackets = set()
 
     for ts_str, _o, h, l_val, _c, _v in bars:
-        b_dt = datetime.fromisoformat(ts_str).astimezone(UTC)
+        b_dt = parse_as_of(ts_str)
         mins_elapsed = max(0, int((b_dt - first_dt).total_seconds() // 60))
         bracket_idx = min(len(TPO_LETTERS) - 1, mins_elapsed // 30)
         letter = TPO_LETTERS[bracket_idx]
@@ -320,11 +343,7 @@ def analyze_initial_balance(
     cash_open_time: time,
 ) -> dict[str, Any]:
     """Calculate Initial Balance (IB: first 60m of cash open) and classify Day Type."""
-    rth_bars = []
-    for b in bars:
-        b_dt = datetime.fromisoformat(b[0]).astimezone(UTC)
-        if b_dt.time() >= cash_open_time:
-            rth_bars.append(b)
+    _, rth_bars = split_rth(bars, cash_open_time)
 
     if not rth_bars:
         return {

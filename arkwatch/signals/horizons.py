@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from .asof import parse_as_of
 
 NY_TZ = ZoneInfo("America/New_York")
 
@@ -28,15 +30,24 @@ QUARTERLY_HOURS_ET: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
 }
 
 
-def is_dst_edt(dt: datetime) -> bool:
+def is_dst_edt(dt: datetime | str) -> bool:
     """Check if datetime falls within US Daylight Saving Time (EDT, UTC-4)."""
-    aware = dt.astimezone(NY_TZ)
-    return bool(aware.dst())
+    return bool(to_ny_time(dt).dst())
 
 
-def to_ny_time(dt_utc: datetime) -> datetime:
-    """Convert UTC datetime to New York local datetime."""
-    return dt_utc.astimezone(NY_TZ)
+def to_ny_time(dt_utc: datetime | str) -> datetime:
+    """Convert UTC datetime (naive = UTC) to New York local datetime."""
+    return parse_as_of(dt_utc).astimezone(NY_TZ)
+
+
+def cme_session_date(dt: datetime | str) -> date:
+    """CME Globex trading date: the session opening 18:00 ET belongs to the next day."""
+    return (to_ny_time(dt) + timedelta(hours=6)).date()
+
+
+def cme_session_start(session_date: date) -> datetime:
+    """UTC instant a CME Globex session opens (18:00 ET the prior calendar day)."""
+    return datetime.combine(session_date - timedelta(days=1), time(18), NY_TZ).astimezone(UTC)
 
 
 def get_session_window(session_name: str, target_date: date) -> tuple[datetime, datetime]:
@@ -120,30 +131,17 @@ def subdivide_micro_22m(start_utc: datetime, end_utc: datetime) -> list[tuple[da
     ]
 
 
-def get_active_quarterly_cycles(now_utc: datetime) -> dict[str, Any]:
+def get_active_quarterly_cycles(now_utc: datetime | str) -> dict[str, Any]:
     """Identify currently active 6h quarter, 90m sub-quarter, and 22.5m micro-cycle."""
-    target_d = now_utc.date()
-    q_bounds = get_quarterly_session_bounds(target_d)
-
-    # Check yesterday's bounds too in case Q1 Asia started yesterday
-    prev_d = target_d - timedelta(days=1)
-    prev_bounds = get_quarterly_session_bounds(prev_d)
-    all_bounds = {**prev_bounds, **q_bounds}
-
-    active_q = "Q1_ASIA"
-    active_q_bounds = None
-    for q_name, (qs, qe) in all_bounds.items():
-        if qs <= now_utc < qe:
-            active_q = q_name
-            active_q_bounds = (qs, qe)
-            break
-
-    if active_q_bounds is None:
-        qs, qe = q_bounds["Q3_NY_AM"]
-        active_q = "Q3_NY_AM"
-        active_q_bounds = (qs, qe)
-    else:
-        qs, qe = active_q_bounds
+    now_utc = parse_as_of(now_utc)
+    # Q1 Asia opens 17:00 ET, i.e. on the prior calendar day, so scan D-1..D+1 quarters
+    d = now_utc.date()
+    active_q, (qs, qe) = next(
+        (q_name, bounds)
+        for day in (d - timedelta(days=1), d, d + timedelta(days=1))
+        for q_name, bounds in get_quarterly_session_bounds(day).items()
+        if bounds[0] <= now_utc < bounds[1]
+    )
 
     sub_quarters = subdivide_quarter_90m(qs, qe)
     sub_idx = 0

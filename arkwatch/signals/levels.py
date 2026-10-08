@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections import defaultdict
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .amt import (
@@ -32,53 +32,33 @@ from .amt import (
     evaluate_vpoc_tpoc_relationship,
     find_naked_pocs,
     get_asset_ib_timing,
+    split_rth,
 )
 from .amt_horizons import compute_horizon_amt
+from .asof import parse_as_of
 from .horizons import (
+    cme_session_date,
     get_active_quarterly_cycles,
     get_monthly_quarter,
     get_session_window,
     get_weekly_quarter,
+    is_dst_edt,
 )
 
-US_CASH_OPEN_UTC_SUMMER = time(13, 30)  # 09:30 ET during EDT
-US_CASH_OPEN_UTC_WINTER = time(14, 30)  # 09:30 ET during EST
+BAR_INTERVAL = "5m"
+BAR_SPAN = timedelta(minutes=5)
+# Bounded history: covers the 25-session naked-POC lookback plus holidays
+HISTORY_WINDOW = timedelta(days=40)
 
 
-def _is_dst_edt(dt: datetime) -> bool:
-    """Check if date falls within US Daylight Saving Time (EDT, UTC-4)."""
-    m = dt.month
-    if 4 <= m <= 10:
-        return True
-    if m == 3 and dt.day >= 8:
-        return True
-    return bool(m == 11 and dt.day <= 7 and dt.weekday() != 6)
+def _get_cme_session_id(dt: datetime | str) -> str:
+    """Map a timestamp to its CME Trading Session Date (18:00 ET yesterday to 17:00 ET today)."""
+    return cme_session_date(dt).isoformat()
 
 
-def _get_cash_open_time(dt: datetime) -> time:
-    """Determine US cash open in UTC based on DST (EDT vs EST)."""
-    return US_CASH_OPEN_UTC_SUMMER if _is_dst_edt(dt) else US_CASH_OPEN_UTC_WINTER
-
-
-def _get_cme_session_id(dt: datetime) -> str:
-    """Map UTC timestamp to CME Trading Session Date (18:00 ET yesterday to 17:00 ET today)."""
-    edt = _is_dst_edt(dt)
-    shift_hour = 22 if edt else 23  # 18:00 ET in UTC
-    if dt.hour >= shift_hour:
-        # Bars starting at 18:00 ET belong to the next calendar trading day
-        session_dt = dt.date() + timedelta(days=1)
-        return session_dt.isoformat()
-    return dt.date().isoformat()
-
-
-def _get_cme_week_id(dt: datetime) -> str:
-    """Map UTC timestamp to CME Trading Week (Sunday 18:00 ET to Friday 17:00 ET)."""
-    edt = _is_dst_edt(dt)
-    shift_hour = 22 if edt else 23
-    effective_dt = dt
-    if dt.weekday() == 6 and dt.hour >= shift_hour:
-        effective_dt = dt + timedelta(days=1)
-    y, w, _ = effective_dt.isocalendar()
+def _get_cme_week_id(dt: datetime | str) -> str:
+    """Map a timestamp to its CME Trading Week (Sunday 18:00 ET to Friday 17:00 ET)."""
+    y, w, _ = cme_session_date(dt).isocalendar()
     return f"{y}-W{w:02d}"
 
 
@@ -90,61 +70,58 @@ def compute_session_reference_levels(
 ) -> dict[str, Any] | None:
     """Compute Prior Session (T-1) Levels, Overnight Range, Developing Weekly Multi-Anchor, and Confluence."""
     sym = symbol.strip().upper()
+    target_dt = parse_as_of(as_of)
 
-    if as_of is None:
-        target_dt = datetime.now(UTC)
-    elif isinstance(as_of, str):
-        target_dt = datetime.fromisoformat(as_of).astimezone(UTC)
-    else:
-        target_dt = as_of.astimezone(UTC)
-
-    # 1. Query all historical intraday bars up to target_dt
-    rows = conn.execute(
+    # 1. Load closed bars (bar open + 5m <= as_of) over a bounded window ending at the latest bar
+    upper = (target_dt - BAR_SPAN).isoformat(timespec="seconds")
+    latest = conn.execute(
+        "SELECT MAX(bar_ts_utc) FROM intraday_bars WHERE symbol = ? AND interval = ?"
+        " AND bar_ts_utc <= ?",
+        (sym, BAR_INTERVAL, upper),
+    ).fetchone()[0]
+    if latest is None:
+        return None
+    lower = (parse_as_of(latest) - HISTORY_WINDOW).isoformat(timespec="seconds")
+    raw = conn.execute(
         """
         SELECT bar_ts_utc, open, high, low, close, COALESCE(volume, 0.0), source
         FROM intraday_bars
-        WHERE symbol = ?
-          AND bar_ts_utc <= ?
-        ORDER BY bar_ts_utc ASC
+        WHERE symbol = ? AND interval = ?
+          AND bar_ts_utc >= ? AND bar_ts_utc <= ?
+        ORDER BY bar_ts_utc ASC, source ASC
         """,
-        (sym, target_dt.isoformat(timespec="seconds")),
+        (sym, BAR_INTERVAL, lower, upper),
     ).fetchall()
-
-    if not rows:
-        return None
+    # Several providers can store the same bar: keep one row per timestamp
+    rows: dict[str, tuple] = {}
+    for r in raw:
+        rows.setdefault(r[0], r)
 
     # 2. Segment bars by CME Trading Session ID and Trading Week ID
     session_bars: dict[str, list[tuple[str, float, float, float, float, float]]] = defaultdict(list)
     week_bars: dict[str, list[tuple[str, float, float, float, float, float]]] = defaultdict(list)
-    sources = set()
 
-    for r in rows:
-        ts_str, o, h, low_val, c, v, src = r
-        bar_dt = datetime.fromisoformat(ts_str).astimezone(UTC)
-        s_id = _get_cme_session_id(bar_dt)
-        w_id = _get_cme_week_id(bar_dt)
+    for ts_str, o, h, low_val, c, v, _src in rows.values():
+        s_id = _get_cme_session_id(ts_str)
+        w_id = _get_cme_week_id(ts_str)
         bar_tuple = (ts_str, float(o), float(h), float(low_val), float(c), float(v))
         session_bars[s_id].append(bar_tuple)
         week_bars[w_id].append(bar_tuple)
-        sources.add(src)
 
     sorted_sessions = sorted(session_bars.keys())
-    if not sorted_sessions:
-        return None
-
     curr_session_id = _get_cme_session_id(target_dt)
     curr_week_id = _get_cme_week_id(target_dt)
 
-    # Determine prior completed session
-    if curr_session_id in sorted_sessions:
-        idx = sorted_sessions.index(curr_session_id)
-        prior_session_id = sorted_sessions[idx - 1] if idx > 0 else sorted_sessions[0]
+    # Prior completed session. No bars yet in the current session (weekend, holiday, pre-open
+    # gap): the latest session with bars is the prior one and the current session is empty.
+    if curr_session_id in session_bars:
+        prior_idx = max(0, sorted_sessions.index(curr_session_id) - 1)
+        curr_bars = session_bars[curr_session_id]
     else:
-        idx = len(sorted_sessions) - 1
-        prior_session_id = sorted_sessions[-1]
-        curr_session_id = prior_session_id
+        prior_idx = len(sorted_sessions) - 1
+        curr_bars = []
+    prior_session_id = sorted_sessions[prior_idx]
     prior_bars = session_bars[prior_session_id]
-    curr_bars = session_bars.get(curr_session_id, [rows[-1]])
 
     # 3. Prior Session (T-1) Reference Levels
     pdh = max(b[2] for b in prior_bars)
@@ -155,17 +132,8 @@ def compute_session_reference_levels(
     va_profile = compute_value_area(prior_bars, tick_size=ASSET_TICK_SIZES.get(sym))
 
     # 4. Overnight Session (Asia + London: 18:00 ET to 09:30 ET)
-    edt_active = _is_dst_edt(target_dt)
-    ib_open_time, ib_timing_label = get_asset_ib_timing(sym, is_dst=edt_active)
-
-    overnight_bars = []
-    rth_bars = []
-    for b in curr_bars:
-        b_dt = datetime.fromisoformat(b[0]).astimezone(UTC)
-        if b_dt.time() < ib_open_time:
-            overnight_bars.append(b)
-        else:
-            rth_bars.append(b)
+    ib_open_time, ib_timing_label = get_asset_ib_timing(sym, is_dst=is_dst_edt(target_dt))
+    overnight_bars, rth_bars = split_rth(curr_bars, ib_open_time)
 
     onh = max((b[2] for b in overnight_bars), default=None)
     onl = min((b[3] for b in overnight_bars), default=None)
@@ -186,7 +154,7 @@ def compute_session_reference_levels(
     weekly_va = compute_value_area(cur_week_bars)
 
     # 7. Latest Price and Confluence Analysis
-    latest_bar = curr_bars[-1]
+    latest_bar = (curr_bars or prior_bars)[-1]
     last_price = latest_bar[4]
     last_bar_ts = latest_bar[0]
 
@@ -262,7 +230,7 @@ def compute_session_reference_levels(
     )
 
     # Pilar 3: Value Migration Day-to-Day
-    prior_prior_bars = session_bars.get(sorted_sessions[idx - 2]) if idx >= 2 else None
+    prior_prior_bars = session_bars[sorted_sessions[prior_idx - 1]] if prior_idx >= 1 else None
     prior_prior_va = compute_value_area(prior_prior_bars) if prior_prior_bars else None
     value_migration = classify_value_migration(
         va_profile["vah"],
@@ -280,7 +248,7 @@ def compute_session_reference_levels(
     naked_pocs = find_naked_pocs(session_bars, last_price, lookback_sessions=25)
 
     # Multi-Horizon Session Profiles (Asia, London, Overlap)
-    target_d = target_dt.date()
+    target_d = cme_session_date(target_dt)
     as_s, as_e = get_session_window("ASIA", target_d)
     asia_prof = compute_horizon_amt(conn, sym, as_s, as_e)
 
@@ -308,16 +276,23 @@ def compute_session_reference_levels(
         }
 
     # IPDA Data Ranges (Daily Lookbacks & Intraday Lookbacks)
-    daily_rows = conn.execute(
-        "SELECT ts, high, low FROM instrument_prices WHERE symbol=? AND source IN ('YAHOO', 'EODHD') ORDER BY ts DESC LIMIT 65",
-        (sym,),
-    ).fetchall()
+    # Completed days only (ts < current session date), one row per date across providers
+    daily: dict[str, tuple] = {}
+    for ts, h, l_val in conn.execute(
+        "SELECT ts, high, low FROM instrument_prices WHERE symbol = ?"
+        " AND source IN ('YAHOO', 'EODHD') AND ts < ?"
+        " ORDER BY ts DESC, source = 'YAHOO' DESC LIMIT 130",
+        (sym, curr_session_id),
+    ):
+        daily.setdefault(ts[:10], (h, l_val))
+    daily_rows = list(daily.values())[:65]
     ipda_ranges = {}
     for days in [1, 2, 3, 5, 10, 15, 20, 40, 60]:
         s_rows = daily_rows[:days]
-        if s_rows:
-            h = max(float(r[1]) for r in s_rows if r[1] is not None)
-            l_val = min(float(r[2]) for r in s_rows if r[2] is not None)
+        highs = [float(r[0]) for r in s_rows if r[0] is not None]
+        lows = [float(r[1]) for r in s_rows if r[1] is not None]
+        if highs and lows:
+            h, l_val = max(highs), min(lows)
             ipda_ranges[f"{days}D"] = {
                 "high": round(h, 4),
                 "low": round(l_val, 4),

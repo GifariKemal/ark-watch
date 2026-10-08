@@ -451,54 +451,56 @@ def compute_session_reference_levels(
     # All 4 Sub-Quarters 90m for the Active Quarter
     active_quarter_sub_quarters = []
     for idx, (ss, se) in enumerate(subdivide_quarter_90m(qs, qe)):
-        if ss < target_dt:
-            s_amt = compute_horizon_amt(conn, sym, ss, min(se, target_dt))
+        s_amt = compute_horizon_amt(conn, sym, ss, min(se, target_dt)) if ss < target_dt else None
+        if s_amt:
             active_quarter_sub_quarters.append(
                 {
                     "sub_quarter": f"Sub-{idx + 1}",
                     "status": "COMPLETED" if target_dt >= se else "ACTIVE",
-                    "vah": s_amt.get("vah") if s_amt else None,
-                    "val": s_amt.get("val") if s_amt else None,
-                    "poc": s_amt.get("poc") if s_amt else None,
-                    "total_volume": s_amt.get("total_volume") if s_amt else None,
+                    "vah": s_amt["vah"],
+                    "val": s_amt["val"],
+                    "poc": s_amt["poc"],
+                    "total_volume": s_amt["total_volume"],
                 }
             )
         else:
+            lbl = "UPCOMING" if ss >= target_dt else "AWAITING_BARS"
             active_quarter_sub_quarters.append(
                 {
                     "sub_quarter": f"Sub-{idx + 1}",
-                    "status": "UPCOMING",
-                    "vah": None,
-                    "val": None,
-                    "poc": None,
-                    "total_volume": None,
+                    "status": lbl,
+                    "vah": lbl,
+                    "val": lbl,
+                    "poc": lbl,
+                    "total_volume": 0.0,
                 }
             )
 
     # All 4 Micro-Cycles 22.5m for the Active Sub-Quarter
     active_sub_quarter_micros = []
     for idx, (ms, me) in enumerate(subdivide_micro_22m(sub_s, sub_e)):
-        if ms < target_dt:
-            m_amt = compute_horizon_amt(conn, sym, ms, min(me, target_dt))
+        m_amt = compute_horizon_amt(conn, sym, ms, min(me, target_dt)) if ms < target_dt else None
+        if m_amt:
             active_sub_quarter_micros.append(
                 {
                     "micro_cycle": f"Micro-{idx + 1}",
                     "status": "COMPLETED" if target_dt >= me else "ACTIVE",
-                    "vah": m_amt.get("vah") if m_amt else None,
-                    "val": m_amt.get("val") if m_amt else None,
-                    "poc": m_amt.get("poc") if m_amt else None,
-                    "total_volume": m_amt.get("total_volume") if m_amt else None,
+                    "vah": m_amt["vah"],
+                    "val": m_amt["val"],
+                    "poc": m_amt["poc"],
+                    "total_volume": m_amt["total_volume"],
                 }
             )
         else:
+            lbl = "UPCOMING" if ms >= target_dt else "AWAITING_BARS"
             active_sub_quarter_micros.append(
                 {
                     "micro_cycle": f"Micro-{idx + 1}",
-                    "status": "UPCOMING",
-                    "vah": None,
-                    "val": None,
-                    "poc": None,
-                    "total_volume": None,
+                    "status": lbl,
+                    "vah": lbl,
+                    "val": lbl,
+                    "poc": lbl,
+                    "total_volume": 0.0,
                 }
             )
     return {

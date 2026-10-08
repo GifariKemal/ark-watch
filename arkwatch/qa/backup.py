@@ -9,13 +9,18 @@ first backup of each month). Copying the live DB file directly is forbidden
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
-BACKUP_DIR = Path(__file__).resolve().parent.parent.parent / "backups"
+_ROOT = Path(__file__).resolve().parent.parent.parent
+# Docker: ARKWATCH_DATA_DIR=/data keeps backups on the volume next to the DB.
+# Local only - offsite is Litestream's job, no upload hook here.
+_DATA_ENV = os.environ.get("ARKWATCH_DATA_DIR")
+DEFAULT_DB = (Path(_DATA_ENV) if _DATA_ENV else _ROOT / "data") / "arkwatch.db"
+BACKUP_DIR = Path(_DATA_ENV) / "backups" if _DATA_ENV else _ROOT / "backups"
 KEY_TABLES = ("raw_observations", "instrument_prices", "events")
 
 
@@ -31,8 +36,6 @@ def backup(db_path: str = str(DEFAULT_DB)) -> Path:
     # ROUND-7: intrinsic 600 — the nightly artifact carries every live
     # credential-adjacent table; harden.sh swept the old ones but every NEW
     # backup was still born 644 (umask default)
-    import os
-
     os.chmod(dst, 0o600)
     return dst
 

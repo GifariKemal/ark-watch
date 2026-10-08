@@ -115,7 +115,9 @@ def send_pending(db_path: str) -> dict:
                 try:
                     ext_id = ch.send_text(md_row[0])
                 except Exception as ex:
-                    print(f"  ⚠ {channel_name}: {str(ex)[:80]}")
+                    from ..qa.harvest import _redact  # webhook URL / bot token
+
+                    print(f"  ⚠ {channel_name}: {_redact(str(ex))[:80]}")
                     ext_id = None
                 if ext_id:
                     conn.execute(

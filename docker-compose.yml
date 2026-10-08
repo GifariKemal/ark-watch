@@ -1,0 +1,78 @@
+# Easypanel Compose service. No `ports:` (Traefik routes the api by domain) and
+# no container_name (Easypanel names containers). Secrets come only from the
+# environment set in the panel, never from a committed file.
+x-app: &app
+  build:
+    context: .
+    args:
+      GIT_SHA: ${GIT_SHA:-unknown}
+  image: arkwatch:latest
+  init: true
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  volumes:
+    - arkwatch-data:/data
+
+services:
+  daemon:
+    <<: *app
+    command: ["python", "-m", "arkwatch", "daemon"]
+    mem_limit: 1g
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "python", "-m", "arkwatch", "healthcheck"]
+      interval: 60s
+      timeout: 15s
+      start_period: 120s
+      retries: 3
+
+  api:
+    <<: *app
+    command:
+      ["uvicorn", "arkwatch.server.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    environment:
+      ARKWATCH_API_KEY: ${ARKWATCH_API_KEY:?set ARKWATCH_API_KEY in the Easypanel environment}
+    # read-only by contract: the api opens SQLite with mode=ro. The volume stays
+    # rw on purpose - a WAL reader still needs the -shm file writable.
+    mem_limit: 512m
+    depends_on:
+      - daemon
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  # Offsite replication to Cloudflare R2. Opt-in: `docker compose --profile
+  # litestream up -d` (or COMPOSE_PROFILES=litestream) once the R2 env is set.
+  # `:-` not `:?` here: interpolation runs even for inactive profiles.
+  litestream:
+    image: litestream/litestream:0.5.17
+    profiles: ["litestream"]
+    command: ["replicate", "-config", "/etc/litestream.yml"]
+    restart: unless-stopped
+    # same uid as the app: a root sidecar would create root-owned -wal/-shm
+    user: "10001:10001"
+    environment:
+      LITESTREAM_R2_ENDPOINT: ${LITESTREAM_R2_ENDPOINT:-}
+      LITESTREAM_R2_BUCKET: ${LITESTREAM_R2_BUCKET:-}
+      LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID:-}
+      LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY:-}
+    volumes:
+      - arkwatch-data:/data
+      - ./litestream.yml:/etc/litestream.yml:ro
+    mem_limit: 256m
+
+volumes:
+  arkwatch-data:

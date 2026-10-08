@@ -1,0 +1,16 @@
+# Litestream 0.5.x: continuous offsite replication of the live DB to Cloudflare R2.
+# Values are expanded from the environment at startup; nothing secret lives here.
+dbs:
+  - path: /data/arkwatch.db
+    replica:
+      type: s3
+      bucket: ${LITESTREAM_R2_BUCKET}
+      path: arkwatch
+      endpoint: ${LITESTREAM_R2_ENDPOINT}
+      region: auto
+      # 10s batches writes: ~259k PUT/month worst case vs ~2.6M at the 1s default
+      sync-interval: 10s
+
+snapshot:
+  interval: 24h
+  retention: 168h

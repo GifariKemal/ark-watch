@@ -10,6 +10,8 @@ import time
 from datetime import UTC, datetime
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 UA = {
@@ -17,10 +19,34 @@ UA = {
 }
 THROTTLE_S = 0.6  # polite pacing for sweeps of ~25 symbols
 _last = 0.0
+# intraday runs every 5 minutes for ~30 symbols: retry transient 429/5xx with
+# backoff; raise_on_status=False keeps the final non-200 on the YahooError path
+SESSION = requests.Session()
+SESSION.mount(
+    "https://",
+    HTTPAdapter(
+        max_retries=Retry(
+            total=3,
+            backoff_factor=0.6,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET",),
+            respect_retry_after_header=True,
+            raise_on_status=False,
+        )
+    ),
+)
 
 
 class YahooError(RuntimeError):
     pass
+
+
+def _throttle() -> None:
+    global _last
+    wait = THROTTLE_S - (time.monotonic() - _last)
+    if wait > 0:
+        time.sleep(wait)
+    _last = time.monotonic()
 
 
 def fetch_meta(symbol: str) -> dict:
@@ -41,11 +67,7 @@ def fetch_meta(symbol: str) -> dict:
 
 def fetch_daily(symbol: str, *, start_ts: int = 0, end_ts: int = 9999999999) -> list[dict]:
     """Returns [{ts:YYYY-MM-DD, open, high, low, close, volume}] ascending; null bars dropped."""
-    global _last
-    wait = THROTTLE_S - (time.monotonic() - _last)
-    if wait > 0:
-        time.sleep(wait)
-    _last = time.monotonic()
+    _throttle()
 
     r = requests.get(
         f"{BASE}/{symbol}",
@@ -88,14 +110,15 @@ def fetch_daily(symbol: str, *, start_ts: int = 0, end_ts: int = 9999999999) -> 
 
 def fetch_intraday(symbol: str, *, interval: str = "5m", range_: str = "1d") -> list[dict]:
     """Return completed intraday bars timestamped in UTC."""
-    r = requests.get(
+    _throttle()
+    r = SESSION.get(
         f"{BASE}/{symbol}",
         params={"interval": interval, "range": range_, "includePrePost": "true"},
         headers=UA,
         timeout=(10, 60),
     )
     if r.status_code != 200:
-        raise YahooError(f"yahoo {symbol}: HTTP {r.status_code} â€” {r.text[:120]}")
+        raise YahooError(f"yahoo {symbol}: HTTP {r.status_code} — {r.text[:120]}")
     result = r.json().get("chart", {}).get("result")
     if not result:
         raise YahooError(f"yahoo {symbol}: empty response")

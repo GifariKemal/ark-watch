@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import email.utils
 import urllib.request
-import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
+
+from defusedxml.ElementTree import fromstring
 
 FEEDS = {
     "FED": "https://www.federalreserve.gov/feeds/press_all.xml",
@@ -87,21 +88,14 @@ def fetch_rss_feed(source_name: str, url: str, timeout: int = 10) -> list[dict]:
 
     if data is None:
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                data = response.read()
-        except Exception:
-            return []
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            data = response.read()
 
     if not data:
         return []
 
-    try:
-        root = ET.fromstring(data)
-    except Exception:
-        return []
-
-    items = root.findall(".//item")
+    # defusedxml: third-party feeds must not get entity expansion / DTD tricks
+    items = fromstring(data).findall(".//item")
     out = []
     for it in items:
         title = (it.findtext("title") or "").strip()
@@ -132,12 +126,18 @@ def fetch_rss_feed(source_name: str, url: str, timeout: int = 10) -> list[dict]:
 
 
 def fetch_all_rss_feeds() -> list[dict]:
-    """Fetch all configured RSS news feeds (FED, YAHOO, CNBC)."""
-    out = []
+    """Fetch all configured RSS feeds; one dead feed degrades only itself.
+
+    Per-feed failures print a warning; if EVERY feed fails, raise so
+    market_news.run records a fetch_log ERROR for RSS_FEEDS (it used to log a
+    healthy-looking empty run)."""
+    out, errors = [], []
     for name, url in FEEDS.items():
         try:
-            items = fetch_rss_feed(name, url)
-            out.extend(items)
-        except Exception:
-            pass
+            out.extend(fetch_rss_feed(name, url))
+        except Exception as ex:
+            errors.append(f"{name}: {type(ex).__name__}: {str(ex)[:80]}")
+            print(f"  ⚠ RSS {errors[-1]}")
+    if errors and len(errors) == len(FEEDS):
+        raise RuntimeError("all RSS feeds failed: " + " | ".join(errors)[:400])
     return out

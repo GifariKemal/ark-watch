@@ -23,11 +23,10 @@ def fetch_cryptopanic_posts(limit: int = 50, timeout: int = 10) -> list[dict]:
 
     url = f"{API_URL}?auth_token={key}&public=true&filter=rising"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except Exception:
-        return []
+    # no swallow: errors propagate to market_news.run, which degrades this
+    # source alone and writes a redacted fetch_log ERROR (auth_token scrubbed)
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
 
     results = payload.get("results") or []
     out = []

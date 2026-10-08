@@ -26,10 +26,14 @@ def _get_fao_csv_url() -> str:
         if r.status_code == 200:
             m = re.search(r'href="([^"]+food_price_indices_data\.csv[^"]*)"', r.text)
             if m:
-                url = m.group(1).replace("&amp;", "&")
-                if not url.startswith("http"):
-                    url = f"https://www.fao.org{url}"
-                return url
+                from urllib.parse import urljoin, urlparse
+
+                url = urljoin(FAO_PAGE_URL, m.group(1).replace("&amp;", "&"))
+                # scraped href: only follow it to fao.org over https
+                u = urlparse(url)
+                host = u.hostname or ""
+                if u.scheme == "https" and (host == "fao.org" or host.endswith(".fao.org")):
+                    return url
     except Exception:
         pass
     return FAO_FALLBACK_URL

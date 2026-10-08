@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from urllib.error import URLError
 
+import pytest
+
 from arkwatch.fetchers import rss_news, tree_news
 
 
@@ -86,8 +88,11 @@ def test_network_errors_return_empty_gracefully(monkeypatch):
     except Exception:
         pass
 
-    assert rss_news.fetch_rss_feed("FED", "https://example.com") == []
-    assert rss_news.fetch_all_rss_feeds() == []
+    # RSS failures surface (market_news logs them to fetch_log and degrades)
+    with pytest.raises(URLError):
+        rss_news.fetch_rss_feed("FED", "https://example.com")
+    with pytest.raises(RuntimeError, match="all RSS feeds failed"):
+        rss_news.fetch_all_rss_feeds()
     assert tree_news.fetch_tree_news() == []
 
 

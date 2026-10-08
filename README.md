@@ -11,7 +11,7 @@ A personal US macro monitoring engine: automated daily data pipeline over 20+ fr
 ## Quickstart
 
 ```bash
-pip install -r requirements.lock
+uv sync --python 3.12   # locked, see uv.lock
 cp .env.example .env      # add your FRED / FMP / EODHD / Telegram keys
 python -m arkwatch daemon # runs the daily schedule
 ```
@@ -29,7 +29,7 @@ python -m arkwatch verify    # data truth gate
 ```
 arkwatch/    fetchers (data sources) · signals (computation) · qa (jobs) · senders · daemon
 config/      series registry + signal thresholds (all YAML, provenance-commented)
-tests/       440 offline tests — no network needed
+tests/       790 offline tests, zero warnings policy — no network needed
 fixtures/    captured API responses for parser tests
 ```
 

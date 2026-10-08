@@ -310,13 +310,15 @@ def compute_session_reference_levels(
         (sym,),
     ).fetchall()
     for r in rows_hist:
+        if r[3] is None or r[4] is None or r[5] is None:
+            continue
         b_hist = (
             r[1],
-            float(r[2] or r[5]),
+            float(r[2] if r[2] is not None else r[5]),
             float(r[3]),
             float(r[4]),
             float(r[5]),
-            float(r[6]),
+            float(r[6] if r[6] is not None else 0.0),
         )
         month_bars_dict[r[0]].append(b_hist)
         year_bars_dict[r[0][:4]].append(b_hist)

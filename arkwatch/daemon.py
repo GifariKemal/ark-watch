@@ -438,6 +438,9 @@ STATE_PATH = DATA_DIR / "daemon_state.json"
 # First boot on a brand-new volume would idle until the next scheduled slot:
 # run the data chain once, in dependency order (never `send`)
 BOOTSTRAP_MARKER = "bootstrapped"
+# set BEFORE the jobs run: an interrupted bootstrap (redeploy mid-run) must resume on the
+# next boot even though the half-filled DB no longer looks empty
+BOOTSTRAP_STARTED = "bootstrap_started"
 BOOTSTRAP_JOBS = (
     "harvest",
     "calendar",
@@ -454,11 +457,12 @@ BOOTSTRAP_JOBS = (
 
 
 def _bootstrap(state: dict[str, str]) -> None:
-    """Run BOOTSTRAP_JOBS once when the state has no marker AND raw_observations
-    is empty; set the persistent marker either way so it never re-runs. Jobs go
-    through _run_job (logging/heartbeat/timeouts); a failed job does not abort
-    the rest. SIGTERM unwinds as SystemExit between or inside jobs (_on_signal),
-    leaving the marker unset."""
+    """Run BOOTSTRAP_JOBS on a brand-new volume (no marker AND raw_observations empty),
+    or resume them when an earlier run was interrupted (BOOTSTRAP_STARTED set, marker
+    not: a redeploy mid-run leaves a half-filled DB that no longer looks empty). A
+    populated DB without markers is just marked done. Jobs go through _run_job
+    (logging/heartbeat/timeouts); a failed job does not abort the rest. SIGTERM unwinds
+    as SystemExit (_on_signal) and leaves the completion marker unset."""
     if BOOTSTRAP_MARKER in state:
         return
     import sqlite3
@@ -470,7 +474,9 @@ def _bootstrap(state: dict[str, str]) -> None:
     except sqlite3.Error as ex:
         logger.error(f"bootstrap probe failed: {ex}")
         return
-    if empty:
+    if empty or BOOTSTRAP_STARTED in state:
+        state[BOOTSTRAP_STARTED] = "1"
+        _save_state(state)
         logger.info(f"first boot: bootstrap {len(BOOTSTRAP_JOBS)} job(s)")
         for cmd in BOOTSTRAP_JOBS:
             _run_job(cmd, "first-boot bootstrap")
@@ -499,7 +505,7 @@ def _load_state(path: Path | None = None) -> dict[str, str]:
         return {
             k: v
             for k, v in raw.items()
-            if (k.endswith(f"@{today}") or k == BOOTSTRAP_MARKER) and v == "1"
+            if (k.endswith(f"@{today}") or k in (BOOTSTRAP_MARKER, BOOTSTRAP_STARTED)) and v == "1"
         }
     except Exception:
         return {}

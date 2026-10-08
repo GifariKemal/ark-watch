@@ -183,6 +183,34 @@ def test_bootstrap_skipped_when_db_has_data(boot):
     assert boot == []
 
 
+def test_interrupted_bootstrap_resumes_after_restart(boot, monkeypatch):
+    """Redeploy mid-bootstrap: harvest already wrote rows, the next boot must NOT treat
+    the half-filled DB as an existing one and mark bootstrap done without running it."""
+
+    def killed(cmd, desc):
+        c = db.get_conn(daemon.DB_PATH)
+        c.execute("PRAGMA foreign_keys=OFF")
+        c.execute(
+            "INSERT INTO raw_observations(series_id, ts, value, source, fetched_at) "
+            "VALUES ('FRED:X', '2026-10-08', 1.0, 'FRED', 'x')"
+        )
+        c.commit()
+        c.close()
+        raise SystemExit(143)  # SIGTERM path of _on_signal
+
+    monkeypatch.setattr(daemon, "_run_job", killed)
+    state: dict[str, str] = {}
+    with pytest.raises(SystemExit):
+        daemon._bootstrap(state)
+    assert "bootstrapped" not in json.loads(daemon.STATE_PATH.read_text())
+
+    ran: list[str] = []
+    monkeypatch.setattr(daemon, "_run_job", lambda cmd, desc: ran.append(cmd) or True)
+    daemon._bootstrap(daemon._load_state())  # new container, DB now non-empty
+    assert ran == list(daemon.BOOTSTRAP_JOBS)
+    assert json.loads(daemon.STATE_PATH.read_text())["bootstrapped"] == "1"
+
+
 # --- 5. sweep retries transient errors once ----------------------------------------
 
 

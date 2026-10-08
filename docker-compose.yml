@@ -43,6 +43,12 @@ services:
     mem_limit: 512m
     read_only: true
     tmpfs: ["/tmp"]
+    # shared bridge so Zonelab can reach http://arkwatch-api:8000 without a public
+    # domain; create once on the host: docker network create arkwatch-internal
+    networks:
+      default: {}
+      arkwatch-internal:
+        aliases: [arkwatch-api]
     depends_on:
       - daemon
     expose:
@@ -82,3 +88,8 @@ services:
 
 volumes:
   arkwatch-data:
+
+networks:
+  arkwatch-internal:
+    external: true
+    name: arkwatch-internal

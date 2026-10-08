@@ -35,6 +35,7 @@ from .amt import (
 )
 from .amt_horizons import compute_horizon_amt
 from .horizons import (
+    get_active_quarterly_cycles,
     get_monthly_quarter,
     get_session_window,
     get_weekly_quarter,
@@ -334,6 +335,7 @@ def compute_session_reference_levels(
     # Quarterly Theory Context
     w_quarter = get_weekly_quarter(target_d)
     m_quarter = get_monthly_quarter(target_d)
+    active_qt = get_active_quarterly_cycles(target_dt)
 
     return {
         "symbol": sym,
@@ -445,6 +447,11 @@ def compute_session_reference_levels(
             "session_value_migration": session_migration,
             "ipda_data_ranges": ipda_ranges,
             "quarterly_theory": {
+                "active_quarter": active_qt["active_quarter"],
+                "active_90m_sub_quarter": active_qt["active_90m_sub_quarter"],
+                "sub_quarter_role": active_qt["sub_quarter_role"],
+                "active_22m_micro_cycle": active_qt["active_22m_micro_cycle"],
+                "micro_cycle_role": active_qt["micro_cycle_role"],
                 "weekly_quarter": w_quarter,
                 "monthly_quarter": m_quarter,
             },

@@ -120,6 +120,74 @@ def subdivide_micro_22m(start_utc: datetime, end_utc: datetime) -> list[tuple[da
     ]
 
 
+def get_active_quarterly_cycles(now_utc: datetime) -> dict[str, Any]:
+    """Identify currently active 6h quarter, 90m sub-quarter, and 22.5m micro-cycle."""
+    target_d = now_utc.date()
+    q_bounds = get_quarterly_session_bounds(target_d)
+
+    # Check yesterday's bounds too in case Q1 Asia started yesterday
+    prev_d = target_d - timedelta(days=1)
+    prev_bounds = get_quarterly_session_bounds(prev_d)
+    all_bounds = {**prev_bounds, **q_bounds}
+
+    active_q = "Q1_ASIA"
+    active_q_bounds = None
+    for q_name, (qs, qe) in all_bounds.items():
+        if qs <= now_utc < qe:
+            active_q = q_name
+            active_q_bounds = (qs, qe)
+            break
+
+    if active_q_bounds is None:
+        qs, qe = q_bounds["Q3_NY_AM"]
+        active_q = "Q3_NY_AM"
+        active_q_bounds = (qs, qe)
+    else:
+        qs, qe = active_q_bounds
+
+    sub_quarters = subdivide_quarter_90m(qs, qe)
+    sub_idx = 0
+    active_sub_bounds = sub_quarters[0]
+    for idx, (ss, se) in enumerate(sub_quarters):
+        if ss <= now_utc < se:
+            sub_idx = idx
+            active_sub_bounds = (ss, se)
+            break
+
+    sub_roles = [
+        "ACCUMULATION_INITIAL_RANGE",
+        "MANIPULATION_LIQUIDITY_PROBE",
+        "DISTRIBUTION_EXPANSION_DRIVE",
+        "CLOSING_RANGE_TRANSITION",
+    ]
+
+    micro_cycles = subdivide_micro_22m(active_sub_bounds[0], active_sub_bounds[1])
+    micro_idx = 0
+    for idx, (ms, me) in enumerate(micro_cycles):
+        if ms <= now_utc < me:
+            micro_idx = idx
+            break
+
+    micro_roles = [
+        "MICRO_OPEN_DISCOVERY",
+        "MICRO_JUDAH_PIVOT",
+        "MICRO_CONTINUATION_RUN",
+        "MICRO_SETTLEMENT_RETEST",
+    ]
+
+    return {
+        "active_quarter": active_q,
+        "quarter_start_utc": qs.isoformat(timespec="seconds"),
+        "quarter_end_utc": qe.isoformat(timespec="seconds"),
+        "active_90m_sub_quarter": f"Sub-{sub_idx + 1}",
+        "sub_quarter_role": sub_roles[sub_idx],
+        "sub_quarter_start_utc": active_sub_bounds[0].isoformat(timespec="seconds"),
+        "sub_quarter_end_utc": active_sub_bounds[1].isoformat(timespec="seconds"),
+        "active_22m_micro_cycle": f"Micro-{micro_idx + 1}",
+        "micro_cycle_role": micro_roles[micro_idx],
+    }
+
+
 def get_weekly_quarter(target_date: date) -> dict[str, Any]:
     """Map day of week to Quarterly Theory Weekly Profile."""
     weekday = target_date.weekday()
@@ -174,6 +242,7 @@ def get_monthly_quarter(target_date: date) -> dict[str, Any]:
         "is_joker_week": True,
         "description": "Transition / Expansion Anomaly",
     }
+
 
 def get_ipda_ranges(target_dt: datetime) -> dict[str, datetime]:
     """Generate Interbank Price Delivery Algorithm (IPDA) lookback anchor timestamps."""

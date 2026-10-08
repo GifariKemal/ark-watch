@@ -1400,6 +1400,8 @@ def generate_trading_playbook(
             "multi_desk_initial_balance": ctx.get("multi_desk_initial_balance", {}),
             "overnight_cva": ctx.get("overnight_cva", {}),
             "multi_horizon_time_acceptance": ctx.get("multi_horizon_time_acceptance", {}),
+            "multi_horizon_open_types": ctx.get("multi_horizon_open_types", {}),
+            "multi_horizon_cva_map": ctx.get("multi_horizon_cva_map", {}),
             "ipda_data_ranges": ctx.get("ipda_data_ranges", {}),
             "quarterly_theory": ctx.get("quarterly_theory", {}),
             "tpo_analytics": {

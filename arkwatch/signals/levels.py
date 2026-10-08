@@ -281,9 +281,48 @@ def compute_session_reference_levels(
     # Pilar 4: Dynamic N-Day CVA (Contiguous Balance Expansion & 100% Measured Move)
     dynamic_cva = compute_dynamic_cva(session_bars, min_sessions=2, max_sessions=8)
 
-    # Pilar 5: Hierarchical Naked POCs (Session & Weekly Virgin POCs)
+    # Pilar 5: Fractal Hierarchical Naked POCs (Micro to Yearly)
+    # Tier 1: Intraday 90m Sub-Quarter Naked POCs (Lookback last 3 days)
+    sq_bars = defaultdict(list)
+    cutoff_90m = (target_dt - timedelta(days=3)).isoformat(timespec="seconds")
+    for r in rows:
+        if r[0] >= cutoff_90m:
+            b_epoch = int(datetime.fromisoformat(r[0]).astimezone(UTC).timestamp())
+            b_id = datetime.fromtimestamp((b_epoch // 5400) * 5400, tz=UTC).strftime(
+                "%Y-%m-%d %H:%M"
+            )
+            sq_bars[b_id].append(
+                (r[0], float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5]))
+            )
+    intraday_90m_npocs = find_naked_pocs(sq_bars, last_price, lookback_sessions=32)
+
+    # Tier 2: Session Naked POCs (25 sessions lookback)
     session_naked_pocs = find_naked_pocs(session_bars, last_price, lookback_sessions=25)
+
+    # Tier 3: Weekly Virgin POCs (8 weeks lookback)
     weekly_naked_pocs = find_naked_pocs(week_bars, last_price, lookback_sessions=8)
+
+    # Tier 4 & 5: Monthly and Yearly Virgin POCs (from instrument_prices)
+    month_bars_dict = defaultdict(list)
+    year_bars_dict = defaultdict(list)
+    rows_hist = conn.execute(
+        "SELECT strftime('%Y-%m', ts), ts, open, high, low, close, COALESCE(volume, 0.0) FROM instrument_prices WHERE symbol=? AND source IN ('YAHOO', 'EODHD') ORDER BY ts ASC",
+        (sym,),
+    ).fetchall()
+    for r in rows_hist:
+        b_hist = (
+            r[1],
+            float(r[2] or r[5]),
+            float(r[3]),
+            float(r[4]),
+            float(r[5]),
+            float(r[6]),
+        )
+        month_bars_dict[r[0]].append(b_hist)
+        year_bars_dict[r[0][:4]].append(b_hist)
+
+    monthly_naked_pocs = find_naked_pocs(month_bars_dict, last_price, lookback_sessions=12)
+    yearly_naked_pocs = find_naked_pocs(year_bars_dict, last_price, lookback_sessions=10)
     naked_pocs = session_naked_pocs
     # Multi-Horizon Session Profiles (Asia, London, Overlap)
     target_d = target_dt.date()
@@ -309,8 +348,9 @@ def compute_session_reference_levels(
     ny_s, ny_e = get_session_window("NY_REGULAR", target_d)
     ny_regular_prof = compute_horizon_amt(conn, sym, ny_s, min(ny_e, target_dt))
 
-    # Multi-Desk Initial Balance (Asia, London, and US Cash Open)
+    # Multi-Desk Initial Balance (Asia, Frankfurt, London, and US Cash Open)
     asia_ib = analyze_initial_balance(curr_bars, time(0, 0))
+    frankfurt_ib = analyze_initial_balance(curr_bars, time(6, 0))
     london_ib = analyze_initial_balance(curr_bars, time(7, 0))
     us_rth_ib = analyze_initial_balance(curr_bars, ib_open_time)
 
@@ -850,6 +890,20 @@ def compute_session_reference_levels(
             "dynamic_cva_days": dynamic_cva["composite_days_count"] if dynamic_cva else 1,
             "naked_pocs_count": naked_pocs["total_naked_pocs"],
             "hierarchical_naked_pocs": {
+                "intraday_90m_naked_pocs": {
+                    "total_naked_pocs": intraday_90m_npocs.get("total_naked_pocs", 0),
+                    "nearest_naked_poc_above": (
+                        intraday_90m_npocs["nearest_naked_poc_above"]
+                        if intraday_90m_npocs.get("nearest_naked_poc_above")
+                        else "NONE_IN_LOOKBACK (All-Time High / Blue Sky)"
+                    ),
+                    "nearest_naked_poc_below": (
+                        intraday_90m_npocs["nearest_naked_poc_below"]
+                        if intraday_90m_npocs.get("nearest_naked_poc_below")
+                        else "NONE_IN_LOOKBACK (All-Time Low)"
+                    ),
+                    "all_naked_pocs": intraday_90m_npocs.get("all_naked_pocs", []),
+                },
                 "session_naked_pocs": {
                     "total_naked_pocs": session_naked_pocs.get("total_naked_pocs", 0),
                     "nearest_naked_poc_above": (
@@ -878,11 +932,99 @@ def compute_session_reference_levels(
                     ),
                     "all_naked_pocs": weekly_naked_pocs.get("all_naked_pocs", []),
                 },
+                "monthly_virgin_pocs": {
+                    "total_naked_pocs": monthly_naked_pocs.get("total_naked_pocs", 0),
+                    "nearest_naked_poc_above": (
+                        monthly_naked_pocs["nearest_naked_poc_above"]
+                        if monthly_naked_pocs.get("nearest_naked_poc_above")
+                        else "NONE_IN_LOOKBACK (All-Time High / Blue Sky)"
+                    ),
+                    "nearest_naked_poc_below": (
+                        monthly_naked_pocs["nearest_naked_poc_below"]
+                        if monthly_naked_pocs.get("nearest_naked_poc_below")
+                        else "NONE_IN_LOOKBACK (All-Time Low)"
+                    ),
+                    "all_naked_pocs": monthly_naked_pocs.get("all_naked_pocs", []),
+                },
+                "yearly_virgin_pocs": {
+                    "total_naked_pocs": yearly_naked_pocs.get("total_naked_pocs", 0),
+                    "nearest_naked_poc_above": (
+                        yearly_naked_pocs["nearest_naked_poc_above"]
+                        if yearly_naked_pocs.get("nearest_naked_poc_above")
+                        else "NONE_IN_LOOKBACK (All-Time High / Blue Sky)"
+                    ),
+                    "nearest_naked_poc_below": (
+                        yearly_naked_pocs["nearest_naked_poc_below"]
+                        if yearly_naked_pocs.get("nearest_naked_poc_below")
+                        else "NONE_IN_LOOKBACK (All-Time Low)"
+                    ),
+                    "all_naked_pocs": yearly_naked_pocs.get("all_naked_pocs", []),
+                },
             },
             "multi_desk_initial_balance": {
                 "asia_open_ib": asia_ib,
+                "frankfurt_open_ib": frankfurt_ib,
                 "london_open_ib": london_ib,
                 "us_cash_open_ib": us_rth_ib,
+                "weekly_initial_balance_monday": {
+                    "ib_day": "Monday",
+                    "ib_high": weekly_days_profile.get("Monday", {}).get("high", "FORMING"),
+                    "ib_low": weekly_days_profile.get("Monday", {}).get("low", "FORMING"),
+                    "status": weekly_days_profile.get("Monday", {}).get("status", "FORMING"),
+                },
+                "monthly_initial_balance_week1": {
+                    "ib_period": "Week_1_Q1",
+                    "ib_poc": monthly_quarter_blocks.get("WEEK_1_Q1", {}).get(
+                        "composite_poc", "AWAITING"
+                    ),
+                    "status": monthly_quarter_blocks.get("WEEK_1_Q1", {}).get("status", "ACTIVE"),
+                },
+            },
+            "multi_horizon_open_types": {
+                "us_cash_open_type": open_type_info["open_type"],
+                "us_cash_conviction": open_type_info["conviction"],
+                "london_open_type": (
+                    classify_open_type(
+                        [
+                            b
+                            for b in curr_bars
+                            if datetime.fromisoformat(b[0]).astimezone(UTC).time() >= time(7, 0)
+                        ],
+                        pdh,
+                        pdl,
+                        va_profile["vah"],
+                        va_profile["val"],
+                        atr_proxy,
+                    )["open_type"]
+                    if len(
+                        [
+                            b
+                            for b in curr_bars
+                            if datetime.fromisoformat(b[0]).astimezone(UTC).time() >= time(7, 0)
+                        ]
+                    )
+                    >= 3
+                    else "AWAITING_SESSION"
+                ),
+                "weekly_open_type": (
+                    "OPEN_OUTSIDE_WEEKLY_VALUE"
+                    if last_price > (weekly_va.get("vah") or last_price)
+                    or last_price < (weekly_va.get("val") or last_price)
+                    else "OPEN_INSIDE_WEEKLY_VALUE"
+                ),
+            },
+            "multi_horizon_cva_map": {
+                "low_horizon_cvas": {"overnight_cva": overnight_cva},
+                "mid_horizon_cvas": {
+                    "midweek_72h_composite": midweek_72h_composite,
+                    "dynamic_n_day_cva": dynamic_cva,
+                },
+                "high_horizon_cvas": {
+                    "ipda_multi_day_cvas": ipda_ranges,
+                    "monthly_quarter_blocks": monthly_quarter_blocks,
+                    "prior_months_cva": prior_months_amt,
+                    "prior_yearly_quarters_cva": prior_yearly_quarters_amt,
+                },
             },
             "overnight_cva": overnight_cva,
             "multi_horizon_time_acceptance": {

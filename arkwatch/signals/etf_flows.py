@@ -89,18 +89,20 @@ def etf_flow_momentum(
             "unit": unit,
             "flow_5d": round(delta_5d, 2),
             "flow_20d": round(delta_20d, 2),
-            "flow_z": round(z, 2) if z is not None else None,
+            "flow_z": round(z, 2) if z is not None else 0.0,
             "state": state,
         }
 
     # BTC / ETH: rows are already daily net flow in $ millions
     sum_5d = sum(values[-5:])
-    sum_20d = sum(values[-min(20, len(values)):])
+    sum_20d = sum(values[-min(20, len(values)) :])
 
-    rolling_5d_sums = [
-        sum(values[max(0, i - 4) : i + 1]) for i in range(4, len(values))
-    ]
-    z = zscore(rolling_5d_sums, window=min(len(rolling_5d_sums), 60)) if len(rolling_5d_sums) >= 10 else None
+    rolling_5d_sums = [sum(values[max(0, i - 4) : i + 1]) for i in range(4, len(values))]
+    z = (
+        zscore(rolling_5d_sums, window=min(len(rolling_5d_sums), 60))
+        if len(rolling_5d_sums) >= 10
+        else None
+    )
 
     if sum_5d >= 300.0:
         state = "STRONG_INFLOW"
@@ -120,7 +122,7 @@ def etf_flow_momentum(
         "unit": unit,
         "cum_flow_5d_musd": round(sum_5d, 2),
         "cum_flow_20d_musd": round(sum_20d, 2),
-        "flow_z": round(z, 2) if z is not None else None,
+        "flow_z": round(z, 2) if z is not None else 0.0,
         "state": state,
     }
 

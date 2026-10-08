@@ -216,8 +216,8 @@ def soma_maturity_profile(conn: sqlite3.Connection) -> dict:
     # 'steepest' = the bucket QT is cutting deepest (most negative weekly
     # change). Named only when it is actually draining (min < 0): on a
     # flat/no-drain week min() would pick an arbitrary zero bucket
-    drain = min(buckets, key=lambda b: b["change_week"])
-    steepest = drain["name"] if drain["change_week"] < 0 else None
+    drain = min(buckets, key=lambda b: b["change_week"]) if buckets else None
+    steepest = drain["name"] if drain and drain["change_week"] < 0 else None
     return {
         "as_of_date": cur_d,
         "buckets": buckets,
@@ -316,8 +316,11 @@ def soma_ops_explainer(
     missing/empty (pre-v9 degrade) or no leg clears the share.
     """
     share = OPS_EXPLAIN_MIN_SHARE if min_share is None else min_share
-    if prev_as_of is None or as_of is None or not gross_b or not _table_exists(
-        conn, "fed_operations"
+    if (
+        prev_as_of is None
+        or as_of is None
+        or not gross_b
+        or not _table_exists(conn, "fed_operations")
     ):
         return None
     denom = abs(gross_b)
@@ -392,14 +395,10 @@ def soma_net_liquidity(conn: sqlite3.Connection) -> dict:
     if prev_as_of is not None and rows[0][1] is not None and rows[1][1] is not None:
         soma_change_b = (rows[0][1] - rows[1][1]) * PAR_TO_B
     gross_b = None if gross is None else gross * PAR_TO_B
-    matured_b = (
-        None if (gross_b is None or soma_change_b is None) else gross_b - soma_change_b
-    )
+    matured_b = None if (gross_b is None or soma_change_b is None) else gross_b - soma_change_b
 
     walcl_level, dwalcl_b = _anchored_delta(conn, WALCL_SERIES, as_of, prev_as_of, M_TO_B)
-    mbs_other_b = (
-        None if (dwalcl_b is None or soma_change_b is None) else dwalcl_b - soma_change_b
-    )
+    mbs_other_b = None if (dwalcl_b is None or soma_change_b is None) else dwalcl_b - soma_change_b
     # Net Liq v2 (migration v9): split the residual into the exact agency Δ
     # and the small leftover — None/None pre-v9 or on a misaligned agency grid.
     mbs_b, other_b = _agency_split(conn, as_of, prev_as_of, dwalcl_b, soma_change_b)
@@ -595,7 +594,11 @@ def store_soma_signals(conn: sqlite3.Connection) -> int:
         tips = profile.get("tips") or {}
         if tips.get("par") is not None:
             chg = tips.get("change")
-            state = "N/A" if chg is None else ("RISING" if chg > 0 else "FALLING" if chg < 0 else "FLAT")
+            state = (
+                "N/A"
+                if chg is None
+                else ("RISING" if chg > 0 else "FALLING" if chg < 0 else "FLAT")
+            )
             rows.append(
                 (
                     "soma_tips_split",
@@ -791,11 +794,11 @@ def soma_brief_line(conn: sqlite3.Connection) -> str | None:
     profile = soma_maturity_profile(conn)
     seg_parts = []
     if profile.get("steepest_bucket"):
-        steepest = next(
-            b for b in profile["buckets"] if b["name"] == profile["steepest_bucket"]
-        )
+        steepest = next(b for b in profile["buckets"] if b["name"] == profile["steepest_bucket"])
         if abs(steepest["change_week"]) >= SOMA_DISPLAY_FLOOR_B:
-            seg_parts.append(f"{steepest['name']} {_signed_b(steepest['change_week'])}/wk (steepest)")
+            seg_parts.append(
+                f"{steepest['name']} {_signed_b(steepest['change_week'])}/wk (steepest)"
+            )
     tips = profile.get("tips") or {}
     if tips.get("change") is not None and abs(tips["change"]) >= SOMA_DISPLAY_FLOOR_B:
         seg_parts.append(f"TIPS {_signed_b(tips['change'])}/wk")

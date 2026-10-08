@@ -189,11 +189,8 @@ def explore_signal(conn: sqlite3.Connection, signal_id: str, trace: bool = False
                     print(f"    {sid:<28} no realtime observations")
                     continue
                 current, previous, source, z, n_obs, window, ts, previous_ts = traced
-                delta = (
-                    "N/A"
-                    if previous is None
-                    else f"{current - previous:+,.4f} vs {previous_ts[:10]}"
-                )
+                prev_date = previous_ts[:10] if previous_ts else "N/A"
+                delta = "N/A" if previous is None else f"{current - previous:+,.4f} vs {prev_date}"
                 if window is None:
                     z_text = "N/A (irregular frequency)"
                 elif z is None:

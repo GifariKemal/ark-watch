@@ -95,7 +95,7 @@ def news_velocity(
 
     recent_n = len(recent_rows)
     # Weight count by macro relevance
-    weighted_n = sum(float(r[2]) for r in recent_rows) if recent_rows else 0.0
+    weighted_n = sum(float(r[2] or 0.0) for r in recent_rows) if recent_rows else 0.0
 
     baseline_hours = baseline_days * 24.0
     baseline_hourly = base_count / baseline_hours if baseline_hours > 0 else 0.1

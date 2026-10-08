@@ -76,7 +76,11 @@ def recession_snapshot(conn: sqlite3.Connection) -> dict:
     out["model_pct"] = None if m is None or _age(m[0]) > _STALE_DAYS["M"] else m[1]
     out["model_ts"] = None if m is None else m[0]
     a = _latest(conn, ANXIOUS)
-    a_eff = None if a is None else (date.fromisoformat(a[0]) - timedelta(days=ANXIOUS_FORECAST_LEAD_DAYS)).isoformat()
+    a_eff = (
+        None
+        if a is None
+        else (date.fromisoformat(a[0]) - timedelta(days=ANXIOUS_FORECAST_LEAD_DAYS)).isoformat()
+    )
     out["anxious_pct"] = None if a is None or _age(a_eff) > ANXIOUS_STALE_DAYS else a[1]
     out["anxious_ts"] = None if a is None else a[0]
     s = _latest(conn, SAHM)
@@ -106,11 +110,8 @@ def store_recession_signals(conn: sqlite3.Connection) -> int:
     if all(snap[k] is None for k in ("model_pct", "anxious_pct", "sahm")):
         return 0
     ts = snap["effective_ts"]
-    # ROUND-5: an effective_ts in the FUTURE (a leg's quarter label/forecast
-    # horizon mislabeled as effective) would shadow the live row as 'latest'
-    # in every MAX(ts) reader (live: a 2026-10-01 ghost from pre-fix code)
-    if ts > datetime.now(UTC).date().isoformat():
-        print(f"  ⚠ recession_triangulation: effective_ts {ts} is in the future — skipped")
+    if not ts or ts > datetime.now(UTC).date().isoformat():
+        print(f"  ⚠ recession_triangulation: effective_ts {ts} is None or in the future — skipped")
         return 0
     # state: how many of the three independent gauges are elevated
     elevated = 0

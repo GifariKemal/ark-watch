@@ -13,6 +13,7 @@ GBPUSD leg prefers EODHD and falls back to Yahoo.
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 
 SQL_CROSS = """
@@ -31,9 +32,7 @@ LIMIT 1
 def _compute_cross(conn: sqlite3.Connection, metal: str) -> dict:
     row = conn.execute(SQL_CROSS, (metal,)).fetchone()
     if row is None:
-        raise LookupError(
-            f"{metal}GBP: no same-date {metal} + GBPUSD pair in instrument_prices"
-        )
+        raise LookupError(f"{metal}GBP: no same-date {metal} + GBPUSD pair in instrument_prices")
     return {"ts": row[0], "value": float(row[1])}
 
 
@@ -49,7 +48,9 @@ def compute_xaugbp(conn: sqlite3.Connection) -> dict:
 
 def compute_all_synthetic(conn: sqlite3.Connection) -> dict:
     """Both crosses at once → {'XAGGBP': {ts, value}, 'XAUGBP': {ts, value}}."""
-    return {
-        "XAGGBP": compute_xaggbp(conn),
-        "XAUGBP": compute_xaugbp(conn),
-    }
+    out = {}
+    for metal in ("XAGUSD", "XAUUSD"):
+        sym = f"{metal[:3]}GBP"
+        with contextlib.suppress(LookupError):
+            out[sym] = _compute_cross(conn, metal)
+    return out

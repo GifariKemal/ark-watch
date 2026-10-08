@@ -47,7 +47,9 @@ def sync_registry(conn) -> int:
                 e["freq"],
                 e.get("ts_convention"),
                 e.get("release_schedule"),
-                e.get("expected_start"),
+                str(e["expected_start"])
+                if e.get("expected_start") is not None
+                else None,  # YAML date -> ISO text
                 e.get("sanity_min"),
                 e.get("sanity_max"),
                 e["primary_source"],

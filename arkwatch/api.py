@@ -342,7 +342,9 @@ def get_trading_playbook(
     """Retrieve actionable if-then trading playbook with target profits and invalidation levels."""
     from .signals.playbook import generate_trading_playbook
 
-    with _get_connection(conn, db_path) as c:
+    # generation records scenarios and evaluates trackers, so it needs a writer
+    # (the HTTP server never calls this; it serves stored scenarios read-only)
+    with _get_connection(conn, db_path, write=True) as c:
         return generate_trading_playbook(c, symbol, as_of=as_of, cfd_basis_offset=cfd_basis_offset)
 
 
@@ -369,7 +371,7 @@ def scan_opportunities(
     """Continuous Opportunity Scanner: Scans the tracked book and returns active/imminent trade opportunities."""
     from .signals.playbook_tracker import scan_market_opportunities
 
-    with _get_connection(conn, db_path) as c:
+    with _get_connection(conn, db_path, write=True) as c:  # scanning records + evaluates
         return scan_market_opportunities(c, symbols=symbols, as_of=as_of, min_rr=min_rr)
 
 

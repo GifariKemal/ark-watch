@@ -14,6 +14,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..fetchers.nlp import _call, _config, _extract_json
+from .asof import parse_as_of
+
+# |net score| at which a radar is labelled BULLISH/BEARISH; playbook.py triggers on the same value
+STANCE_THRESHOLD = 0.20
+# Pseudo-weight of a neutral (0) prior. A plain weighted mean divides the decay back out, so a
+# single stale article kept its full score; shrinkage lets total evidence weight set conviction.
+PRIOR_WEIGHT = 0.5
 
 TRACKED_ASSETS = (
     "NQ1",  # Nasdaq 100 / Tech
@@ -105,6 +112,16 @@ def _normalize_asset(ticker: str) -> str | None:
     if t in TRACKED_ASSETS:
         return t
     return ASSET_ALIASES.get(t)
+
+
+def _net_stance(weighted_score: float, total_weight: float) -> tuple[float, str]:
+    """Weighted mean shrunk toward 0 by PRIOR_WEIGHT, clamped, plus its stance label."""
+    net = max(-1.0, min(1.0, round(weighted_score / (total_weight + PRIOR_WEIGHT), 3)))
+    if net >= STANCE_THRESHOLD:
+        return net, "BULLISH"
+    if net <= -STANCE_THRESHOLD:
+        return net, "BEARISH"
+    return net, "NEUTRAL"
 
 
 def extract_news_intelligence(
@@ -247,12 +264,7 @@ def compute_asset_sentiment_radar(
     if not norm_asset:
         raise ValueError(f"Unknown asset '{asset}', must be one of {TRACKED_ASSETS}")
 
-    if as_of is None:
-        target_dt = datetime.now(UTC)
-    elif isinstance(as_of, str):
-        target_dt = datetime.fromisoformat(as_of).astimezone(UTC)
-    else:
-        target_dt = as_of.astimezone(UTC)
+    target_dt = parse_as_of(as_of)
 
     since_dt = target_dt - timedelta(days=window_days)
     since_str = since_dt.isoformat(timespec="seconds")
@@ -355,15 +367,7 @@ def compute_asset_sentiment_radar(
                 }
             )
 
-    net_score = total_weighted_score / total_weights if total_weights > 0 else 0.0
-    net_score = max(-1.0, min(1.0, round(net_score, 3)))
-
-    if net_score >= 0.20:
-        overall_stance = "BULLISH"
-    elif net_score <= -0.20:
-        overall_stance = "BEARISH"
-    else:
-        overall_stance = "NEUTRAL"
+    net_score, overall_stance = _net_stance(total_weighted_score, total_weights)
 
     # Normalize catalyst shares
     sum_cat = sum(catalyst_weights.values()) or 1.0
@@ -403,12 +407,7 @@ def compute_intraday_catalyst_radar(
     if not norm_asset:
         raise ValueError(f"Unknown asset '{asset}', must be one of {TRACKED_ASSETS}")
 
-    if as_of is None:
-        target_dt = datetime.now(UTC)
-    elif isinstance(as_of, str):
-        target_dt = datetime.fromisoformat(as_of).astimezone(UTC)
-    else:
-        target_dt = as_of.astimezone(UTC)
+    target_dt = parse_as_of(as_of)
 
     since_dt = target_dt - timedelta(hours=window_hours)
     since_str = since_dt.isoformat(timespec="seconds")
@@ -506,15 +505,7 @@ def compute_intraday_catalyst_radar(
                 }
             )
 
-    net_score = total_weighted_score / total_weights if total_weights > 0 else 0.0
-    net_score = max(-1.0, min(1.0, round(net_score, 3)))
-
-    if net_score >= 0.20:
-        overall_stance = "BULLISH"
-    elif net_score <= -0.20:
-        overall_stance = "BEARISH"
-    else:
-        overall_stance = "NEUTRAL"
+    net_score, overall_stance = _net_stance(total_weighted_score, total_weights)
 
     sum_cat = sum(catalyst_weights.values()) or 1.0
     sorted_catalysts = {

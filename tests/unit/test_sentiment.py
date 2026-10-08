@@ -226,3 +226,29 @@ def test_api_sentiment_integration(tmp_path):
     assert radar["asset"] == "CL1"
     assert radar["stance"] == "BULLISH"
     assert radar["catalysts"].get("SUPPLY_SHOCK", 0) > 0.5
+
+
+def test_single_stale_article_is_shrunk_toward_neutral(tmp_path):
+    """Normalising by total weight cancels the decay: one 3.9h-old article used to keep its
+    full score. Shrinkage toward 0 (prior pseudo-weight) lets decay reduce conviction."""
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    t_old = (now - timedelta(hours=3.9)).isoformat(timespec="seconds")
+    conn.execute(
+        "INSERT INTO market_news (news_id, source, title, url, summary, symbols_json, cluster_id,"
+        " relevance, novelty, fetched_at, published_at_utc) VALUES ('o', 'RSS_FED', 't', 'u', 's',"
+        " '[]', 'c', 1.0, 1.0, ?, ?)",
+        (t_old, t_old),
+    )
+    conn.execute(
+        "INSERT INTO news_intelligence (news_id, asset, stance, magnitude, confidence,"
+        " macro_channel, impact_horizon, evidence_level, evidence_quote, transmission_rationale,"
+        " created_at, published_at_utc) VALUES ('o', 'NQ1', 'BULLISH', 1.0, 1.0, 'RATES_POLICY',"
+        " 'INTRADAY_VOLATILITY', 'OBSERVED', 'q', 'r', ?, ?)",
+        (t_old, t_old),
+    )
+    conn.commit()
+
+    radar = sentiment.compute_intraday_catalyst_radar(conn, "NQ1", window_hours=4, as_of=now)
+    assert 0.0 < radar["net_stance_score"] < sentiment.STANCE_THRESHOLD
+    assert radar["stance"] == "NEUTRAL"

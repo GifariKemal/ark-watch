@@ -2,18 +2,189 @@
 
 Tracks trading scenarios from generation through resolution:
   - PENDING_TRIGGER -> Waiting for price action to confirm trigger condition
-  - ACTIVE -> Trigger condition verified; tracks real-time MFE (Max Favorable Excursion) and MAE (Max Adverse Excursion)
-  - HIT_TARGET_WIN -> Price reached target profit
-  - HIT_STOP_LOSS -> Price reached invalidation stop
-  - CANCELLED_EXPIRED -> Session ended without trigger condition materializing
+  - ACTIVE -> Trigger condition verified; tracks MFE (Max Favorable Excursion) and MAE (Max
+    Adverse Excursion), always rescanned from the activation bar
+  - resolved -> the precise outcome lives in payload_json["outcome"]:
+      trades (entry filled): HIT_TARGET_WIN, HIT_STOP_LOSS, HIT_BREAKEVEN, EARLY_FULL_TP,
+                             FLIPPED, TIME_EXIT (session expiry, exit at last bar close)
+      non-trades:            NO_TRIGGER (session expired), INVALIDATED_PRE_ENTRY, SUPERSEDED,
+                             MISSED_ENTRY (fill gapped beyond target)
+
+The `state` column keeps the coarse legacy label because the db.py CHECK constraint only allows
+PENDING_TRIGGER / ACTIVE / HIT_TARGET_WIN / HIT_STOP_LOSS / CANCELLED_EXPIRED.
+
+Fill model on OHLC bars (conservative): entry fills at max(trigger, open) for LONG (min for
+SHORT); on the activation bar only the adverse extreme counts; a gap through a stop fills at the
+open; a stop touched in the same bar as the target or the +1R ratchet wins.
+
+All levels are stored in the symbol's own bar price space; `cfd_basis_offset` is kept only as a
+reference column (CFD price = stored level + offset).
 """
 
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from collections import Counter
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
+
+from .asof import parse_as_of
+
+NEWS_SHOCK_THRESHOLD = 0.30  # |intraday catalyst score| that triggers the defensive stop
+SWING_EXPIRY_DAYS = 7  # ponytail: calendar days; switch to exchange sessions if swing grows
+_ET = ZoneInfo("America/New_York")
+_SESSION_CLOSE_ET = time(17, 0)  # CME Globex session close
+_OPEN = ("PENDING_TRIGGER", "ACTIVE")
+
+
+def _expiry(horizon: str, session_id: str) -> datetime | None:
+    """Session close (17:00 ET on the session date); SWING gets SWING_EXPIRY_DAYS more."""
+    try:
+        d = date.fromisoformat(session_id[:10])
+    except ValueError:
+        return None
+    close = datetime.combine(d, _SESSION_CLOSE_ET, tzinfo=_ET).astimezone(UTC)
+    return close + timedelta(days=SWING_EXPIRY_DAYS) if horizon == "SWING" else close
+
+
+def _update(conn: sqlite3.Connection, uid: str, event: str | None, ts: str, details: str, **cols):
+    """Append a decision-log event and update columns. `outcome=` resolves the scenario."""
+    row = conn.execute(
+        "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+    ).fetchone()
+    try:
+        p = json.loads(row[0]) if row and row[0] else {}
+    except ValueError:
+        p = {}
+    if event:
+        p.setdefault("decision_log", []).append({"ts_utc": ts, "event": event, "details": details})
+    outcome = cols.pop("outcome", None)
+    if outcome:
+        p["outcome"] = outcome
+        cols["state"] = (
+            outcome if outcome in ("HIT_TARGET_WIN", "HIT_STOP_LOSS") else ("CANCELLED_EXPIRED")
+        )
+        cols["resolved_at_utc"] = ts
+    cols["payload_json"] = json.dumps(p)
+    # column names are internal literals, never user input
+    sets = ", ".join(f"{k} = ?" for k in cols)
+    conn.execute(
+        f"UPDATE playbook_scenarios SET {sets} WHERE scenario_uid = ?", (*cols.values(), uid)
+    )
+
+
+def _log_events(conn: sqlite3.Connection, uid: str) -> list[dict]:
+    row = conn.execute(
+        "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+    ).fetchone()
+    try:
+        return json.loads(row[0]).get("decision_log", []) if row and row[0] else []
+    except ValueError:
+        return []
+
+
+def _bars(conn: sqlite3.Connection, sym: str, start: str, end: str) -> list[tuple]:
+    return conn.execute(
+        """
+        SELECT bar_ts_utc, open, high, low, close, COALESCE(volume, 0.0)
+        FROM intraday_bars
+        WHERE symbol = ? AND bar_ts_utc >= ? AND bar_ts_utc <= ?
+        ORDER BY bar_ts_utc ASC
+        """,
+        (sym, start, end),
+    ).fetchall()
+
+
+def _simulate(
+    direction: str,
+    entry: float,
+    stop: float,
+    target: float,
+    bars: list[tuple],
+    shock_ts: str | None = None,
+) -> dict[str, Any]:
+    """Walk bars from the activation bar (bars[0]). Pure function, so rescans are idempotent."""
+    sign = 1.0 if direction == "LONG" else -1.0
+    risk = abs(entry - stop) or 1.0
+    res: dict[str, Any] = {"outcome": None, "exit": None, "ts": None, "mfe": 0.0, "mae": 0.0}
+    res["partial_ts"] = None
+    be = shocked = False
+    cur_stop = stop
+    pv = vol = 0.0
+    vwap_losses = 0
+    for i, (ts, o, h, lo, c, v) in enumerate(bars):
+        fav, adv = (h, lo) if sign > 0 else (lo, h)
+        if i == 0:
+            o = fav = entry  # activation bar: its favourable extreme may precede the fill
+        if shock_ts and ts > shock_ts and not shocked:
+            # adverse news known at shock_ts: lock breakeven if in profit, else halve the risk
+            shocked = True
+            if res["mfe"] > 0:
+                be = True
+            else:
+                cur_stop = entry - sign * 0.5 * risk
+        eff_stop = entry if be else cur_stop
+        res["mfe"] = max(res["mfe"], sign * (fav - entry))
+        res["mae"] = max(res["mae"], sign * (entry - adv))
+        res["last_close"], res["last_ts"] = c, ts
+        # stop first: a stop touched in the same bar as target / ratchet wins
+        if sign * (adv - eff_stop) <= 0:
+            fill = o if sign * (o - eff_stop) < 0 else eff_stop  # gap through stop -> open
+            res.update(outcome="HIT_BREAKEVEN" if be else "HIT_STOP_LOSS", exit=fill, ts=ts)
+            break
+        if res["partial_ts"] is None and res["mfe"] >= risk:
+            res["partial_ts"] = ts
+            be = True  # breakeven ratchet protects from the next bar on
+        if sign * (fav - target) >= 0:
+            res.update(outcome="HIT_TARGET_WIN", exit=target, ts=ts)
+            break
+        w = max(1.0, float(v or 0.0))
+        pv += (h + lo + c) / 3.0 * w
+        vol += w
+        # early full exit on two consecutive closes through the anchored VWAP after the partial
+        if res["partial_ts"] and sign * (c - pv / vol) < 0:
+            vwap_losses += 1
+            if vwap_losses >= 2 and sign * (c - entry) > 0:
+                res.update(outcome="EARLY_FULL_TP", exit=c, ts=ts)
+                break
+        else:
+            vwap_losses = 0
+    return res
+
+
+def _pnl(direction: str, entry: float, exit_p: float, risk: float, partial: bool) -> float:
+    """Points PnL of one unit; a partial means half was banked at +1R."""
+    raw = (exit_p - entry) if direction == "LONG" else (entry - exit_p)
+    return 0.5 * risk + 0.5 * raw if partial else raw
+
+
+def _close_trade(conn, uid, outcome, sim, direction, entry, stop, exit_p, ts, stats, note=""):
+    """Resolve a filled scenario; R is measured against the risk at the fill (original stop)."""
+    risk = abs(entry - stop) or 1.0
+    pnl = _pnl(direction, entry, exit_p, risk, bool(sim["partial_ts"]))
+    r = round(pnl / risk, 2)
+    _update(
+        conn,
+        uid,
+        outcome,
+        ts,
+        f"{note}Exit at {exit_p}. Net PnL: {round(pnl, 2)} pts ({r}R). "
+        f"MFE: +{round(sim['mfe'], 2)}, MAE: -{round(sim['mae'], 2)}",
+        outcome=outcome,
+        exit_price=exit_p,
+        pnl_points=round(pnl, 2),
+        r_multiple=r,
+        mfe_points=round(sim["mfe"], 2),
+        mae_points=round(sim["mae"], 2),
+    )
+    stats["resolved_wins" if r > 0 else "resolved_losses" if r < 0 else "resolved_breakeven"] += 1
+
+
+def _shock_ts(events: list[dict]) -> str | None:
+    return next((e["ts_utc"] for e in events if e.get("event") == "NEWS_SHOCK"), None)
 
 
 def record_playbook_scenarios(
@@ -22,7 +193,8 @@ def record_playbook_scenarios(
     *,
     cfd_basis_offset: float = 0.0,
 ) -> list[str]:
-    """Extract and persist all generated scenarios into playbook_scenarios table."""
+    """Persist generated scenarios. Levels must be in bar price space (the tracker compares them
+    with the symbol's own bars); the offset is only stored for reference."""
     symbol = playbook_payload["symbol"]
     now_utc = playbook_payload.get("as_of", datetime.now(UTC).isoformat(timespec="seconds"))
     session_id = playbook_payload.get("reference_levels", {}).get(
@@ -39,14 +211,11 @@ def record_playbook_scenarios(
         if direction not in ("LONG", "SHORT", "NEUTRAL_RANGE"):
             direction = "NEUTRAL_RANGE"
 
-        target_p = float(sc["target_profit"]) + cfd_basis_offset
-        inval_p = float(sc["invalidation_level"]) + cfd_basis_offset
+        target_p = float(sc["target_profit"])
+        inval_p = float(sc["invalidation_level"])
         rr = float(sc.get("risk_reward_ratio", 1.0))
         trigger_cond = sc["trigger_condition"]
-        trigger_price = (
-            float(sc.get("trigger_price", playbook_payload.get("last_price", 0.0)))
-            + cfd_basis_offset
-        )
+        trigger_price = float(sc.get("trigger_price", playbook_payload.get("last_price", 0.0)))
 
         scenario_uid = f"{symbol}-{session_id}-{horizon}-{sc_id}"
 
@@ -112,519 +281,250 @@ def evaluate_active_playbooks(
     *,
     as_of: datetime | str | None = None,
 ) -> dict[str, int]:
-    """Advance the state machine for all open scenarios using subsequent 1m/5m bars."""
-    if as_of is None:
-        target_dt = datetime.now(UTC)
-    elif isinstance(as_of, str):
-        target_dt = datetime.fromisoformat(as_of).astimezone(UTC)
-    else:
-        target_dt = as_of.astimezone(UTC)
-
+    """Advance the state machine for all open scenarios using bars up to `as_of`."""
+    target_dt = parse_as_of(as_of)
     target_ts = target_dt.isoformat(timespec="seconds")
-
-    pending_or_active = conn.execute(
+    stats = dict.fromkeys(
+        (
+            "evaluated",
+            "activated",
+            "resolved_wins",
+            "resolved_losses",
+            "resolved_breakeven",
+            "resolved_invalidated",
+        ),
+        0,
+    )
+    # ponytail: rows are processed in creation order; two opposite scenarios triggering in the
+    # same evaluation window are not interleaved bar by bar.
+    rows = conn.execute(
         """
-        SELECT scenario_uid, symbol, horizon, direction, scenario_id,
-               trigger_price, target_profit, invalidation_level, risk_reward_ratio,
-               created_at_utc, state, entry_price, mfe_points, mae_points, session_id
+        SELECT scenario_uid, symbol, horizon, direction, trigger_price, target_profit,
+               invalidation_level, created_at_utc, session_id
         FROM playbook_scenarios
         WHERE state IN ('PENDING_TRIGGER', 'ACTIVE')
+        ORDER BY created_at_utc, rowid
         """
     ).fetchall()
+    stats["evaluated"] = len(rows)
 
-    if not pending_or_active:
-        return {
-            "evaluated": 0,
-            "activated": 0,
-            "resolved_wins": 0,
-            "resolved_losses": 0,
-            "resolved_breakeven": 0,
-            "resolved_invalidated": 0,
-        }
-
-    stats = {
-        "evaluated": len(pending_or_active),
-        "activated": 0,
-        "resolved_wins": 0,
-        "resolved_losses": 0,
-        "resolved_breakeven": 0,
-        "resolved_invalidated": 0,
-    }
-    for row in pending_or_active:
-        (
-            uid,
-            sym,
-            horizon,
-            direction,
-            sc_id,
-            trig_p,
-            target_p,
-            inval_p,
-            rr,
-            created_at,
-            state,
-            entry_p,
-            mfe,
-            mae,
-            sc_sess_id,
-        ) = row
-
-        # Check fresh state from DB in case an earlier iteration in this batch cancelled it
-        cur_db_state = conn.execute(
-            "SELECT state, entry_price FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+    for uid, sym, horizon, direction, trig_p, target_p, stop_p, created_at, sess_id in rows:
+        # fresh state: an earlier iteration in this batch may have resolved or activated it
+        cur = conn.execute(
+            "SELECT state, entry_price, triggered_at_utc FROM playbook_scenarios"
+            " WHERE scenario_uid = ?",
+            (uid,),
         ).fetchone()
-        if not cur_db_state or cur_db_state[0] not in ("PENDING_TRIGGER", "ACTIVE"):
+        if not cur or cur[0] not in _OPEN:
             continue
-        state = cur_db_state[0]
-        if cur_db_state[1] is not None:
-            entry_p = cur_db_state[1]
-
-        # Fetch subsequent bars since creation
-        bars = conn.execute(
-            """
-            SELECT bar_ts_utc, open, high, low, close, COALESCE(volume, 0.0)
-            FROM intraday_bars
-            WHERE symbol = ?
-              AND bar_ts_utc >= ?
-              AND bar_ts_utc <= ?
-            ORDER BY bar_ts_utc ASC
-            """,
-            (sym, created_at, target_ts),
-        ).fetchall()
-
-        if not bars:
-            continue
+        state, entry_p, triggered_at = cur
+        expiry = _expiry(horizon, sess_id)
+        expired = expiry is not None and target_dt >= expiry
+        end_ts = expiry.isoformat(timespec="seconds") if expired else target_ts
+        sign = 1.0 if direction == "LONG" else -1.0
 
         if state == "PENDING_TRIGGER":
-            activated = False
-            invalidated = False
-            activation_bar = None
-            inval_bar = None
-            for b in bars:
-                b_high = b[2]
-                b_low = b[3]
-                b_close = b[4]
-                if direction == "LONG":
-                    if b_low <= inval_p:
-                        invalidated = True
-                        inval_bar = b
-                        break
-                    if b_close >= trig_p or b_high >= trig_p:
-                        activated = True
-                        activation_bar = b
-                        break
-                elif direction == "SHORT":
-                    if b_high >= inval_p:
-                        invalidated = True
-                        inval_bar = b
-                        break
-                    if b_close <= trig_p or b_low <= trig_p:
-                        activated = True
-                        activation_bar = b
-                        break
+            act_bar = None
+            for b in _bars(conn, sym, created_at, end_ts) if direction in ("LONG", "SHORT") else []:
+                o, fav, adv = b[1], (b[2] if sign > 0 else b[3]), (b[3] if sign > 0 else b[2])
+                trig_hit = sign * (fav - trig_p) >= 0
+                stop_hit = sign * (adv - stop_p) <= 0
+                if stop_hit and (not trig_hit or sign * (o - stop_p) <= 0):
+                    _update(
+                        conn,
+                        uid,
+                        "INVALIDATED_PRE_ENTRY",
+                        b[0],
+                        f"Price breached invalidation {stop_p} on bar {b[0]} before trigger {trig_p}",
+                        outcome="INVALIDATED_PRE_ENTRY",
+                    )
+                    stats["resolved_invalidated"] += 1
+                    break
+                if trig_hit:
+                    act_bar = b
+                    break
+            else:
+                if expired:
+                    _update(
+                        conn,
+                        uid,
+                        "NO_TRIGGER",
+                        end_ts,
+                        "Session expired before the trigger",
+                        outcome="NO_TRIGGER",
+                    )
+                    stats["resolved_invalidated"] += 1
+            if act_bar is None:
+                continue
 
-            if invalidated and inval_bar:
-                inval_time = inval_bar[0]
-                cur_payload_row = conn.execute(
-                    "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
-                ).fetchone()
-                try:
-                    cur_p = json.loads(cur_payload_row[0]) if cur_payload_row else {}
-                except Exception:
-                    cur_p = {}
-                cur_p.setdefault("decision_log", []).append(
-                    {
-                        "ts_utc": inval_time,
-                        "event": "INVALIDATED_BEFORE_TRIGGER",
-                        "details": f"Price breached invalidation level {inval_p} on bar {inval_time} before trigger {trig_p}",
-                    }
-                )
-                conn.execute(
-                    """
-                    UPDATE playbook_scenarios
-                    SET state = 'CANCELLED_EXPIRED', resolved_at_utc = ?, payload_json = ?
-                    WHERE scenario_uid = ?
-                    """,
-                    (inval_time, json.dumps(cur_p), uid),
+            trig_time = act_bar[0]
+            entry_p = max(trig_p, act_bar[1]) if sign > 0 else min(trig_p, act_bar[1])
+            if sign * (target_p - entry_p) <= 0:
+                _update(
+                    conn,
+                    uid,
+                    "MISSED_ENTRY",
+                    trig_time,
+                    f"Fill {entry_p} already beyond target {target_p} (gap)",
+                    outcome="MISSED_ENTRY",
                 )
                 stats["resolved_invalidated"] += 1
                 continue
-
-            if activated and activation_bar:
-                # Option 1: Trigger Fill at intended trigger price
-                entry_price = trig_p if trig_p is not None else activation_bar[4]
-                trig_time = activation_bar[0]
-                target_already_passed = (direction == "LONG" and target_p <= entry_price) or (
-                    direction == "SHORT" and target_p >= entry_price
-                )
-                if target_already_passed:
-                    cur_payload_row = conn.execute(
-                        "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
-                    ).fetchone()
-                    try:
-                        cur_p = json.loads(cur_payload_row[0]) if cur_payload_row else {}
-                    except Exception:
-                        cur_p = {}
-                    cur_p.setdefault("decision_log", []).append(
-                        {
-                            "ts_utc": trig_time,
-                            "event": "CANCELLED_EXPIRED",
-                            "details": f"Target price {target_p} was already surpassed upon trigger at {entry_price} (missed fill/slippage)",
-                        }
-                    )
-                    conn.execute(
-                        """
-                        UPDATE playbook_scenarios
-                        SET state = 'CANCELLED_EXPIRED', resolved_at_utc = ?, payload_json = ?
-                        WHERE scenario_uid = ?
-                        """,
-                        (trig_time, json.dumps(cur_p), uid),
-                    )
-                    stats["resolved_invalidated"] += 1
-                    continue
-                cur_payload_row = conn.execute(
-                    "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
-                ).fetchone()
-                try:
-                    cur_p = json.loads(cur_payload_row[0]) if cur_payload_row else {}
-                except Exception:
-                    cur_p = {}
-                cur_p.setdefault("decision_log", []).append(
-                    {
-                        "ts_utc": trig_time,
-                        "event": "TRIGGERED_ACTIVE",
-                        "details": f"Trigger met at price {entry_price} on bar {trig_time}",
-                    }
-                )
-
-                conn.execute(
-                    """
-                    UPDATE playbook_scenarios
-                    SET state = 'ACTIVE', triggered_at_utc = ?, entry_price = ?,
-                        mfe_points = 0.0, mae_points = 0.0, payload_json = ?
-                    WHERE scenario_uid = ?
-                    """,
-                    (trig_time, entry_price, json.dumps(cur_p), uid),
-                )
-
-                # 1. Close any existing ACTIVE opposing scenarios immediately (Reversal Exit Flip)
-                active_opposing = conn.execute(
-                    """
-                    SELECT scenario_uid, direction, entry_price, invalidation_level, payload_json, mfe_points, mae_points
-                    FROM playbook_scenarios
-                    WHERE symbol = ? AND session_id = ? AND horizon = ?
-                      AND state = 'ACTIVE' AND scenario_uid != ? AND direction != ?
-                    """,
-                    (sym, sc_sess_id, horizon, uid, direction),
-                ).fetchall()
-                for (
-                    opp_uid,
-                    opp_dir,
-                    opp_entry,
-                    opp_inval,
-                    opp_payload_str,
-                    _opp_mfe,
-                    _opp_mae,
-                ) in active_opposing:
-                    try:
-                        opp_p = json.loads(opp_payload_str) if opp_payload_str else {}
-                    except Exception:
-                        opp_p = {}
-                    opp_exit = entry_price
-                    opp_pnl = (
-                        (opp_exit - opp_entry) if opp_dir == "LONG" else (opp_entry - opp_exit)
-                    )
-                    opp_risk = abs(opp_entry - opp_inval) or 1.0
-                    opp_r = round(opp_pnl / opp_risk, 2)
-                    opp_p.setdefault("decision_log", []).append(
-                        {
-                            "ts_utc": trig_time,
-                            "event": "REVERSAL_EXIT_FLIP",
-                            "details": f"Market structure reversed: closed early at {opp_exit} (PnL: {round(opp_pnl, 2)}, {opp_r}R) because opposing setup {uid} triggered ACTIVE",
-                        }
-                    )
-                    conn.execute(
-                        """
-                        UPDATE playbook_scenarios
-                        SET state = 'CANCELLED_EXPIRED', resolved_at_utc = ?, exit_price = ?,
-                            pnl_points = ?, r_multiple = ?, payload_json = ?
-                        WHERE scenario_uid = ?
-                        """,
-                        (trig_time, opp_exit, round(opp_pnl, 2), opp_r, json.dumps(opp_p), opp_uid),
-                    )
-                    stats["resolved_losses" if opp_pnl < 0 else "resolved_wins"] += 1
-
-                # 2. Cancel opposing pending scenarios on same instrument, session & horizon
-                opposing_rows = conn.execute(
-                    """
-                    SELECT scenario_uid, payload_json FROM playbook_scenarios
-                    WHERE symbol = ? AND session_id = ? AND horizon = ?
-                      AND state = 'PENDING_TRIGGER' AND scenario_uid != ?
-                    """,
-                    (sym, sc_sess_id, horizon, uid),
-                ).fetchall()
-                for opp_uid, opp_payload_str in opposing_rows:
-                    try:
-                        opp_p = json.loads(opp_payload_str) if opp_payload_str else {}
-                    except Exception:
-                        opp_p = {}
-                    opp_p.setdefault("decision_log", []).append(
-                        {
-                            "ts_utc": trig_time,
-                            "event": "CANCELLED_SUPERSEDED",
-                            "details": f"Cancelled because scenario {uid} activated first",
-                        }
-                    )
-                    conn.execute(
-                        """
-                        UPDATE playbook_scenarios
-                        SET state = 'CANCELLED_EXPIRED', resolved_at_utc = ?, payload_json = ?
-                        WHERE scenario_uid = ?
-                        """,
-                        (trig_time, json.dumps(opp_p), opp_uid),
-                    )
-                stats["activated"] += 1
-                state = "ACTIVE"
-                entry_p = entry_price
-                bars = [b for b in bars if b[0] >= trig_time]
-        if state == "ACTIVE" and entry_p:
-            current_mfe = mfe or 0.0
-            current_mae = mae or 0.0
-            resolved_state = None
-            exit_price = None
-            resolved_time = None
-
-            risk_dist = abs(entry_p - inval_p) or 1.0
-            be_ratchet_active = False
-            partial_tp_taken = False
-            partial_pnl_pts = 0.0
-            consecutive_vwap_losses = 0
-
-            cum_pv = 0.0
-            cum_vol = 0.0
-
-            cur_payload_row = conn.execute(
-                "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
-            ).fetchone()
-            try:
-                cur_p = json.loads(cur_payload_row[0]) if cur_payload_row else {}
-            except Exception:
-                cur_p = {}
-
-            if any(log.get("event") == "PARTIAL_TP_50" for log in cur_p.get("decision_log", [])):
-                partial_tp_taken = True
-                be_ratchet_active = True
-                partial_pnl_pts = round(0.5 * (1.0 * risk_dist), 2)
-
-            # Multi-Domain Catalyst Defense
-            try:
-                from .sentiment import compute_intraday_catalyst_radar
-
-                fast_cat = compute_intraday_catalyst_radar(
-                    conn, sym, window_hours=2, as_of=target_ts
-                )
-                cat_score = fast_cat.get("net_stance_score", 0.0) if fast_cat else 0.0
-            except Exception:
-                cat_score = 0.0
-
-            adverse_news_shock = (direction == "LONG" and cat_score <= -0.30) or (
-                direction == "SHORT" and cat_score >= 0.30
+            _update(
+                conn,
+                uid,
+                "TRIGGERED_ACTIVE",
+                trig_time,
+                f"Trigger met, filled at {entry_p} on bar {trig_time}",
+                state="ACTIVE",
+                triggered_at_utc=trig_time,
+                entry_price=entry_p,
+                mfe_points=0.0,
+                mae_points=0.0,
             )
-            if adverse_news_shock:
-                if current_mfe > 0.0:
-                    be_ratchet_active = True
-                else:
-                    inval_p = (
-                        round(entry_p - (0.5 * risk_dist), 2)
-                        if direction == "LONG"
-                        else round(entry_p + (0.5 * risk_dist), 2)
+            stats["activated"] += 1
+            state, triggered_at = "ACTIVE", trig_time
+            opposite = "SHORT" if direction == "LONG" else "LONG"
+
+            # 1. Close opposite ACTIVE scenarios at this fill (reversal flip) unless their own
+            #    bars already resolved them before this trigger
+            for o_uid, o_entry, o_stop, o_target, o_trig_at in conn.execute(
+                """
+                SELECT scenario_uid, entry_price, invalidation_level, target_profit,
+                       triggered_at_utc
+                FROM playbook_scenarios
+                WHERE symbol = ? AND session_id = ? AND horizon = ? AND state = 'ACTIVE'
+                  AND direction = ? AND triggered_at_utc < ?
+                """,
+                (sym, sess_id, horizon, opposite, trig_time),
+            ).fetchall():
+                o_bars = [b for b in _bars(conn, sym, o_trig_at, trig_time) if b[0] < trig_time]
+                o_sim = _simulate(
+                    opposite, o_entry, o_stop, o_target, o_bars, _shock_ts(_log_events(conn, o_uid))
+                )
+                if o_sim["outcome"] is None:
+                    _close_trade(
+                        conn,
+                        o_uid,
+                        "FLIPPED",
+                        o_sim,
+                        opposite,
+                        o_entry,
+                        o_stop,
+                        entry_p,
+                        trig_time,
+                        stats,
+                        note=f"Opposing setup {uid} triggered. ",
                     )
 
-            for b in bars:
-                b_high = b[2]
-                b_low = b[3]
-                b_close = b[4]
-                b_vol = max(1.0, float(b[5]) if len(b) > 5 and b[5] is not None else 1.0)
-
-                typical = (b_high + b_low + b_close) / 3.0
-                cum_pv += typical * b_vol
-                cum_vol += b_vol
-                session_vwap = cum_pv / cum_vol if cum_vol > 0 else b_close
-
-                if direction == "LONG":
-                    fav = b_high - entry_p
-                    adv = entry_p - b_low
-                    current_mfe = max(current_mfe, fav)
-                    current_mae = max(current_mae, adv)
-
-                    ratcheted_this_bar = False
-                    # 1. Partial TP 50% at +1.0R Extension
-                    if current_mfe >= 1.0 * risk_dist and not partial_tp_taken:
-                        partial_tp_taken = True
-                        be_ratchet_active = True
-                        ratcheted_this_bar = True
-                        partial_pnl_pts = round(0.5 * (1.0 * risk_dist), 2)
-                        cur_p.setdefault("decision_log", []).append(
-                            {
-                                "ts_utc": b[0],
-                                "event": "PARTIAL_TP_50",
-                                "details": f"Hit +1.0R milestone (+{round(current_mfe, 2)} pts): scaled out 50% position (+0.50R / +{partial_pnl_pts} pts profit), moved remaining stop loss to Break-Even at {entry_p}",
-                            }
-                        )
-
-                    # 2. Target Hit (Full Win)
-                    if b_high >= target_p and target_p > entry_p:
-                        resolved_state = "HIT_TARGET_WIN"
-                        exit_price = target_p
-                        resolved_time = b[0]
-                        break
-
-                    # 3. Early Full TP on Consecutive Session VWAP Loss (Structural Failure)
-                    if partial_tp_taken and b_close < session_vwap:
-                        consecutive_vwap_losses += 1
-                        if consecutive_vwap_losses >= 2 and b_close > entry_p:
-                            resolved_state = "EARLY_FULL_TP"
-                            exit_price = b_close
-                            resolved_time = b[0]
-                            break
-                    else:
-                        consecutive_vwap_losses = 0
-
-                    # 4. Stop Loss / Break-Even Hit
-                    if be_ratchet_active and not ratcheted_this_bar and b_low <= entry_p:
-                        resolved_state = "HIT_BREAKEVEN"
-                        exit_price = entry_p
-                        resolved_time = b[0]
-                        break
-                    if b_low <= inval_p:
-                        resolved_state = "HIT_STOP_LOSS"
-                        exit_price = inval_p
-                        resolved_time = b[0]
-                        break
-
-                elif direction == "SHORT":
-                    fav = entry_p - b_low
-                    adv = b_high - entry_p
-                    current_mfe = max(current_mfe, fav)
-                    current_mae = max(current_mae, adv)
-
-                    ratcheted_this_bar = False
-                    # 1. Partial TP 50% at +1.0R Extension
-                    if current_mfe >= 1.0 * risk_dist and not partial_tp_taken:
-                        partial_tp_taken = True
-                        be_ratchet_active = True
-                        ratcheted_this_bar = True
-                        partial_pnl_pts = round(0.5 * (1.0 * risk_dist), 2)
-                        cur_p.setdefault("decision_log", []).append(
-                            {
-                                "ts_utc": b[0],
-                                "event": "PARTIAL_TP_50",
-                                "details": f"Hit +1.0R milestone (+{round(current_mfe, 2)} pts): scaled out 50% position (+0.50R / +{partial_pnl_pts} pts profit), moved remaining stop loss to Break-Even at {entry_p}",
-                            }
-                        )
-
-                    # 2. Target Hit (Full Win)
-                    if b_low <= target_p and target_p < entry_p:
-                        resolved_state = "HIT_TARGET_WIN"
-                        exit_price = target_p
-                        resolved_time = b[0]
-                        break
-
-                    # 3. Early Full TP on Consecutive Session VWAP Loss (Structural Failure)
-                    if partial_tp_taken and b_close > session_vwap:
-                        consecutive_vwap_losses += 1
-                        if consecutive_vwap_losses >= 2 and b_close < entry_p:
-                            resolved_state = "EARLY_FULL_TP"
-                            exit_price = b_close
-                            resolved_time = b[0]
-                            break
-                    else:
-                        consecutive_vwap_losses = 0
-
-                    # 4. Stop Loss / Break-Even Hit
-                    if be_ratchet_active and not ratcheted_this_bar and b_high >= entry_p:
-                        resolved_state = "HIT_BREAKEVEN"
-                        exit_price = entry_p
-                        resolved_time = b[0]
-                        break
-                    if b_high >= inval_p:
-                        resolved_state = "HIT_STOP_LOSS"
-                        exit_price = inval_p
-                        resolved_time = b[0]
-                        break
-
-            if resolved_state:
-                raw_exit_pnl = (
-                    (exit_price - entry_p) if direction == "LONG" else (entry_p - exit_price)
+            # 2. Cancel opposite-direction pending scenarios on the same symbol/session/horizon
+            for (o_uid,) in conn.execute(
+                """
+                SELECT scenario_uid FROM playbook_scenarios
+                WHERE symbol = ? AND session_id = ? AND horizon = ?
+                  AND state = 'PENDING_TRIGGER' AND direction = ? AND created_at_utc <= ?
+                """,
+                (sym, sess_id, horizon, opposite, trig_time),
+            ).fetchall():
+                _update(
+                    conn,
+                    o_uid,
+                    "SUPERSEDED",
+                    trig_time,
+                    f"Cancelled because opposite scenario {uid} activated first",
+                    outcome="SUPERSEDED",
                 )
-                if partial_tp_taken:
-                    total_pnl = partial_pnl_pts + (0.5 * raw_exit_pnl)
-                else:
-                    total_pnl = raw_exit_pnl
+                stats["resolved_invalidated"] += 1
 
-                risk_dist = abs(entry_p - inval_p) or 1.0
-                r_mult = round(total_pnl / risk_dist, 2)
+        if state != "ACTIVE" or entry_p is None:
+            continue
+        events = _log_events(conn, uid)
+        sim = _simulate(
+            direction,
+            entry_p,
+            stop_p,
+            target_p,
+            _bars(conn, sym, triggered_at, end_ts),
+            _shock_ts(events),
+        )
+        if sim["partial_ts"] and not any(e.get("event") == "PARTIAL_TP_50" for e in events):
+            _update(
+                conn,
+                uid,
+                "PARTIAL_TP_50",
+                sim["partial_ts"],
+                f"Hit +1.0R: scaled out 50% (+0.50R), stop to breakeven at {entry_p}",
+            )
+        if sim["outcome"]:
+            _close_trade(
+                conn,
+                uid,
+                sim["outcome"],
+                sim,
+                direction,
+                entry_p,
+                stop_p,
+                sim["exit"],
+                sim["ts"],
+                stats,
+            )
+        elif expired:
+            _close_trade(
+                conn,
+                uid,
+                "TIME_EXIT",
+                sim,
+                direction,
+                entry_p,
+                stop_p,
+                sim.get("last_close", entry_p),
+                end_ts,
+                stats,
+                note="Session expired. ",
+            )
+        else:
+            _update(
+                conn,
+                uid,
+                None,
+                target_ts,
+                "",
+                mfe_points=round(sim["mfe"], 2),
+                mae_points=round(sim["mae"], 2),
+            )
+            if _shock_ts(events) is None:
+                # live defense: only bars after this instant are affected (no look-ahead)
+                try:
+                    from .sentiment import compute_intraday_catalyst_radar
 
-                if resolved_state == "HIT_TARGET_WIN" and total_pnl <= 0.0:
-                    resolved_state = "CANCELLED_EXPIRED"
-
-                cur_p.setdefault("decision_log", []).append(
-                    {
-                        "ts_utc": resolved_time,
-                        "event": resolved_state,
-                        "details": f"Exit reached at {exit_price}. Net PnL: {round(total_pnl, 2)} pts ({r_mult}R). MFE: +{round(current_mfe, 2)}, MAE: -{round(current_mae, 2)}",
-                    }
-                )
-
-                db_state = (
-                    "HIT_TARGET_WIN"
-                    if (
-                        resolved_state in ("HIT_TARGET_WIN", "EARLY_FULL_TP")
-                        or (resolved_state == "HIT_BREAKEVEN" and total_pnl > 0)
+                    cat = compute_intraday_catalyst_radar(
+                        conn, sym, window_hours=2, as_of=target_dt
                     )
-                    else (
-                        "HIT_STOP_LOSS"
-                        if resolved_state == "HIT_STOP_LOSS"
-                        else "CANCELLED_EXPIRED"
-                    )
-                )
-                conn.execute(
-                    """
-                    UPDATE playbook_scenarios
-                    SET state = ?, resolved_at_utc = ?, exit_price = ?,
-                        mfe_points = ?, mae_points = ?, pnl_points = ?, r_multiple = ?,
-                        payload_json = ?
-                    WHERE scenario_uid = ?
-                    """,
-                    (
-                        db_state,
-                        resolved_time,
-                        exit_price,
-                        round(current_mfe, 2),
-                        round(current_mae, 2),
-                        round(total_pnl, 2),
-                        r_mult,
-                        json.dumps(cur_p),
+                    score = cat.get("net_stance_score", 0.0)
+                except Exception:
+                    score = 0.0
+                if sign * score <= -NEWS_SHOCK_THRESHOLD:
+                    _update(
+                        conn,
                         uid,
-                    ),
-                )
-                if db_state == "HIT_TARGET_WIN":
-                    stats["resolved_wins"] += 1
-                elif resolved_state == "HIT_BREAKEVEN":
-                    stats["resolved_breakeven"] += 1
-                else:
-                    stats["resolved_losses"] += 1
-            else:
-                conn.execute(
-                    """
-                    UPDATE playbook_scenarios
-                    SET mfe_points = ?, mae_points = ?, payload_json = ?
-                    WHERE scenario_uid = ?
-                    """,
-                    (round(current_mfe, 2), round(current_mae, 2), json.dumps(cur_p), uid),
-                )
+                        "NEWS_SHOCK",
+                        target_ts,
+                        f"Adverse catalyst score {score}: breakeven if in profit, else stop"
+                        " tightened to 0.5R for subsequent bars",
+                    )
     conn.commit()
     return stats
+
+
+def _wilson(k: int, n: int, z: float = 1.96) -> list[float] | None:
+    """Wilson score 95% interval for a binomial proportion, in percent."""
+    if not n:
+        return None
+    p = k / n
+    d = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / d
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return [round(100 * (centre - half), 1), round(100 * (centre + half), 1)]
 
 
 def get_playbook_performance_metrics(
@@ -634,7 +534,8 @@ def get_playbook_performance_metrics(
     horizon: str | None = None,
     detail: bool = False,
 ) -> dict[str, Any]:
-    """Calculate institutional performance metrics: Win Rate, Profit Factor, MFE/MAE, and R-Multiple."""
+    """Trade statistics. A trade = resolved scenario with a fill; every trade is scored by its
+    realized r_multiple (win > 0 > loss), whatever its exit type. Non-trades are counted apart."""
     where_clauses = []
     params = []
     if symbol:
@@ -648,69 +549,47 @@ def get_playbook_performance_metrics(
 
     rows = conn.execute(
         f"""
-        SELECT state, pnl_points, r_multiple, mfe_points, mae_points
+        SELECT state, entry_price, r_multiple, mfe_points, mae_points,
+               CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.outcome') END
         FROM playbook_scenarios
         {where_sql}
         """,
         params,
     ).fetchall()
 
-    if not rows:
-        return {
-            "total_scenarios": 0,
-            "win_rate_pct": 0.0,
-            "profit_factor": 0.0,
-            "completed_trades": 0,
-            "wins": 0,
-            "losses": 0,
-            "pending": 0,
-            "active": 0,
-            "avg_r_multiple": 0.0,
-            "avg_mfe": 0.0,
-            "avg_mae": 0.0,
-        }
-    wins = [r for r in rows if r[0] == "HIT_TARGET_WIN"]
-    breakevens = [
-        r for r in rows if r[0] == "CANCELLED_EXPIRED" and r[1] == 0.0 and r[3] and r[3] > 0
-    ]
-    losses = [r for r in rows if r[0] == "HIT_STOP_LOSS"]
-    cancelled = [r for r in rows if r[0] == "CANCELLED_EXPIRED" and r not in breakevens]
-    pending = sum(1 for r in rows if r[0] == "PENDING_TRIGGER")
-    active = sum(1 for r in rows if r[0] == "ACTIVE")
-    completed = len(wins) + len(losses) + len(breakevens)
-    win_rate = round((len(wins) / completed * 100), 1) if completed > 0 else 0.0
+    closed = [r for r in rows if r[0] not in _OPEN]
+    trades = [r for r in closed if r[1] is not None]
+    rs = [r[2] or 0.0 for r in trades]
+    n = len(rs)
+    wins = sum(x > 0 for x in rs)
+    losses = sum(x < 0 for x in rs)
+    gross_win = sum(x for x in rs if x > 0)
+    gross_loss = -sum(x for x in rs if x < 0)
+    expectancy = round(sum(rs) / n, 2) if n else None
+    non_trades = Counter(r[5] or r[0] for r in closed if r[1] is None)
 
-    gross_profit = sum(r[1] for r in wins if r[1] and r[1] > 0)
-    gross_loss = abs(sum(r[1] for r in losses if r[1] and r[1] < 0))
-    profit_factor = (
-        round(gross_profit / gross_loss, 2)
-        if gross_loss > 0
-        else (9.9 if gross_profit > 0 else 0.0)
-    )
-
-    completed_r = [r[2] for r in (wins + losses) if r[2] is not None]
-    avg_r = round(sum(completed_r) / len(completed_r), 2) if completed_r else 0.0
-
-    all_mfe = [r[3] for r in (wins + losses) if r[3] is not None]
-    avg_mfe = round(sum(all_mfe) / len(all_mfe), 2) if all_mfe else 0.0
-
-    all_mae = [r[4] for r in (wins + losses) if r[4] is not None]
-    avg_mae = round(sum(all_mae) / len(all_mae), 2) if all_mae else 0.0
+    def _avg(i: int) -> float | None:
+        vals = [r[i] for r in trades if r[i] is not None]
+        return round(sum(vals) / len(vals), 2) if vals else None
 
     res = {
         "total_scenarios": len(rows),
-        "completed_trades": completed,
-        "wins": len(wins),
-        "breakevens": len(breakevens),
-        "losses": len(losses),
-        "invalidated": len(cancelled),
-        "pending": pending,
-        "active": active,
-        "win_rate_pct": win_rate,
-        "profit_factor": profit_factor,
-        "avg_r_multiple": avg_r,
-        "avg_mfe": avg_mfe,
-        "avg_mae": avg_mae,
+        "completed_trades": n,
+        "wins": wins,
+        "breakevens": n - wins - losses,
+        "losses": losses,
+        "invalidated": sum(non_trades.values()),
+        "non_trades": dict(non_trades),
+        "pending": sum(1 for r in rows if r[0] == "PENDING_TRIGGER"),
+        "active": sum(1 for r in rows if r[0] == "ACTIVE"),
+        "win_rate_pct": round(100 * wins / n, 1) if n else None,
+        "win_rate_ci95_pct": _wilson(wins, n),
+        # in R so it is comparable across symbols; None when undefined (no losing trade)
+        "profit_factor": round(gross_win / gross_loss, 2) if gross_loss else None,
+        "expectancy_r": expectancy,
+        "avg_r_multiple": expectancy,
+        "avg_mfe": _avg(3),
+        "avg_mae": _avg(4),
     }
 
     if detail:
@@ -726,13 +605,13 @@ def get_playbook_performance_metrics(
             """,
             params,
         ).fetchall()
-        trades = []
+        trades_out = []
         for t in trade_rows:
             try:
                 p_data = json.loads(t[20]) if t[20] else {}
             except Exception:
                 p_data = {}
-            trades.append(
+            trades_out.append(
                 {
                     "uid": t[0],
                     "symbol": t[1],
@@ -745,6 +624,7 @@ def get_playbook_performance_metrics(
                     "invalidation_level": t[8],
                     "risk_reward_ratio": t[9],
                     "state": t[10],
+                    "outcome": p_data.get("outcome"),
                     "entry_price": t[11],
                     "exit_price": t[12],
                     "pnl_points": t[13],
@@ -757,7 +637,7 @@ def get_playbook_performance_metrics(
                     "decision_log": p_data.get("decision_log", []),
                 }
             )
-        res["trades"] = trades
+        res["trades"] = trades_out
 
     return res
 
@@ -769,12 +649,7 @@ def evaluate_counterfactual_outcomes(
     forward_hours: int = 2,
 ) -> dict[str, int]:
     """Evaluate subsequent 2h-4h price behavior after exit to audit whether stop-loss/invalidation was justified."""
-    if as_of is None:
-        target_dt = datetime.now(UTC)
-    elif isinstance(as_of, str):
-        target_dt = datetime.fromisoformat(as_of).astimezone(UTC)
-    else:
-        target_dt = as_of.astimezone(UTC)
+    target_dt = parse_as_of(as_of)
 
     target_ts = target_dt.isoformat(timespec="seconds")
 
@@ -809,7 +684,7 @@ def evaluate_counterfactual_outcomes(
             continue
 
         # Fetch bars in forward window after resolution
-        resolved_dt = datetime.fromisoformat(resolved_ts).astimezone(UTC)
+        resolved_dt = parse_as_of(resolved_ts)
         window_end_dt = resolved_dt + timedelta(hours=forward_hours)
         # Only audit if window has elapsed
         if target_dt < window_end_dt:

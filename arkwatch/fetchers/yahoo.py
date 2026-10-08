@@ -6,13 +6,14 @@ required; period1=0&period2=9999999999 fetches full history in one request.
 
 from __future__ import annotations
 
-import os
 import time
 from datetime import UTC, datetime
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+from ..net import proxies_for
 
 BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 UA = {
@@ -44,9 +45,8 @@ class YahooError(RuntimeError):
 
 
 def _proxies() -> dict | None:
-    """ARKWATCH_YAHOO_PROXY (e.g. socks5h://warp:9091): Yahoo 429s datacenter IPs."""
-    url = os.environ.get("ARKWATCH_YAHOO_PROXY", "").strip()
-    return {"http": url, "https": url} if url else None
+    """Yahoo 429s datacenter IPs: route through ARKWATCH_PROXY (see net.py)."""
+    return proxies_for(BASE)
 
 
 def _throttle() -> None:

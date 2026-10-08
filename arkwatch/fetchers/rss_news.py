@@ -79,10 +79,10 @@ def fetch_rss_feed(source_name: str, url: str, timeout: int = 10) -> list[dict]:
     try:
         from curl_cffi import requests as creq
 
-        from .yahoo import _proxies
+        from ..net import proxies_for
 
         s = creq.Session(impersonate="chrome")
-        r = s.get(url, timeout=timeout, proxies=_proxies() if "yahoo.com" in url else None)
+        r = s.get(url, timeout=timeout, proxies=proxies_for(url))
         if r.status_code == 200:
             data = r.content
     except Exception:

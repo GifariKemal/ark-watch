@@ -23,9 +23,10 @@ services:
     env_file:
       - path: .env
         required: false
-    # Yahoo answers HTTP 429 to the VPS datacenter IP; only Yahoo calls use it
+    # Yahoo 429s and CFTC 403s the VPS datacenter IP; only allowlisted hosts use it
+    # (ARKWATCH_PROXY_HOSTS, default finance.yahoo.com,publicreporting.cftc.gov)
     environment:
-      ARKWATCH_YAHOO_PROXY: socks5h://warp:9091
+      ARKWATCH_PROXY: socks5h://warp:9091
     depends_on:
       - warp
     mem_limit: 1g

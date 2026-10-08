@@ -62,6 +62,10 @@ flowchart LR
 
 Everything persistent lives on the `arkwatch-data` volume at `/data`: `arkwatch.db`, daemon state and heartbeat, `logs/` (14 day retention) and `backups/` (nightly at 23:30 WIB, 30 dailies plus 12 monthlies). The image sets `ARKWATCH_DATA_DIR=/data` and symlinks `/app/data` to `/data`, so modules with a hard-coded `data/arkwatch.db` land on the volume too.
 
+Egress: the daemon reaches hosts that block datacenter IPs (Yahoo 429, CFTC 403) through the `warp` SOCKS sidecar via `ARKWATCH_PROXY=socks5h://warp:9091`. Only hosts in `ARKWATCH_PROXY_HOSTS` (default `finance.yahoo.com,publicreporting.cftc.gov`, subdomains included) use it; CME and FRED stay direct because they fail through WARP. The legacy `ARKWATCH_YAHOO_PROXY` is still read as a fallback.
+
+First boot: on a brand-new volume (no `bootstrapped` marker in `daemon_state.json` and an empty `raw_observations`) the daemon runs the data chain once, sequentially (harvest, calendar, instruments sweep, fiscalx, nyfed ops, energy, surprise, cme, f2, fedsurvey, brief; never `send`), then sets the marker.
+
 ```bash
 # local smoke test (needs Docker)
 GIT_SHA=$(git rev-parse --short HEAD) ARKWATCH_API_KEY=dev docker compose up -d --build

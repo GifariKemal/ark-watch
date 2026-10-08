@@ -19,6 +19,7 @@ from .. import db as _db
 from ..config import _load_yaml, missing_env
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+RETRY_PAUSE_S = 5.0  # pause before the single retry pass of errored symbols
 UA = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36"
 }
@@ -248,28 +249,37 @@ def sweep(db_path: str = str(DEFAULT_DB)) -> dict[str, int]:
     if skip := missing_env("EODHD_API_TOKEN"):  # once per run, not an ERROR per symbol
         log_collection(conn, "instruments", "EODHD", None, 0, err=skip, status="SKIPPED")
     start_ts = int(time.time()) - 7 * 86400
-    for ins in instruments():
+
+    def fetch(src: str, ins: dict, final: bool) -> None:
         sym = ins["symbol"]
-        if ins.get("eodhd") and not skip:
-            try:
+        try:
+            if src == "EODHD":
                 rows = fetch_eodhd_daily(tok, ins["eodhd"], days=7)
-                out[f"{sym}|EODHD"] = insert_prices(conn, sym, "EODHD", rows)
-                log_collection(
-                    conn, "instruments", f"{sym}:EODHD", rows[0] if rows else None, len(rows)
-                )
-            except Exception as ex:
-                out[f"{sym}|EODHD"] = -1
-                log_collection(conn, "instruments", f"{sym}:EODHD", None, 0, err=str(ex))
-        if ins.get("yahoo"):
-            try:
+            else:
                 rows = yh.fetch_daily(ins["yahoo"], start_ts=start_ts)
-                out[f"{sym}|YAHOO"] = insert_prices(conn, sym, "YAHOO", rows)
-                log_collection(
-                    conn, "instruments", f"{sym}:YAHOO", rows[0] if rows else None, len(rows)
-                )
-            except Exception as ex:
-                out[f"{sym}|YAHOO"] = -1
-                log_collection(conn, "instruments", f"{sym}:YAHOO", None, 0, err=str(ex))
+            out[f"{sym}|{src}"] = insert_prices(conn, sym, src, rows)
+            log_collection(
+                conn, "instruments", f"{sym}:{src}", rows[0] if rows else None, len(rows)
+            )
+        except Exception as ex:
+            out[f"{sym}|{src}"] = -1
+            if final:  # a first-pass error is only logged if the retry fails too
+                log_collection(conn, "instruments", f"{sym}:{src}", None, 0, err=str(ex))
+
+    work = [
+        (src, ins)
+        for ins in instruments()
+        for src in ("EODHD", "YAHOO")
+        if ins.get(src.lower()) and not (src == "EODHD" and skip)
+    ]
+    for src, ins in work:
+        fetch(src, ins, final=False)
+    # ONE retry pass: a transient SOCKS/proxy error (VPS 2026-10-09:
+    # BTCUSD:YAHOO SOCKSHTTPSConnectionPool Max retries) must not fail the sweep
+    if retry := [(s, i) for s, i in work if out[f"{i['symbol']}|{s}"] < 0]:
+        time.sleep(RETRY_PAUSE_S)
+        for src, ins in retry:
+            fetch(src, ins, final=True)
     _cross_validate(conn, db_path)
     conn.close()
     return out

@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from .. import db
-from ..config import load_cot_contracts
+from ..config import PlanLimited, load_cot_contracts
 from ..fetchers import bybit, cot, spdr
 from ..transforms import xccy
 from .fetch_log import log_collection as _log_collection
@@ -990,6 +990,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         conn.commit()
         _lc_gld(conn, "f2", "FMP:SLV", {"shares": slv["shares"]}, 1)
+    except PlanLimited as ex:  # HTTP 402: outside the plan, not a failure
+        print(f"  SLV: skipped ({ex})")
+        _lc_gld(conn, "f2", "FMP:SLV", None, 0, err=str(ex), status="SKIPPED")
     except Exception as ex:
         print(f"  ⚠ SLV: {str(ex)[:90]}")
         _lc_gld(conn, "f2", "FMP:SLV", None, 0, err=str(ex)[:140])

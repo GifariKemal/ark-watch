@@ -435,6 +435,47 @@ def _run_api_jobs(daemon_start: str) -> None:
 
 
 STATE_PATH = DATA_DIR / "daemon_state.json"
+# First boot on a brand-new volume would idle until the next scheduled slot:
+# run the data chain once, in dependency order (never `send`)
+BOOTSTRAP_MARKER = "bootstrapped"
+BOOTSTRAP_JOBS = (
+    "harvest",
+    "calendar",
+    "instruments sweep",
+    "fiscalx",
+    "nyfed ops",
+    "energy",
+    "surprise",
+    "cme",
+    "f2",
+    "fedsurvey",
+    "brief",
+)
+
+
+def _bootstrap(state: dict[str, str]) -> None:
+    """Run BOOTSTRAP_JOBS once when the state has no marker AND raw_observations
+    is empty; set the persistent marker either way so it never re-runs. Jobs go
+    through _run_job (logging/heartbeat/timeouts); a failed job does not abort
+    the rest. SIGTERM unwinds as SystemExit between or inside jobs (_on_signal),
+    leaving the marker unset."""
+    if BOOTSTRAP_MARKER in state:
+        return
+    import sqlite3
+
+    try:  # read-only probe: never creates a file, never breaks the loop
+        uri = Path(DB_PATH).resolve().as_uri()
+        with contextlib.closing(sqlite3.connect(f"{uri}?mode=ro", uri=True)) as conn:
+            empty = conn.execute("SELECT 1 FROM raw_observations LIMIT 1").fetchone() is None
+    except sqlite3.Error as ex:
+        logger.error(f"bootstrap probe failed: {ex}")
+        return
+    if empty:
+        logger.info(f"first boot: bootstrap {len(BOOTSTRAP_JOBS)} job(s)")
+        for cmd in BOOTSTRAP_JOBS:
+            _run_job(cmd, "first-boot bootstrap")
+    state[BOOTSTRAP_MARKER] = "1"
+    _save_state(state)
 
 
 def _load_state(path: Path | None = None) -> dict[str, str]:
@@ -455,7 +496,11 @@ def _load_state(path: Path | None = None) -> dict[str, str]:
     try:
         raw = _json.loads((path or STATE_PATH).read_text())
         today = datetime.now(WIB).date().isoformat()
-        return {k: v for k, v in raw.items() if k.endswith(f"@{today}") and v == "1"}
+        return {
+            k: v
+            for k, v in raw.items()
+            if (k.endswith(f"@{today}") or k == BOOTSTRAP_MARKER) and v == "1"
+        }
     except Exception:
         return {}
 
@@ -518,6 +563,7 @@ def run_loop():
     last_news_bucket = ""
     daemon_start = datetime.now(UTC).isoformat(timespec="seconds")
     try:
+        _bootstrap(last_run)
         while True:
             _heartbeat()
             now_wib = datetime.now(WIB)

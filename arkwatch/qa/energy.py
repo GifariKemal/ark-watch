@@ -194,6 +194,23 @@ def main(argv: list[str] | None = None) -> int:
 
     load_dotenv()
     conn = db.get_conn(args.db, allow_init=True)
+    # fresh volume: the FRED spot legs land with the 06:00 harvest; until then
+    # there is nothing to compute (a fetch failure with rows present still raises)
+    waiting = [
+        sid
+        for sid in ("FRED:DCOILBRENTEU", "FRED:DCOILWTICO")
+        if not conn.execute(
+            "SELECT 1 FROM raw_observations WHERE series_id=? LIMIT 1", (sid,)
+        ).fetchone()
+    ]
+    if waiting:
+        from .fetch_log import log
+
+        msg = f"waiting for FRED spot (harvest has not run yet): {', '.join(waiting)}"
+        log(conn, "energy", "ENERGY:CURVE", "SKIPPED", 0, err=msg)
+        print(f"  {msg}")
+        conn.close()
+        return 0
     out = compute(conn)
     now = datetime.now(UTC).isoformat(timespec="seconds")
     for sid, rec in out.items():

@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from ..config import load_registry
+from ..db import get_conn
 from ..transforms.core import zscore
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
@@ -267,7 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     a = p.parse_args(argv)
 
-    conn = sqlite3.connect(a.db)
+    conn = get_conn(a.db, read_only=True)
 
     if a.target == "blocks":
         explore_blocks()

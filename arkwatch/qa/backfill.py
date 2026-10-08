@@ -58,12 +58,21 @@ def sync_registry(conn) -> int:
             )
         )
     conn.execute("BEGIN IMMEDIATE")
+    # v33: an `active` toggled via the API (locked_by_ui=1) survives the sync —
+    # REPLACE would reset both columns to the YAML/default values
+    locked = conn.execute(
+        "SELECT series_id, active FROM series_registry WHERE locked_by_ui=1"
+    ).fetchall()
     conn.executemany(
         "INSERT OR REPLACE INTO series_registry(series_id,name,block,tier,unit,value_format,freq,"
         "ts_convention,release_schedule,expected_start,sanity_min,sanity_max,"
         "primary_source,secondary_source,tolerance,active,calendar_family)"
         " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         rows,
+    )
+    conn.executemany(
+        "UPDATE series_registry SET active=?, locked_by_ui=1 WHERE series_id=?",
+        [(active, sid) for sid, active in locked],
     )
     conn.execute("COMMIT")
     return len(rows)
@@ -91,7 +100,9 @@ def backfill_fred(conn, entries, *, dry: bool = False) -> dict[str, int]:
                 from .fetch_log import log_collection
 
                 log_collection(
-                    conn, "backfill", e["series_id"],
+                    conn,
+                    "backfill",
+                    e["series_id"],
                     {"ts": rows[-1][1], "value": rows[-1][2]} if rows else None,
                     out[e["series_id"]],
                 )
@@ -122,7 +133,9 @@ def backfill_cal(conn, *, dry: bool = False) -> dict[str, int]:
                 from .fetch_log import log_collection
 
                 log_collection(
-                    conn, "backfill", sid,
+                    conn,
+                    "backfill",
+                    sid,
                     {"ts": rows[-1][1], "value": rows[-1][2]} if rows else None,
                     out[sid],
                 )
@@ -179,7 +192,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--db", default=str(DEFAULT_DB))
     p.add_argument("--dry", action="store_true", help="count without writing")
     p.add_argument(
-        "--source", choices=["fred", "tga", "cal", "sep", "nyfedresearch", "frb", "geo"],
+        "--source",
+        choices=["fred", "tga", "cal", "sep", "nyfedresearch", "frb", "geo"],
         default="fred",
     )
     args = p.parse_args(argv)
@@ -245,7 +259,9 @@ def main(argv: list[str] | None = None) -> int:
                 by_label.setdefault(lb, []).append((ts, v))
             for key, label in sorted(fedsurvey.FRB_CHGDEL_SERIES.items()):
                 if label in by_label:
-                    print(f"  FRB:{key:10s} {len(by_label[label]):4d} obs · latest {max(by_label[label])}")
+                    print(
+                        f"  FRB:{key:10s} {len(by_label[label]):4d} obs · latest {max(by_label[label])}"
+                    )
             result = {}
         else:
             n = fedsurvey.frb_save_history(conn, verbose=False)

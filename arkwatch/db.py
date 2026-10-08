@@ -12,11 +12,12 @@ a DB whose schema version is older than the code (except with allow_init).
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import UTC
 from pathlib import Path
 
-SCHEMA_VERSION = 32
+SCHEMA_VERSION = 33
 
 SCHEMA_V1 = """
 CREATE TABLE series_registry (
@@ -616,19 +617,138 @@ CREATE INDEX IF NOT EXISTS idx_playbook_symbol_state ON playbook_scenarios(symbo
 CREATE INDEX IF NOT EXISTS idx_playbook_created ON playbook_scenarios(created_at_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_playbook_session ON playbook_scenarios(session_id);
 """,
+    33: """-- v33: API server foundation. Hot-path indexes for the read API, an
+-- async on-demand job queue (the daemon executes queued jobs; the API only
+-- enqueues), an audit trail for every API write, a UI lock so the YAML
+-- registry sync does not revert an operator's active toggle, and the
+-- CANCELLED_MANUAL playbook state (a CHECK change = table rebuild).
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts_utc);
+CREATE INDEX IF NOT EXISTS idx_brief_deliveries_status ON brief_deliveries(status);
+CREATE INDEX IF NOT EXISTS idx_alert_deliveries_status ON alert_deliveries(status);
+ALTER TABLE series_registry ADD COLUMN locked_by_ui INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  params_json TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK(status IN ('queued', 'running', 'done', 'failed')),
+  requested_by TEXT,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  result_json TEXT,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, id);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target TEXT,
+  detail_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+CREATE TABLE playbook_scenarios_v33 (
+  scenario_uid TEXT PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  horizon TEXT NOT NULL CHECK(horizon IN ('INTRADAY', 'SWING')),
+  direction TEXT NOT NULL CHECK(direction IN ('LONG', 'SHORT', 'NEUTRAL_RANGE')),
+  scenario_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  trigger_condition TEXT NOT NULL,
+  trigger_price REAL,
+  target_profit REAL NOT NULL,
+  invalidation_level REAL NOT NULL,
+  risk_reward_ratio REAL NOT NULL,
+  created_at_utc TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('PENDING_TRIGGER', 'ACTIVE', 'HIT_TARGET_WIN',
+    'HIT_STOP_LOSS', 'CANCELLED_EXPIRED', 'CANCELLED_MANUAL')),
+  triggered_at_utc TEXT,
+  resolved_at_utc TEXT,
+  entry_price REAL,
+  exit_price REAL,
+  mfe_points REAL DEFAULT 0.0,
+  mae_points REAL DEFAULT 0.0,
+  pnl_points REAL DEFAULT 0.0,
+  r_multiple REAL DEFAULT 0.0,
+  cfd_basis_offset REAL DEFAULT 0.0,
+  payload_json TEXT NOT NULL,
+  note TEXT
+);
+INSERT INTO playbook_scenarios_v33 SELECT *, NULL FROM playbook_scenarios;
+DROP TABLE playbook_scenarios;
+ALTER TABLE playbook_scenarios_v33 RENAME TO playbook_scenarios;
+CREATE INDEX IF NOT EXISTS idx_playbook_symbol_state ON playbook_scenarios(symbol, state);
+CREATE INDEX IF NOT EXISTS idx_playbook_created ON playbook_scenarios(created_at_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_playbook_session ON playbook_scenarios(session_id);
+CREATE INDEX IF NOT EXISTS idx_playbook_state_created
+  ON playbook_scenarios(state, created_at_utc);
+""",
 }
 
 
-def get_conn(path: str | Path, *, allow_init: bool = False) -> sqlite3.Connection:
-    """Connection with the standard PRAGMA pack. isolation_level=None → writes use explicit BEGIN IMMEDIATE."""
+REPO_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
+
+def data_dir() -> Path:
+    """Runtime data dir (DB/state/logs): env ARKWATCH_DATA_DIR, else repo data/."""
+    return Path(os.environ.get("ARKWATCH_DATA_DIR") or REPO_DATA_DIR)
+
+
+def default_db_path() -> Path:
+    """env ARKWATCH_DB, else <data_dir>/arkwatch.db — resolved at call time."""
+    return Path(os.environ.get("ARKWATCH_DB") or data_dir() / "arkwatch.db")
+
+
+def _open_read_only(path: Path) -> sqlite3.Connection:
+    """URI mode=ro + query_only: can neither create, migrate nor write the DB.
+    Rows come back as sqlite3.Row (index AND name access)."""
+    if not path.exists():
+        raise FileNotFoundError(f"{path} does not exist (read-only connections never create)")
+    conn = sqlite3.connect(
+        f"{path.resolve().as_uri()}?mode=ro",
+        uri=True,
+        timeout=5.0,
+        isolation_level=None,
+        check_same_thread=False,  # FastAPI may run a dependency and its endpoint on 2 threads
+    )
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA query_only=ON")
+    current = _schema_version(conn)
+    if current != SCHEMA_VERSION:
+        conn.close()
+        raise RuntimeError(
+            f"{path}: schema v{current} != code v{SCHEMA_VERSION} — a read-only "
+            "connection never migrates; run any CLI job (writer) first."
+        )
+    return conn
+
+
+def get_conn(
+    path: str | Path, *, read_only: bool = False, allow_init: bool = False
+) -> sqlite3.Connection:
+    """Connection with the standard PRAGMA pack. isolation_level=None → writes use explicit BEGIN IMMEDIATE.
+
+    read_only=True: URI mode=ro + PRAGMA query_only=ON + busy_timeout=5000;
+    never creates or migrates (FileNotFoundError / RuntimeError instead)."""
     path = Path(path)
+    if read_only:
+        return _open_read_only(path)
     fresh = not path.exists()
     if fresh or allow_init:
         path.parent.mkdir(parents=True, exist_ok=True)  # sqlite does not create parent dirs
-    conn = sqlite3.connect(str(path), timeout=10.0, isolation_level=None)
+    conn = sqlite3.connect(str(path), timeout=10.0, isolation_level=None, check_same_thread=False)
     conn.execute("PRAGMA busy_timeout=10000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
+    # cap the WAL file left behind after a checkpoint (it is reused, never
+    # shrunk, without a limit) and checkpoint every ~16 MB of 4 KB pages
+    # instead of the 1000-page default — fewer stalls for batch writers
+    conn.execute("PRAGMA journal_size_limit=67108864")
+    conn.execute("PRAGMA wal_autocheckpoint=4000")
     # ROUND-7: a DB restored from a VACUUM INTO backup permanently carries
     # journal_mode=delete (the backup file has no WAL) — every connection
     # re-asserts WAL so the restore path cannot silently lose the invariant

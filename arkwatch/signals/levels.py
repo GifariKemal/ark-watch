@@ -503,6 +503,130 @@ def compute_session_reference_levels(
                     "total_volume": 0.0,
                 }
             )
+    monday = target_d - timedelta(days=target_d.weekday())
+    days_map = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4}
+    weekly_days_profile = {}
+    bars_72h = []
+    for day_name, d_offset in days_map.items():
+        curr_day = monday + timedelta(days=d_offset)
+        day_str = curr_day.isoformat()
+        if curr_day < target_d:
+            row = conn.execute(
+                "SELECT ts, open, high, low, close, COALESCE(volume, 0.0) FROM instrument_prices WHERE symbol=? AND ts=? AND source IN ('YAHOO', 'EODHD')",
+                (sym, day_str),
+            ).fetchone()
+            if row and row[2] is not None and row[3] is not None:
+                b_tup = (
+                    row[0],
+                    float(row[1] or row[4]),
+                    float(row[2]),
+                    float(row[3]),
+                    float(row[4]),
+                    float(row[5]),
+                )
+                if d_offset <= 2:
+                    bars_72h.append(b_tup)
+                weekly_days_profile[day_name] = {
+                    "date": day_str,
+                    "status": "COMPLETED",
+                    "high": float(row[2]),
+                    "low": float(row[3]),
+                    "close": float(row[4]),
+                    "volume": float(row[5]),
+                }
+            else:
+                weekly_days_profile[day_name] = {
+                    "date": day_str,
+                    "status": "AWAITING_DATA",
+                    "high": "AWAITING_DATA",
+                    "low": "AWAITING_DATA",
+                    "close": "AWAITING_DATA",
+                    "volume": 0.0,
+                }
+        elif curr_day == target_d:
+            weekly_days_profile[day_name] = {
+                "date": day_str,
+                "status": "ACTIVE_TODAY",
+                "high": pdh,
+                "low": pdl,
+                "close": last_price,
+                "volume": va_profile.get("total_volume", 0.0),
+            }
+        else:
+            weekly_days_profile[day_name] = {
+                "date": day_str,
+                "status": "UPCOMING",
+                "high": "UPCOMING",
+                "low": "UPCOMING",
+                "close": "UPCOMING",
+                "volume": 0.0,
+            }
+
+    # Midweek 72H Composite (Senin - Rabu)
+    if bars_72h:
+        cva_72h = compute_value_area(bars_72h, tick_size=ASSET_TICK_SIZES.get(sym))
+        midweek_72h_composite = {
+            "status": "COMPLETED",
+            "composite_poc": cva_72h.get("poc"),
+            "composite_vah": cva_72h.get("vah"),
+            "composite_val": cva_72h.get("val"),
+            "total_volume": cva_72h.get("total_volume"),
+        }
+    else:
+        midweek_72h_composite = {
+            "status": "FORMING_IN_WEEK",
+            "composite_poc": "FORMING_IN_WEEK",
+            "composite_vah": "FORMING_IN_WEEK",
+            "composite_val": "FORMING_IN_WEEK",
+            "total_volume": 0.0,
+        }
+
+    # Monthly Quarters Composite Blocks (Q1: 01-07, Q2: 08-14, Q3: 15-21, Q4: 22-end, Joker: 01-08)
+    year_str = target_d.strftime("%Y-%m")
+    import calendar
+
+    _, last_day_num = calendar.monthrange(target_d.year, target_d.month)
+    monthly_blocks_dates = {
+        "JOKER_WEEK": (f"{year_str}-01", f"{year_str}-08"),
+        "Q1_WEEK_1": (f"{year_str}-01", f"{year_str}-07"),
+        "Q2_WEEK_2": (f"{year_str}-08", f"{year_str}-14"),
+        "Q3_WEEK_3": (f"{year_str}-15", f"{year_str}-21"),
+        "Q4_WEEK_4": (f"{year_str}-22", f"{year_str}-{last_day_num:02d}"),
+    }
+    monthly_quarter_blocks = {}
+    for b_name, (b_start, b_end) in monthly_blocks_dates.items():
+        rows = conn.execute(
+            "SELECT ts, open, high, low, close, COALESCE(volume, 0.0) FROM instrument_prices WHERE symbol=? AND ts >= ? AND ts <= ? AND source IN ('YAHOO', 'EODHD') ORDER BY ts ASC",
+            (sym, b_start, b_end),
+        ).fetchall()
+        b_bars = [
+            (r[0], float(r[1] or r[4]), float(r[2]), float(r[3]), float(r[4]), float(r[5]))
+            for r in rows
+            if r[2] is not None and r[3] is not None and r[4] is not None
+        ]
+        if b_bars:
+            va_mb = compute_value_area(b_bars, tick_size=ASSET_TICK_SIZES.get(sym))
+            monthly_quarter_blocks[b_name] = {
+                "start_date": b_start,
+                "end_date": b_end,
+                "status": "COMPLETED" if target_d.isoformat() > b_end else "ACTIVE",
+                "composite_poc": va_mb.get("poc"),
+                "composite_vah": va_mb.get("vah"),
+                "composite_val": va_mb.get("val"),
+                "total_volume": va_mb.get("total_volume"),
+            }
+        else:
+            lbl = "UPCOMING" if target_d.isoformat() < b_start else "AWAITING_BARS"
+            monthly_quarter_blocks[b_name] = {
+                "start_date": b_start,
+                "end_date": b_end,
+                "status": lbl,
+                "composite_poc": lbl,
+                "composite_vah": lbl,
+                "composite_val": lbl,
+                "total_volume": 0.0,
+            }
+
     return {
         "symbol": sym,
         "as_of": target_dt.isoformat(timespec="seconds"),
@@ -644,6 +768,9 @@ def compute_session_reference_levels(
                 "all_daily_quarters": all_daily_quarters,
                 "active_quarter_all_sub_quarters_90m": active_quarter_sub_quarters,
                 "active_sub_quarter_all_micros_22m": active_sub_quarter_micros,
+                "weekly_days_profile": weekly_days_profile,
+                "midweek_72h_composite": midweek_72h_composite,
+                "monthly_quarter_blocks": monthly_quarter_blocks,
                 "weekly_quarter": w_quarter,
                 "monthly_quarter": m_quarter,
             },

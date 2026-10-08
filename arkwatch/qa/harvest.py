@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .. import db
-from ..config import PROVIDER_ENV, load_registry, missing_env
+from ..config import PROVIDER_ENV, PlanLimited, load_registry, missing_env
 from ..fetchers.caldist import NoDataYet
 from ..qa.verify_sources import ROUTES
 
@@ -197,6 +197,8 @@ def harvest(db_path: str = str(DEFAULT_DB), *, block: str | None = None) -> tupl
             rows_new += n
         except NoDataYet:
             status, err = "EMPTY", "no data yet"
+        except PlanLimited as ex:  # HTTP 402: outside the plan, not a failure
+            status, err = "SKIPPED", str(ex)
         except Exception as ex:
             status, err = "ERROR", _redact(str(ex))[:150]
             fail += 1

@@ -23,6 +23,11 @@ services:
     env_file:
       - path: .env
         required: false
+    # Yahoo answers HTTP 429 to the VPS datacenter IP; only Yahoo calls use it
+    environment:
+      ARKWATCH_YAHOO_PROXY: socks5h://warp:9091
+    depends_on:
+      - warp
     mem_limit: 1g
     stop_grace_period: 60s
     healthcheck:
@@ -65,6 +70,16 @@ services:
       timeout: 10s
       start_period: 30s
       retries: 3
+
+  # Cloudflare WARP egress as SOCKS5 on :9091 (default network only, never
+  # published). Pinned by digest. No healthcheck: shell tooling in the image
+  # is not guaranteed; a dead proxy surfaces as Yahoo errors in fetch_log.
+  warp:
+    image: ghcr.io/mon-ius/docker-warp-socks@sha256:8f96f5e3fc4c0c997036c5ab5e50c09a97a46ccafe8f5a0b220a3d0badc5b21b
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
 
   # Offsite replication to Cloudflare R2. Opt-in: `docker compose --profile
   # litestream up -d` (or COMPOSE_PROFILES=litestream) once the R2 env is set.

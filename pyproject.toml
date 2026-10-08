@@ -5,7 +5,7 @@ description = "Personal US macro monitoring engine — data pipeline, signals, a
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "curl_cffi>=0.7",     # impersonated HTTP for bot-gated sites (cmegroup, QuikStrike)
-    "requests>=2.31",
+    "requests[socks]>=2.31", # socks5h:// for ARKWATCH_YAHOO_PROXY (pysocks)
     "pandas>=2.2",        # read_excel (calamine engine)
     "numpy>=1.26",        # lstsq (rank-deficient ECB-watch design matrix)
     "exchange-calendars>=4.13.2,<5", # session-aware intraday freshness
@@ -17,6 +17,7 @@ dependencies = [
     "scipy>=1.13",
     "statsmodels>=0.14",
     "defusedxml>=0.7",     # hardened XML (fedsurvey, RSS)
+    "pymupdf>=1.24",       # PDF text (FOMC press conference, FSR)
     "fastapi>=0.115",      # read API for dashboards (Zonelab BFF)
     "uvicorn>=0.30",
     "pydantic>=2.7",

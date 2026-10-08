@@ -16,7 +16,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .. import db as _db
-from ..config import missing_env
+from ..config import PlanLimited, missing_env
 from ..gdelt_storage import compress_record
 from . import gdelt_archive
 from .fetch_log import log_collection
@@ -231,6 +231,8 @@ def _fmp() -> list[dict]:
         params={"apikey": key},
         timeout=(10, 45),
     )
+    if r.status_code == 402:
+        raise PlanLimited("plan-limited: FMP news/general-latest")
     r.raise_for_status()
     return [
         {
@@ -538,6 +540,9 @@ def run(db_path: str) -> dict[str, int]:
             log_collection(
                 conn, "market_news", name, rows[0] if rows else None, len(values), status="OK"
             )
+        except PlanLimited as ex:
+            out[name] = 0
+            log_collection(conn, "market_news", name, None, 0, err=str(ex), status="SKIPPED")
         except Exception as ex:
             out[name] = -1
             print(f"{name}: {type(ex).__name__}: {str(ex)[:160]}")

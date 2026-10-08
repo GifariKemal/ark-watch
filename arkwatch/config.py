@@ -24,6 +24,21 @@ def missing_env(*names: str) -> str | None:
     return f"unconfigured: {', '.join(miss)}" if miss else None
 
 
+# any one of these selects an NLP provider (see fetchers/nlp._config)
+NLP_KEYS = ("NLP_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+
+
+def nlp_missing() -> str | None:
+    """'unconfigured: NLP_API_KEY' only when NO provider key is set."""
+    if any(os.environ.get(k, "").strip() for k in NLP_KEYS):
+        return None
+    return "unconfigured: NLP_API_KEY"
+
+
+class PlanLimited(RuntimeError):
+    """HTTP 402: endpoint outside the subscribed plan -> SKIPPED, not ERROR."""
+
+
 def _load_yaml(name: str) -> dict | list:
     # An empty or comment-only file safe_loads to None → an opaque
     # AttributeError in the caller; fail loudly with the file name instead

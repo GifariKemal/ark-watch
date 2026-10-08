@@ -7,6 +7,8 @@ from datetime import UTC, datetime, timedelta
 
 import requests
 
+from ..config import PlanLimited
+
 UA = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36"
 }
@@ -44,6 +46,8 @@ def fetch_recession_prob(lookback_days: int = 200) -> dict:
         timeout=(10, 30),
     )
     if r.status_code != 200:
+        if r.status_code == 402:
+            raise PlanLimited("plan-limited: FMP economic-indicators")
         raise RuntimeError(f"FMP recession-prob: HTTP {r.status_code}")
     rows = [x for x in r.json() if x.get("date") and x.get("value") is not None]
     if not rows:

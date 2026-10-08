@@ -599,9 +599,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--once", action="store_true", help="run the loop once then exit (for testing)")
     a = p.parse_args(argv)
     from . import db as _db
+    from .qa.backfill import sync_registry
 
-    # first boot on an empty volume: schema exists before any job / api read
-    _db.get_conn(DB_PATH, allow_init=True).close()
+    # first boot on an empty volume: schema AND registry (the raw_observations
+    # FK target) exist before any job / api read; a deploy = restart = resync
+    conn = _db.get_conn(DB_PATH, allow_init=True)
+    sync_registry(conn)
+    conn.close()
     if a.once:
         _setup_logging()
         _heartbeat()

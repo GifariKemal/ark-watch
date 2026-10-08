@@ -16,6 +16,7 @@ import pandas as pd
 import requests
 
 from .. import db as _db
+from ..config import PlanLimited
 from ..fetchers import yahoo
 from .fetch_log import log_collection
 from .okx_market import collect as collect_okx_market
@@ -517,6 +518,8 @@ def _fmp_bars(symbol: str) -> list[dict]:
         },
         timeout=(10, 45),
     )
+    if response.status_code == 402:
+        raise PlanLimited("plan-limited: FMP historical-chart/5min")
     response.raise_for_status()
     payload = response.json()
     return _normalized_rows(
@@ -536,6 +539,9 @@ def _provider_bars(symbol: str, now: datetime | None = None) -> ProviderSelectio
     for source, fetch in providers:
         try:
             rows = fetch(symbol)
+        except PlanLimited as ex:  # next provider; not a failure by itself
+            attempts.append(ProviderAttempt(source, [], None, str(ex)))
+            continue
         except requests.RequestException as ex:
             attempts.append(ProviderAttempt(source, [], None, _safe_error(ex)))
             continue
@@ -558,8 +564,10 @@ def _provider_bars(symbol: str, now: datetime | None = None) -> ProviderSelectio
             stale, key=lambda item: max(row["bar_ts_utc"] for row in item[1])
         )
         raise UnusableBarsError(source, rows, freshness, tuple(attempts))
-    errors = ", ".join(f"{item.source}={item.error}" for item in attempts if item.error)
-    raise NoFallbackDataError(errors)
+    errors = [item.error for item in attempts if item.error]
+    if errors and all(e.startswith("plan-limited") for e in errors):
+        raise PlanLimited("; ".join(errors))
+    raise NoFallbackDataError(", ".join(f"{a.source}={a.error}" for a in attempts if a.error))
 
 
 class NoFallbackDataError(RuntimeError):
@@ -627,7 +635,7 @@ def _record_provider_attempts(
                 None,
                 0,
                 err=attempt.error,
-                status="ERROR",
+                status="SKIPPED" if attempt.error.startswith("plan-limited") else "ERROR",
             )
         elif attempt.freshness and attempt.freshness.status not in (
             "FRESH",
@@ -740,6 +748,11 @@ def run(
             _record_provider_attempts(conn, symbol, selection.attempts, selection.source)
             result[symbol] = _record_bars(
                 conn, symbol, selection.source, selection.rows, selection.freshness
+            )
+        except PlanLimited as ex:
+            result[symbol] = 0
+            log_collection(
+                conn, "market", f"{symbol}:FMP:5m", None, 0, err=str(ex), status="SKIPPED"
             )
         except UnusableBarsError as ex:
             _record_provider_attempts(conn, symbol, ex.attempts, ex.source)

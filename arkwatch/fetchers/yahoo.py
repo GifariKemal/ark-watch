@@ -6,6 +6,7 @@ required; period1=0&period2=9999999999 fetches full history in one request.
 
 from __future__ import annotations
 
+import os
 import time
 from datetime import UTC, datetime
 
@@ -19,8 +20,9 @@ UA = {
 }
 THROTTLE_S = 0.6  # polite pacing for sweeps of ~25 symbols
 _last = 0.0
-# intraday runs every 5 minutes for ~30 symbols: retry transient 429/5xx with
-# backoff; raise_on_status=False keeps the final non-200 on the YahooError path
+# every Yahoo call (sweeps + intraday every 5 minutes): retry transient 429/5xx
+# with Retry-After-aware backoff; raise_on_status=False keeps the final non-200
+# on the YahooError path
 SESSION = requests.Session()
 SESSION.mount(
     "https://",
@@ -41,6 +43,12 @@ class YahooError(RuntimeError):
     pass
 
 
+def _proxies() -> dict | None:
+    """ARKWATCH_YAHOO_PROXY (e.g. socks5h://warp:9091): Yahoo 429s datacenter IPs."""
+    url = os.environ.get("ARKWATCH_YAHOO_PROXY", "").strip()
+    return {"http": url, "https": url} if url else None
+
+
 def _throttle() -> None:
     global _last
     wait = THROTTLE_S - (time.monotonic() - _last)
@@ -51,11 +59,12 @@ def _throttle() -> None:
 
 def fetch_meta(symbol: str) -> dict:
     """Chart meta (shortName carries the tracked contract month, e.g. 'Crude Oil Nov 26')."""
-    r = requests.get(
+    r = SESSION.get(
         f"{BASE}/{symbol}",
         params={"interval": "1d", "range": "5d"},
         headers=UA,
         timeout=(10, 60),
+        proxies=_proxies(),
     )
     if r.status_code != 200:
         raise YahooError(f"yahoo {symbol}: HTTP {r.status_code}")
@@ -69,7 +78,7 @@ def fetch_daily(symbol: str, *, start_ts: int = 0, end_ts: int = 9999999999) -> 
     """Returns [{ts:YYYY-MM-DD, open, high, low, close, volume}] ascending; null bars dropped."""
     _throttle()
 
-    r = requests.get(
+    r = SESSION.get(
         f"{BASE}/{symbol}",
         params={
             "interval": "1d",
@@ -78,6 +87,7 @@ def fetch_daily(symbol: str, *, start_ts: int = 0, end_ts: int = 9999999999) -> 
         },
         headers=UA,
         timeout=(10, 60),
+        proxies=_proxies(),
     )
     if r.status_code != 200:
         raise YahooError(f"yahoo {symbol}: HTTP {r.status_code} — {r.text[:120]}")
@@ -116,6 +126,7 @@ def fetch_intraday(symbol: str, *, interval: str = "5m", range_: str = "1d") -> 
         params={"interval": interval, "range": range_, "includePrePost": "true"},
         headers=UA,
         timeout=(10, 60),
+        proxies=_proxies(),
     )
     if r.status_code != 200:
         raise YahooError(f"yahoo {symbol}: HTTP {r.status_code} — {r.text[:120]}")

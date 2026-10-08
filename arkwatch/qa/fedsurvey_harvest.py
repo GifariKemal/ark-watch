@@ -79,12 +79,25 @@ def _check_new(available_ts: str, stored_ts: str) -> bool:
 def _nlp_tone(text: str, source_type: str) -> dict:
     """analyze_tone, but an NLP outage degrades to {'score': None, ...} instead
     of raising — the caller keeps the structural data and retries tomorrow."""
+    from ..config import nlp_missing
+
+    if skip := nlp_missing():  # no key at all = SKIPPED, not an outage
+        return {"score": None, "summary": skip}
     try:
         from ..fetchers.nlp import analyze_tone
 
         return analyze_tone(text, source_type=source_type)
     except Exception as ex:
         return {"score": None, "summary": f"nlp unavailable: {str(ex)[:80]}"}
+
+
+def _nlp_failed(ts: str, tone: dict, stored: str = "") -> str:
+    """Status line for a tone that did not land: 'skipped' when NLP is
+    unconfigured (exit 0), 'nlp-failed' otherwise (pages, retried next run)."""
+    why = tone.get("summary", "")
+    if why.startswith("unconfigured"):
+        return f"skipped @ {ts} ({why}{stored})"
+    return f"nlp-failed @ {ts} ({why[:60]}{stored}) — retry next run"
 
 
 def _harvest_text_source(conn, kind: str, fetch_fn, source_type: str) -> tuple[str, bool]:
@@ -108,7 +121,7 @@ def _harvest_text_source(conn, kind: str, fetch_fn, source_type: str) -> tuple[s
                 _bias_value(metrics),
                 metrics.get("net_bias", ""),
             )
-        return f"nlp-failed @ {data['ts']} ({tone.get('summary', '')[:60]}) — retry next run", False
+        return _nlp_failed(data["ts"], tone), False
 
     _store_row(
         conn, f"fedsurvey_{kind}_tone", data["ts"], tone.get("score"), tone.get("summary", "")
@@ -170,9 +183,7 @@ def harvest_all(conn) -> dict[str, str]:
                     _bias_value(dissent_metrics),
                     f"dissent={p['dissent_count']} {p['dissent_direction'] or 'none'}",
                 )
-                out["minutes"] = (
-                    f"nlp-failed @ {latest} (dissent={p['dissent_count']} stored) — retry next run"
-                )
+                out["minutes"] = _nlp_failed(latest, tone, f"; dissent={p['dissent_count']} stored")
             else:
                 _store_row(
                     conn,
@@ -207,9 +218,7 @@ def harvest_all(conn) -> dict[str, str]:
             text = fetch_transcript_text(latest_pc)
             tone = _nlp_tone(text, "press conference")
             if tone.get("score") is None:
-                out["pressconf"] = (
-                    f"nlp-failed @ {latest_pc} ({tone.get('summary', '')[:60]}) — retry next run"
-                )
+                out["pressconf"] = _nlp_failed(latest_pc, tone)
             else:
                 _store_row(
                     conn,

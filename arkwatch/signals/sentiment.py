@@ -134,6 +134,11 @@ def extract_news_intelligence(
 ) -> int:
     """Extract multi-asset structured stances from pending articles in market_news."""
     if cfg is None:
+        from ..config import nlp_missing
+
+        if skip := nlp_missing():  # one line, not a keyless HTTP call per article
+            print(f"  · NLP skipped ({skip})")
+            return 0
         cfg = _config()
 
     pending = conn.execute(

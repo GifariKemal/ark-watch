@@ -27,6 +27,8 @@ def test_daemon_start_initializes_schema(empty_db, monkeypatch):
     assert daemon.main([]) == 0
     c = db.get_conn(empty_db, read_only=True)
     assert db._schema_version(c) == db.SCHEMA_VERSION
+    # registry synced too: every job's raw_observations FK target exists (f2 LME)
+    assert c.execute("SELECT 1 FROM series_registry WHERE series_id='LME:CA_STOCKS'").fetchone()
     c.close()
 
 

@@ -10,21 +10,26 @@ from datetime import UTC, datetime
 import requests
 
 from .. import db as _db
+from ..config import PlanLimited
 from .fetch_log import log_collection
 
 
 def _constituents(key: str) -> list[str]:
+    statuses = []
     for url in (
         "https://financialmodelingprep.com/stable/sp500-constituent",
         "https://financialmodelingprep.com/api/v3/sp500_constituent",
     ):
         response = requests.get(url, params={"apikey": key}, timeout=(10, 45))
+        statuses.append(response.status_code)
         if response.status_code == 200 and isinstance(response.json(), list):
             symbols = sorted(
                 {str(row.get("symbol") or "").strip() for row in response.json()} - {""}
             )
             if len(symbols) >= 450:
                 return symbols
+    if 402 in statuses:  # endpoint outside the FMP plan: SKIPPED, not a crash
+        raise PlanLimited("plan-limited: FMP sp500-constituent")
     raise RuntimeError("FMP S&P 500 constituent list unavailable or incomplete")
 
 
@@ -112,5 +117,12 @@ def main(argv=None):
     load_dotenv()
     parser = argparse.ArgumentParser(prog="arkwatch breadth")
     parser.add_argument("--db", default="data/arkwatch.db")
-    print(run(parser.parse_args(argv).db))
+    db_path = parser.parse_args(argv).db
+    try:
+        print(run(db_path))
+    except PlanLimited as ex:
+        print("skipped: FMP plan does not include constituents")
+        conn = _db.get_conn(db_path, allow_init=True)
+        log_collection(conn, "equity_breadth", "FMP:SP500", None, 0, err=str(ex), status="SKIPPED")
+        conn.close()
     return 0

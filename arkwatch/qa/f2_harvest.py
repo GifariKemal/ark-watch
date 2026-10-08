@@ -824,6 +824,11 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError:
         pass
     conn = db.get_conn(a.db, allow_init=True)
+    from .backfill import sync_registry
+
+    # FK target for LME:CA_STOCKS: a fresh DB (or a series added since the last
+    # 06:00 harvest) failed 'FOREIGN KEY constraint failed' (VPS 2026-10-09)
+    sync_registry(conn)
 
     if not a.skip_cot:
         print("=== COT (13 contracts × 2 reports) ===")

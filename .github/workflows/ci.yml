@@ -1,0 +1,48 @@
+# Gate for production: a push to main reaches the VPS only after lint and the full offline test
+# suite pass. Deploy is one POST to the Easypanel deploy URL kept in the EASYPANEL_DEPLOY_URL
+# secret (it embeds a deploy token). The old GitHub push webhook must stay removed or every push
+# would deploy twice and bypass this gate.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # actions are pinned by commit SHA (tag in the comment)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Install (locked)
+        run: uv sync --python 3.12 --extra dev --locked
+      - name: Lint
+        run: |
+          uv run ruff check arkwatch tests
+          uv run ruff format --check arkwatch tests
+      - name: Tests
+        run: uv run pytest -q -p no:cacheprovider
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Trigger Easypanel deploy
+        env:
+          DEPLOY_URL: ${{ secrets.EASYPANEL_DEPLOY_URL }}
+        run: |
+          test -n "$DEPLOY_URL" || { echo "EASYPANEL_DEPLOY_URL secret is not set"; exit 1; }
+          curl -fsS -X POST --max-time 30 -o /dev/null -w "deploy trigger HTTP %{http_code}\n" "$DEPLOY_URL"

@@ -29,7 +29,7 @@ python -m arkwatch verify    # data truth gate
 ```
 arkwatch/    fetchers (data sources) · signals (computation) · qa (jobs) · senders · daemon
 config/      series registry + signal thresholds (all YAML, provenance-commented)
-tests/       790 offline tests, zero warnings policy — no network needed
+tests/       801 offline tests, zero warnings policy — no network needed
 fixtures/    captured API responses for parser tests
 ```
 
@@ -88,6 +88,22 @@ docker compose --profile litestream up -d
 - [ ] Only one `daemon` replica: the OS lock on `/data/daemon.lock` makes a second one exit.
 
 </details>
+
+## API
+
+Every `/v1` route except `/v1/health` needs the `x-arkwatch-key` header. Lists return `{items, next_cursor}`, errors `{error, code, detail}`. Export the contract with `python -m arkwatch.server.export_openapi`.
+
+Dashboard reads (the Zonelab web dashboard replaces Telegram delivery):
+
+| Route | Returns |
+|---|---|
+| `GET /v1/alerts?status=&alert_type=&since=&cursor=&limit=` | alert rows, newest first, every status (limit max 200, `message` is plain text) |
+| `GET /v1/alerts/summary` | counts by status and priority for the last 24h and 7d, plus `newest_triggered_at` |
+| `GET /v1/briefs?limit=` | brief index: date, regime score, generated_at, chars |
+| `GET /v1/briefs/latest`, `GET /v1/briefs/{YYYY-MM-DD}` | one brief with its raw markdown (404 when missing) |
+| `GET /v1/graph` | macro system graph: regime, 6 pillars, registry series, instruments, open playbooks, next-7d high/medium events |
+
+The graph uses stored data only. Series are the pillar inputs plus the active registry series of the same block letter (block H has no pillar and is left out). Instruments link to the regime core because no asset to pillar mapping exists in config. Caps: 300 series, 60 scenarios, 50 events, so at most 446 nodes. Cached like `/v1/regime`.
 
 ## License
 

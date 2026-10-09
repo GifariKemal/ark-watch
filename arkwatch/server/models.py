@@ -263,6 +263,70 @@ class JobOut(BaseModel):
     error: str | None = None
 
 
+AlertStatus = Literal["pending", "sending", "sent", "skipped", "failed"]
+
+
+class AlertOut(BaseModel):
+    id: int
+    alert_type: str
+    priority: str
+    status: str
+    triggered_at: str
+    message: str | None = Field(None, description="plain text, not HTML-escaped")
+    last_error: str | None = None
+
+
+class AlertCounts(BaseModel):
+    total: int
+    by_status: dict[str, int]
+    by_priority: dict[str, int]
+
+
+class AlertsSummaryOut(BaseModel):
+    last_24h: AlertCounts
+    last_7d: AlertCounts
+    newest_triggered_at: str | None = None
+
+
+class BriefListOut(BaseModel):
+    date: str
+    regime_score: Num = None
+    generated_at: str | None = None
+    chars: int
+
+
+class BriefOut(BaseModel):
+    date: str
+    regime_score: Num = None
+    generated_at: str | None = None
+    markdown: str = Field(description="raw markdown, rendered by the client")
+
+
+class GraphNodeOut(BaseModel):
+    id: str
+    kind: Literal["regime", "pillar", "series", "asset", "scenario", "event"]
+    label: str
+    group: str | None = None
+    value: Num = None
+    status: Literal[FreshnessStatus, "live", "pending", "n/a"]
+    weight: float = Field(ge=0, le=1, description="importance hint")
+    meta: dict[str, Any] = {}
+
+
+class GraphLinkOut(BaseModel):
+    source: str
+    target: str
+    kind: Literal["pillar_of", "series_in", "drives", "trades", "scheduled"]
+    weight: float
+
+
+class GraphOut(BaseModel):
+    generated_at: str
+    counts: dict[str, int]
+    nodes: list[GraphNodeOut]
+    links: list[GraphLinkOut]
+
+
 class HealthOut(BaseModel):
     status: Literal["ok", "degraded", "down"]
     db_readable: bool

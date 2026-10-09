@@ -115,9 +115,21 @@ def _audit_count(path) -> int:
 # --- auth / startup -----------------------------------------------------------
 
 
-def test_auth_required_and_rejected(client):
+AUTH_PATHS = (
+    "/v1/series",
+    "/v1/alerts",
+    "/v1/alerts/summary",
+    "/v1/briefs",
+    "/v1/briefs/latest",
+    "/v1/briefs/2026-10-01",
+    "/v1/graph",
+)
+
+
+@pytest.mark.parametrize("path", AUTH_PATHS)
+def test_auth_required_and_rejected(client, path):
     for headers in ({"x-arkwatch-key": ""}, {"x-arkwatch-key": "x" * 40}):
-        r = client.get("/v1/series", headers=headers)
+        r = client.get(path, headers=headers)
         assert r.status_code == 401
         assert r.json() == {
             "error": "missing or invalid API key",
@@ -293,6 +305,143 @@ def test_freshness_statuses(client):
     assert body["summary"] == {"fresh": 1, "late": 1, "stale": 1, "never": 1}
 
 
+def _write(path, sql, rows):
+    w = db.get_conn(path)
+    w.executemany(sql, rows)
+    w.commit()
+    w.close()
+
+
+def test_alerts_list_filters_and_summary(client, seeded):
+    now = datetime.now(UTC)
+    ts = [(now - timedelta(hours=h)).isoformat(timespec="seconds") for h in (1, 2, 30, 24 * 10)]
+    _write(
+        seeded,
+        "INSERT INTO alert_deliveries(alert_type,triggered_at,cooldown_key,priority,status,"
+        "message,last_error) VALUES (?,?,?,?,?,?,?)",
+        [
+            ("vix", ts[0], "k1", "urgent", "sent", "VIX > 30 & <rising>", None),
+            ("hy", ts[1], "k2", "normal", "skipped", "HY wide", "no channel"),
+            ("vix", ts[2], "k3", "normal", "failed", "old", "boom"),
+            ("dxy", ts[3], "k4", "normal", "sent", "ancient", None),
+        ],
+    )
+    page = client.get("/v1/alerts", params={"limit": 2}).json()
+    assert [a["triggered_at"] for a in page["items"]] == ts[:2]  # newest first
+    assert page["items"][0]["message"] == "VIX > 30 & <rising>"  # raw, JSON-escaped only
+    rest = client.get("/v1/alerts", params={"cursor": page["next_cursor"]}).json()
+    assert [a["status"] for a in rest["items"]] == ["failed", "sent"]
+    assert rest["next_cursor"] is None
+    one = client.get("/v1/alerts", params={"status": "skipped"}).json()["items"]
+    assert [(a["alert_type"], a["last_error"]) for a in one] == [("hy", "no channel")]
+    assert len(client.get("/v1/alerts", params={"alert_type": "vix"}).json()["items"]) == 2
+    assert len(client.get("/v1/alerts", params={"since": ts[2]}).json()["items"]) == 3
+    assert client.get("/v1/alerts", params={"status": "bogus"}).status_code == 422
+    assert client.get("/v1/alerts", params={"limit": 201}).status_code == 422
+
+    s = client.get("/v1/alerts/summary").json()
+    assert s["newest_triggered_at"] == ts[0]
+    assert s["last_24h"] == {
+        "total": 2,
+        "by_status": {"sent": 1, "skipped": 1},
+        "by_priority": {"urgent": 1, "normal": 1},
+    }
+    assert s["last_7d"]["total"] == 3
+    assert s["last_7d"]["by_status"] == {"sent": 1, "skipped": 1, "failed": 1}
+
+
+def test_alerts_summary_empty(client):
+    s = client.get("/v1/alerts/summary").json()
+    assert s["newest_triggered_at"] is None
+    assert s["last_24h"] == {"total": 0, "by_status": {}, "by_priority": {}}
+
+
+def test_briefs_list_latest_and_by_date(client, seeded):
+    assert client.get("/v1/briefs/latest").json()["code"] == "not_found"
+    _write(
+        seeded,
+        "INSERT INTO brief_log(date,markdown,regime_score,generated_at) VALUES (?,?,?,?)",
+        [
+            ("2026-10-07", "# old", 0.1, "2026-10-07T00:00:00"),
+            ("2026-10-08", "# Brief\n*x* & <y>", -0.42, "2026-10-08T00:00:00"),
+        ],
+    )
+    items = client.get("/v1/briefs").json()["items"]
+    assert [(b["date"], b["chars"]) for b in items] == [("2026-10-08", 17), ("2026-10-07", 5)]
+    assert "markdown" not in items[0]
+    assert client.get("/v1/briefs/latest").json() == {
+        "date": "2026-10-08",
+        "regime_score": -0.42,
+        "generated_at": "2026-10-08T00:00:00",
+        "markdown": "# Brief\n*x* & <y>",
+    }
+    assert client.get("/v1/briefs/2026-10-07").json()["markdown"] == "# old"
+    r = client.get("/v1/briefs/2026-01-01")
+    assert r.status_code == 404 and r.json()["code"] == "not_found"
+    assert client.get("/v1/briefs/not-a-date").status_code == 422
+    assert len(client.get("/v1/briefs", params={"limit": 1}).json()["items"]) == 1
+
+
+def test_graph_built_from_stored_data_only(client, seeded):
+    w = db.get_conn(seeded)
+    for sid, block, active in (("FRED:DFF", "A", 0), ("FRED:IORB", "A", 1), ("X:H", "H", 1)):
+        w.execute(
+            "INSERT INTO series_registry(series_id,name,block,tier,unit,value_format,freq,"
+            "primary_source,active) VALUES (?,?,?,1,'pct','pct','D','T',?)",
+            (sid, sid, block, active),
+        )
+    db.insert_observations(w, [("FRED:DFF", _days_ago(1), 4.33, "S")])
+    soon = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+    far = (datetime.now(UTC) + timedelta(days=9)).strftime("%Y-%m-%dT%H:%M:%S")
+    w.executemany(
+        "INSERT INTO events(event_uid,ts_utc,country,name,normalized_name,importance,consensus)"
+        " VALUES (?,?,'US',?,?,?,?)",
+        [("hi", soon, "NFP", "nfp", "high", 150.0), ("lo", soon, "x", "x", "low", None),
+         ("far", far, "CPI", "cpi", "high", None)],
+    )  # fmt: skip
+    w.execute(
+        "INSERT INTO instrument_prices(symbol,ts,source,open,high,low,close,volume)"
+        " VALUES ('NQ1',?,'YAHOO',1,2,0.5,1.5,10)",
+        (_days_ago(0),),
+    )
+    w.commit()
+    w.close()
+
+    g = client.get("/v1/graph").json()
+    nodes = {n["id"]: n for n in g["nodes"]}
+    links = {(lk["source"], lk["target"], lk["kind"]) for lk in g["links"]}
+    assert nodes["regime"]["kind"] == "regime" and g["generated_at"]
+    assert {f"pillar:{k}" for k in "ABCDEF"} <= set(nodes)
+    assert ("pillar:B", "regime", "pillar_of") in links
+    # a pillar part that is a registry series (even inactive) feeds its pillar
+    dff = nodes["series:FRED:DFF"]
+    assert (dff["value"], dff["status"], dff["weight"]) == (4.33, "fresh", 1.0)
+    assert ("series:FRED:DFF", "pillar:A", "series_in") in links
+    # active block members hang off the same pillar with a lower weight
+    assert nodes["series:FRED:IORB"]["weight"] < 1.0
+    assert ("series:T:DAILY", "pillar:A", "series_in") in links
+    # parts that are not registry series, inactive non-parts and block H are skipped
+    assert "series:FRED:DFII10" not in nodes and "series:T:OFF" not in nodes
+    assert "series:X:H" not in nodes
+    nq = nodes["asset:NQ1"]
+    assert (nq["value"], nq["status"]) == (1.5, "fresh")
+    assert nodes["asset:XAUUSD"]["status"] == "never"
+    assert ("asset:NQ1", "regime", "trades") in links
+    # open playbooks only, linked to their asset
+    assert nodes["scenario:PB-ACTIVE"]["status"] == "live"
+    assert nodes["scenario:PB-PENDING"]["status"] == "pending"
+    assert "scenario:PB-WIN" not in nodes
+    assert ("scenario:PB-ACTIVE", "asset:NQ1", "trades") in links
+    # next 7 days, high/medium only
+    assert nodes["event:hi"]["value"] == 150.0
+    assert ("event:hi", "regime", "scheduled") in links
+    assert "event:lo" not in nodes and "event:far" not in nodes
+    assert g["counts"]["nodes"] == len(g["nodes"]) <= 450
+    assert g["counts"]["links"] == len(g["links"])
+    assert g["counts"]["asset"] == sum(n["kind"] == "asset" for n in g["nodes"])
+    assert client.get("/v1/graph").json()["nodes"] == g["nodes"]  # deterministic
+
+
 # --- read-only connection / migration -------------------------------------------
 
 
@@ -459,6 +608,8 @@ def test_export_openapi(tmp_path):
     assert main(["--out", str(out)]) == 0
     spec = json.loads(out.read_text(encoding="utf-8"))
     assert {"/v1/health", "/v1/series/{series_id}/observations", "/v1/jobs"} <= set(spec["paths"])
+    new = {"/v1/alerts", "/v1/alerts/summary", "/v1/briefs/{date}", "/v1/graph"}
+    assert new <= set(spec["paths"])
     assert "APIKeyHeader" in spec["components"]["securitySchemes"]
     kinds = spec["components"]["schemas"]["JobIn"]["properties"]["kind"]["enum"]
     assert set(kinds) == set(jobs_runner.JOB_KINDS)

@@ -37,12 +37,18 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import api, db
 from .models import (
+    AlertOut,
+    AlertsSummaryOut,
+    AlertStatus,
+    BriefListOut,
+    BriefOut,
     CalendarEventOut,
     CancelIn,
     CancelOut,
     CotRowOut,
     ErrorOut,
     FreshnessReport,
+    GraphOut,
     HealthOut,
     JobEnqueueOut,
     JobIn,
@@ -488,6 +494,51 @@ def job_get(c: Conn, job_id: int):
     if out is None:
         raise api.ApiNotFound(f"job {job_id} not found")
     return out
+
+
+@v1.get("/alerts", response_model=Page[AlertOut], tags=["dashboard"])
+def alerts(
+    c: Conn,
+    status: AlertStatus | None = None,
+    alert_type: Annotated[str | None, Query(max_length=64)] = None,
+    since: Annotated[str | None, Query(max_length=32, pattern=r"^\d{4}-\d{2}-\d{2}")] = None,
+    cursor: Cursor = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+):
+    return api.list_alerts(
+        c, status=status, alert_type=alert_type, since=since, cursor=cursor, limit=limit
+    )
+
+
+@v1.get("/alerts/summary", response_model=AlertsSummaryOut, tags=["dashboard"])
+def alerts_summary(c: Conn):
+    return api.alerts_summary(c)
+
+
+@v1.get("/briefs", response_model=Page[BriefListOut], tags=["dashboard"])
+def briefs(c: Conn, cursor: Cursor = None, limit: Annotated[int, Query(ge=1, le=200)] = 30):
+    return api.list_briefs(c, cursor=cursor, limit=limit)
+
+
+@v1.get("/briefs/latest", response_model=BriefOut, tags=["dashboard"])
+def brief_latest(c: Conn):
+    out = api.brief_get(c)
+    if out is None:
+        raise api.ApiNotFound("no brief yet")
+    return out
+
+
+@v1.get("/briefs/{date}", response_model=BriefOut, tags=["dashboard"])
+def brief_by_date(c: Conn, date: Annotated[str, Path(pattern=r"^\d{4}-\d{2}-\d{2}$")]):
+    out = api.brief_get(c, date)
+    if out is None:
+        raise api.ApiNotFound(f"no brief for {date}")
+    return out
+
+
+@v1.get("/graph", response_model=GraphOut, tags=["dashboard"])
+def graph(request: Request, c: Conn):
+    return cached(request, "graph", (), lambda: api.macro_graph(c))
 
 
 # --- writes (audited, idempotent) ------------------------------------------

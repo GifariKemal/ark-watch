@@ -916,6 +916,249 @@ def job_detail(c: sqlite3.Connection, job_id: int) -> dict | None:
     return _job_out(rows[0]) if rows else None
 
 
+def list_alerts(
+    c: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    alert_type: str | None = None,
+    since: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> dict:
+    """Every alert_deliveries row (skipped/failed included: the dashboard is
+    the delivery channel). `message` is stored plain text, returned as is."""
+    where, params = "", []
+    for col, op, v in (("status", "=", status), ("alert_type", "=", alert_type)) + (
+        ("triggered_at", ">=", since),
+    ):
+        if v:
+            where += f" AND {col} {op} ?"
+            params.append(v)
+    inner = (
+        "SELECT id, alert_type, priority, status, triggered_at, message, last_error"
+        f" FROM alert_deliveries WHERE 1=1{where}"
+    )
+    return _page(c, inner, params, ["triggered_at", "id"], cursor=cursor, limit=limit, desc=True)
+
+
+def alerts_summary(c: sqlite3.Connection) -> dict:
+    """Counts by status/priority over the last 24h and 7d + newest triggered_at.
+    triggered_at is ISO UTC with offset, so string comparison orders it."""
+    now = datetime.now(UTC)
+    cut = {
+        w: (now - timedelta(hours=h)).isoformat(timespec="seconds")
+        for w, h in (("last_24h", 24), ("last_7d", 24 * 7))
+    }
+    out: dict = {w: {"total": 0, "by_status": {}, "by_priority": {}} for w in cut}
+    rows = c.execute(
+        "SELECT triggered_at, status, priority FROM alert_deliveries WHERE triggered_at >= ?",
+        (cut["last_7d"],),
+    ).fetchall()
+    for ts, status, priority in rows:
+        for w, cutoff in cut.items():
+            if ts >= cutoff:
+                agg = out[w]
+                agg["total"] += 1
+                agg["by_status"][status] = agg["by_status"].get(status, 0) + 1
+                agg["by_priority"][priority] = agg["by_priority"].get(priority, 0) + 1
+    newest = c.execute("SELECT MAX(triggered_at) FROM alert_deliveries").fetchone()[0]
+    return {**out, "newest_triggered_at": newest}
+
+
+def list_briefs(c: sqlite3.Connection, *, cursor: str | None = None, limit: int = 30) -> dict:
+    inner = "SELECT date, regime_score, generated_at, LENGTH(markdown) AS chars FROM brief_log"
+    return _page(c, inner, [], ["date"], cursor=cursor, limit=limit, desc=True)
+
+
+def brief_get(c: sqlite3.Connection, day: str | None = None) -> dict | None:
+    """One brief (raw markdown); day=None = the latest."""
+    sql = "SELECT date, regime_score, generated_at, markdown FROM brief_log"
+    rows = (
+        _rows(c, sql + " WHERE date = ?", (day,))
+        if day
+        else _rows(c, sql + " ORDER BY date DESC LIMIT 1")
+    )
+    return rows[0] if rows else None
+
+
+# Graph caps (documented in the README): 1 regime + 6 pillars + every
+# instruments.yaml entry (29) + these maxima = 446 <= 450 nodes.
+GRAPH_MAX = {"series": 300, "scenario": 60, "event": 50}
+GRAPH_EVENT_WEIGHT = {"high": 1.0, "medium": 0.5}
+
+
+def macro_graph(c: sqlite3.Connection) -> dict:
+    """Node/link view of the macro system from stored data only: regime ->
+    pillars (signals/pillars.py) -> registry series (the pillar `parts`, plus
+    the ACTIVE registry series of the same block letter, which IS the pillar
+    letter) ; instruments.yaml assets ; open playbooks ; next-7d calendar.
+    No asset->pillar mapping exists in config/code, so assets link to the
+    regime core. Block H series and non-registry pillar parts are skipped."""
+    from .config import _load_yaml
+    from .queries import latest_observation
+    from .signals.pillars import PILLAR_WEIGHTS
+
+    now, today = datetime.now(UTC), datetime.now(UTC).date()
+    nodes: list[dict] = []
+    links: list[dict] = []
+
+    def node(nid, kind, label, group, value=None, status="n/a", weight=0.5, **meta):
+        nodes.append(
+            {
+                "id": nid,
+                "kind": kind,
+                "label": label,
+                "group": group,
+                "value": value,
+                "status": status,
+                "weight": weight,
+                "meta": meta,
+            }
+        )
+
+    def link(source, target, kind, weight):
+        links.append({"source": source, "target": target, "kind": kind, "weight": weight})
+
+    snap = get_regime_snapshot(c)
+    node(
+        "regime",
+        "regime",
+        snap["label"],
+        "core",
+        snap["regime_score"],
+        "live",
+        1.0,
+        quadrant=snap["quadrant"],
+        dollar_smile=snap["dollar_smile"],
+    )
+    top = max(PILLAR_WEIGHTS.values())
+    feeds: dict[str, str] = {}  # series_id -> pillar letter (pillar parts)
+    for k, p in sorted(snap["pillars"].items()):
+        z = p["z_score"]
+        node(
+            f"pillar:{k}",
+            "pillar",
+            p["label"],
+            k,
+            z,
+            "n/a" if z is None else "live",
+            PILLAR_WEIGHTS.get(k, 0) / top,
+            state=p["state"],
+            detail=p["detail"],
+        )
+        link(f"pillar:{k}", "regime", "pillar_of", PILLAR_WEIGHTS.get(k, 0))
+        for sid in p["parts"] or []:
+            feeds.setdefault(sid, k)
+
+    marks = ",".join("?" * len(feeds)) or "NULL"
+    blocks = sorted(snap["pillars"])
+    reg = _rows(
+        c,
+        "SELECT series_id, name, block, freq FROM series_registry"
+        f" WHERE series_id IN ({marks}) OR (active = 1 AND block IN ({','.join('?' * len(blocks))}))",
+        [*feeds, *blocks],
+    )
+    reg.sort(key=lambda r: (r["series_id"] not in feeds, r["series_id"]))  # parts first
+    fresh = {r["series_id"]: r["status"] for r in data_freshness(c)}
+    for r in reg[: GRAPH_MAX["series"]]:
+        sid = r["series_id"]
+        last = latest_observation(c, sid)
+        status = fresh.get(sid) or _freshness(last and last[0], r["freq"], today)["status"]
+        pillar = feeds.get(sid, r["block"])
+        node(
+            f"series:{sid}",
+            "series",
+            r["name"],
+            r["block"],
+            last and last[1],
+            status,
+            1.0 if sid in feeds else 0.3,
+            last_ts=last and last[0],
+            freq=r["freq"],
+            block=r["block"],
+        )
+        link(f"series:{sid}", f"pillar:{pillar}", "series_in", 1.0 if sid in feeds else 0.3)
+
+    for inst in _load_yaml("instruments.yaml")["instruments"]:
+        sym = inst["symbol"]
+        last = c.execute(
+            "SELECT ts, close FROM instrument_prices WHERE symbol = ? ORDER BY ts DESC LIMIT 1",
+            (sym,),
+        ).fetchone()
+        node(
+            f"asset:{sym}",
+            "asset",
+            sym,
+            "asset",
+            last and last[1],
+            _freshness(last and last[0], "D", today)["status"],
+            0.5,
+            symbol=sym,
+            last_ts=last and last[0],
+        )
+        link(f"asset:{sym}", "regime", "trades", 0.1)
+    assets = {n["id"] for n in nodes if n["kind"] == "asset"}
+
+    open_pb = _rows(
+        c,
+        "SELECT scenario_uid, symbol, title, direction, horizon, state, trigger_price,"
+        " risk_reward_ratio FROM playbook_scenarios WHERE state IN (?, ?)"
+        " ORDER BY created_at_utc DESC, scenario_uid LIMIT ?",
+        [*CANCELLABLE_STATES, GRAPH_MAX["scenario"]],
+    )
+    for s in open_pb:
+        target = f"asset:{s['symbol']}"
+        node(
+            f"scenario:{s['scenario_uid']}",
+            "scenario",
+            s["title"],
+            s["symbol"],
+            s["trigger_price"],
+            "live" if s["state"] == "ACTIVE" else "pending",
+            0.6,
+            symbol=s["symbol"],
+            direction=s["direction"],
+            horizon=s["horizon"],
+            rr=s["risk_reward_ratio"],
+        )
+        link(
+            f"scenario:{s['scenario_uid']}", target if target in assets else "regime", "trades", 0.6
+        )
+
+    fmt = "%Y-%m-%dT%H:%M:%S"  # events.ts_utc is naive UTC
+    for e in _rows(
+        c,
+        "SELECT event_uid, ts_utc, country, name, importance, consensus FROM events"
+        " WHERE ts_utc >= ? AND ts_utc < ? AND importance IN ('high', 'medium')"
+        " ORDER BY ts_utc, event_uid LIMIT ?",
+        [now.strftime(fmt), (now + timedelta(days=7)).strftime(fmt), GRAPH_MAX["event"]],
+    ):
+        w = GRAPH_EVENT_WEIGHT[e["importance"]]
+        node(
+            f"event:{e['event_uid']}",
+            "event",
+            e["name"],
+            e["country"],
+            e["consensus"],
+            "pending",
+            w,
+            ts_utc=e["ts_utc"],
+            importance=e["importance"],
+        )
+        link(f"event:{e['event_uid']}", "regime", "scheduled", w)
+
+    counts = {
+        k: sum(n["kind"] == k for n in nodes)
+        for k in ("regime", "pillar", "series", "asset", "scenario", "event")
+    }
+    return {
+        "generated_at": _now(),
+        "counts": {**counts, "nodes": len(nodes), "links": len(links)},
+        "nodes": nodes,
+        "links": links,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Write layer (REST server). Each call is one BEGIN IMMEDIATE transaction
 # that also appends an audit_log row; repeating an applied change is a no-op

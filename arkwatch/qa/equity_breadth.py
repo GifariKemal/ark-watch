@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 import requests
 
 from .. import db as _db
-from ..config import PlanLimited
+from ..config import PLAN_LIMIT_STATUSES, PlanLimited
 from .fetch_log import log_collection
 
 
@@ -28,7 +28,7 @@ def _constituents(key: str) -> list[str]:
             )
             if len(symbols) >= 450:
                 return symbols
-    if 402 in statuses:  # endpoint outside the FMP plan: SKIPPED, not a crash
+    if any(s in PLAN_LIMIT_STATUSES for s in statuses):  # plan/quota: SKIPPED, not a crash
         raise PlanLimited("plan-limited: FMP sp500-constituent")
     raise RuntimeError("FMP S&P 500 constituent list unavailable or incomplete")
 

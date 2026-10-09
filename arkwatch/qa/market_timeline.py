@@ -16,7 +16,7 @@ import pandas as pd
 import requests
 
 from .. import db as _db
-from ..config import PlanLimited
+from ..config import PLAN_LIMIT_STATUSES, PlanLimited
 from ..fetchers import yahoo
 from .fetch_log import log_collection
 from .okx_market import collect as collect_okx_market
@@ -518,7 +518,7 @@ def _fmp_bars(symbol: str) -> list[dict]:
         },
         timeout=(10, 45),
     )
-    if response.status_code == 402:
+    if response.status_code in PLAN_LIMIT_STATUSES:
         raise PlanLimited("plan-limited: FMP historical-chart/5min")
     response.raise_for_status()
     payload = response.json()

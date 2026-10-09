@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import requests
 from curl_cffi import requests as creq
 
-from ..config import PlanLimited
+from ..config import PLAN_LIMIT_STATUSES, PlanLimited
 
 GLD_URL = "https://api.spdrgoldshares.com/api/v1/historical-archive"
 FMP_URL = "https://financialmodelingprep.com/stable"
@@ -117,7 +117,7 @@ def fetch_slv_shares() -> dict:
     r = requests.get(
         f"{FMP_URL}/shares-float", params={"symbol": "SLV", "apikey": key}, timeout=(10, 30)
     )
-    if r.status_code == 402:  # endpoint outside the FMP plan: SKIPPED, not ERROR
+    if r.status_code in PLAN_LIMIT_STATUSES:  # outside the FMP plan / quota spent: SKIPPED
         raise PlanLimited("plan-limited: FMP shares-float")
     if r.status_code != 200:
         raise RuntimeError(f"SLV: HTTP {r.status_code}")

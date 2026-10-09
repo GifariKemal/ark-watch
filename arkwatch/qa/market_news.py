@@ -16,7 +16,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .. import db as _db
-from ..config import PlanLimited, missing_env
+from ..config import PLAN_LIMIT_STATUSES, PlanLimited, missing_env
 from ..gdelt_storage import compress_record
 from . import gdelt_archive
 from .fetch_log import log_collection
@@ -227,12 +227,15 @@ def _fmp() -> list[dict]:
     key = os.environ.get("FMP_API_KEY", "")
     if not key:
         return []
-    r = SESSION.get(
-        "https://financialmodelingprep.com/stable/news/general-latest",
-        params={"apikey": key},
-        timeout=(10, 45),
-    )
-    if r.status_code == 402:
+    try:
+        r = SESSION.get(
+            "https://financialmodelingprep.com/stable/news/general-latest",
+            params={"apikey": key},
+            timeout=(10, 45),
+        )
+    except requests.exceptions.RetryError as ex:  # the shared adapter retried 429 until it gave up
+        raise PlanLimited("plan-limited: FMP quota (HTTP 429)") from ex
+    if r.status_code in PLAN_LIMIT_STATUSES:
         raise PlanLimited("plan-limited: FMP news/general-latest")
     r.raise_for_status()
     return [

@@ -35,8 +35,12 @@ def nlp_missing() -> str | None:
     return "unconfigured: NLP_API_KEY"
 
 
+# FMP free plan: 402 = endpoint outside the plan, 429 ("Limit Reach") = the daily quota is spent
+PLAN_LIMIT_STATUSES = (402, 429)
+
+
 class PlanLimited(RuntimeError):
-    """HTTP 402: endpoint outside the subscribed plan -> SKIPPED, not ERROR."""
+    """HTTP 402/429 from a plan-limited provider -> SKIPPED, not ERROR."""
 
 
 def _load_yaml(name: str) -> dict | list:

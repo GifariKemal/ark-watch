@@ -852,3 +852,31 @@ def test_upsert_refreshes_pending_levels_and_reports_only_written_rows(tmp_path)
     payload["scenarios"][0].update(trigger_price=102.0)
     assert playbook_tracker.record_playbook_scenarios(conn, payload) == []
     assert conn.execute(sel, (uid,)).fetchone() == (101.0, 3.0)
+
+
+def test_format_report_tables_and_small_n_warning():
+    from arkwatch.signals.playbook_tracker import format_report
+
+    def t(sym, sid, r, state="HIT_TARGET_WIN", entry=1.0, ts="2026-10-09T06:20:00+00:00"):
+        return {
+            "symbol": sym, "scenario_id": sid, "r_multiple": r, "state": state,
+            "entry_price": entry, "outcome": state, "title": "x", "direction": "LONG",
+            "resolved_at_utc": ts,
+        }  # fmt: skip
+
+    res = {
+        "total_scenarios": 3, "completed_trades": 2, "wins": 1, "losses": 1, "breakevens": 0,
+        "invalidated": 0, "active": 1, "pending": 0, "win_rate_pct": 50.0,
+        "win_rate_ci95_pct": [9.5, 90.5], "profit_factor": 2.0, "expectancy_r": 0.5,
+        "avg_mfe": 1.0, "avg_mae": 1.0,
+        "trades": [
+            t("NQ1", "SCENARIO_A", 2.0),
+            t("NQ1", "SCENARIO_A", -1.0, "HIT_STOP_LOSS"),
+            t("ES1", "SCENARIO_B", 0.0, "ACTIVE", None, None),
+        ],
+    }  # fmt: skip
+    out = format_report(res)
+    assert "n=2 < 100" in out
+    nq = next(line for line in out.splitlines() if line.startswith("NQ1"))
+    assert "|     2 |    2 |   1 |    1 |  0 |     50% |  +1.0 | 2.00 | +0.50R" in nq
+    assert "02:20" in out and "running" in out  # 06:20Z -> 02:20 ET (UTC-4)

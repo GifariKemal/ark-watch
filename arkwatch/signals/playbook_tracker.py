@@ -842,3 +842,58 @@ def scan_market_opportunities(
 
     # Sort opportunities by Risk-Reward ratio descending
     return sorted(opportunities, key=lambda x: x["risk_reward_ratio"], reverse=True)
+
+
+def format_report(res: dict[str, Any], *, journal: int = 15) -> str:
+    """Terminal report from get_playbook_performance_metrics(detail=True): totals, per-symbol and
+    per-setup tables, recent journal (ET). Paper results on 5m bars: no slippage, spread or fees."""
+    rows = res.get("trades", [])
+    fills = [t for t in rows if t["entry_price"] is not None and t["state"] not in _OPEN]
+
+    def table(key, title: str, label: str) -> list[str]:
+        groups: dict[str, list[dict]] = {}
+        for t in rows:
+            groups.setdefault(key(t), []).append(t)
+        out = [title, f"{label:<44}| Total | Done | Win | Loss | BE | WinRate | Net R | PF | Avg R"]
+        for k, ts in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            d = [t for t in ts if t in fills]
+            rs = [t["r_multiple"] or 0.0 for t in d]
+            w, lo = sum(r > 0 for r in rs), sum(r < 0 for r in rs)
+            gl = -sum(r for r in rs if r < 0)
+            pf = f"{sum(r for r in rs if r > 0) / gl:.2f}" if gl else "-"
+            wr = f"{100 * w / len(d):.0f}%" if d else "-"
+            avg = f"{sum(rs) / len(d):+.2f}R" if d else "-"
+            out.append(
+                f"{k:<44}| {len(ts):>5} | {len(d):>4} | {w:>3} | {lo:>4} | {len(d) - w - lo:>2} "
+                f"| {wr:>7} | {sum(rs):>+5.1f} | {pf:>4} | {avg}"
+            )
+        return out
+
+    ci, n = res.get("win_rate_ci95_pct"), res["completed_trades"]
+    lines = [
+        "ARK-WATCH PLAYBOOK TRACKER REPORT (paper, TZ: ET)",
+        f"Scenarios {res['total_scenarios']} | trades {n} ({res['wins']}W/{res['losses']}L/"
+        f"{res['breakevens']}BE) | active {res['active']} | pending {res['pending']} | "
+        f"non-trades {res['invalidated']}",
+        f"Win rate {res['win_rate_pct']}% (CI95 {ci}) | PF {res['profit_factor']} | "
+        f"expectancy {res['expectancy_r']}R | MFE/MAE {res['avg_mfe']}/{res['avg_mae']} pts",
+    ]
+    if n < 100:
+        lines.append(f"! n={n} < 100: not enough to claim an edge; per-row numbers are noise.")
+    lines += [""] + table(lambda t: t["symbol"], "BY SYMBOL", "Symbol")
+    lines += [""] + table(lambda t: t["scenario_id"].removeprefix("SCENARIO_"), "BY SETUP", "Setup")
+    lines += [
+        "",
+        "RECENT JOURNAL (newest first)",
+        "Resolved (ET)    | Sym    | Dir   | R     | Status | Setup",
+    ]
+    for t in rows[:journal]:
+        ts = t["resolved_at_utc"]
+        when = (
+            datetime.fromisoformat(ts).astimezone(_ET).strftime("%m-%d %H:%M") if ts else "running"
+        )
+        lines.append(
+            f"{when:<16} | {t['symbol']:<6} | {t['direction']:<5} | "
+            f"{(t['r_multiple'] or 0.0):>+5.2f} | {t['outcome'] or t['state']:<16} | {t['title'][:48]}"
+        )
+    return "\n".join(lines)

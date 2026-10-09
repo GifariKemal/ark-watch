@@ -174,13 +174,19 @@ def main() -> int:
         p.add_argument(
             "--detail", action="store_true", help="show individual trade details and decision logs"
         )
+        p.add_argument("--report", action="store_true", help="human-readable tables, not JSON")
         p.add_argument("--db", default=str(_DEFAULT_DB))
         a = p.parse_args(sys.argv[2:])
         conn = db.get_conn(a.db, allow_init=True)
         res = get_playbook_performance_metrics(
-            conn, symbol=a.symbol, horizon=a.horizon, detail=a.detail
+            conn, symbol=a.symbol, horizon=a.horizon, detail=a.detail or a.report
         )
         conn.close()
+        if a.report:
+            from .signals.playbook_tracker import format_report
+
+            print(format_report(res))
+            return 0
         print(json.dumps(res, indent=2))
         return 0
     if cmd == "scanner":

@@ -132,10 +132,10 @@ def test_signal_listing_through_api(gamma, conn):
     assert {r["signal_id"] for r in page["items"]} == set(_signals(conn))
 
 
-def test_cli_http_error_is_logged_redacted_and_exits_1(gamma, tmp_path, capsys):
+def test_cli_http_error_is_logged_redacted_and_exits_0(gamma, tmp_path, capsys):
     gamma["status"], gamma["body"] = 503, b"busy"
     path = tmp_path / "a.db"
-    assert polymarket.main(["--db", str(path)]) == 1
+    assert polymarket.main(["--db", str(path)]) == 0  # extra source: logged, never pages the phone
     assert gamma["hits"] == 2  # one retry
     c = db.get_conn(path)
     status, err = c.execute("SELECT status, error FROM fetch_log").fetchone()
@@ -150,7 +150,7 @@ def test_cli_empty_body_and_empty_list_exit_0(gamma, tmp_path):
     gamma["body"] = json.dumps([_m("x", "Will a celebrity win?", 1e9)]).encode()
     assert polymarket.main(["--db", str(path)]) == 0
     gamma["body"] = b""
-    assert polymarket.main(["--db", str(path)]) == 1  # unparseable body = ERROR
+    assert polymarket.main(["--db", str(path)]) == 0  # unparseable body = ERROR row, still no page
     c = db.get_conn(path)
     rows = c.execute("SELECT status FROM fetch_log ORDER BY id").fetchall()
     c.close()

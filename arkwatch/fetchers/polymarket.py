@@ -165,4 +165,5 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         conn.close()
     print(f"=== polymarket: {'ERROR (see fetch_log)' if n is None else f'{n} markets stored'} ===")
-    return 1 if n is None else 0
+    # ERROR is already in fetch_log; Polymarket is an extra source, so an outage must not page the owner
+    return 0

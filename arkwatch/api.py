@@ -675,6 +675,42 @@ def list_signals(
     return _page(c, inner, params, ["signal_id"], cursor=cursor, limit=limit)
 
 
+def list_odds(c: sqlite3.Connection, *, max_age_days: int = 3) -> dict:
+    """Latest Polymarket market-implied probabilities with the fields a dashboard needs.
+
+    They are stored as computed_signals rows `polymarket:<slug>` (value = probability of the first
+    outcome, inputs_json = question/outcomes/volume/end_date). Markets not refreshed for
+    `max_age_days` have left the top list and are dropped; sorted by volume, biggest first."""
+    floor = (datetime.now(UTC).date() - timedelta(days=max_age_days)).isoformat()
+    rows = c.execute(
+        "SELECT signal_id, MAX(ts), value, state, inputs_json, computed_at FROM computed_signals"
+        " WHERE signal_id LIKE 'polymarket:%' GROUP BY signal_id HAVING MAX(ts) >= ?",
+        (floor,),
+    ).fetchall()
+    items = []
+    for sid, ts, value, topic, inputs, computed_at in rows:
+        try:
+            d = json.loads(inputs or "{}")
+        except ValueError:
+            d = {}
+        items.append(
+            {
+                "signal_id": sid,
+                "slug": d.get("slug") or sid.split(":", 1)[1],
+                "topic": topic,
+                "question": d.get("question"),
+                "probability": value,
+                "outcomes": d.get("outcomes") or [],
+                "volume": d.get("volume"),
+                "end_date": d.get("end_date"),
+                "as_of": ts,
+                "computed_at": computed_at,
+            }
+        )
+    items.sort(key=lambda m: -(m["volume"] or 0))
+    return {"generated_at": datetime.now(UTC).isoformat(timespec="seconds"), "items": items}
+
+
 def signal_history(
     c: sqlite3.Connection,
     signal_id: str,

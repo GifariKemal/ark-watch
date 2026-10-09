@@ -706,3 +706,72 @@ def test_wal_stress_writer_and_8_readers(client, seeded):
     assert not [e for e in errors if "locked" in e], errors
     assert errors == []
     assert done["writes"] > 100 and done["reads"] > 100
+
+
+def test_odds_serves_question_volume_and_end_date(client, seeded):
+    """Polymarket rows live in computed_signals; /v1/odds exposes the fields the dashboard needs
+    (question, volume, end date) that the generic signals listing deliberately does not."""
+    import json as _json
+
+    c = db.get_conn(seeded, allow_init=True)
+    rows = [
+        (
+            "polymarket:fed-hold",
+            _days_ago(0),
+            0.845,
+            "fed",
+            8_277_000.0,
+            "Will the Fed hold in October?",
+        ),
+        (
+            "polymarket:recession-2026",
+            _days_ago(0),
+            0.065,
+            "recession",
+            2_283_000.0,
+            "US recession by end of 2026?",
+        ),
+        ("polymarket:old-market", _days_ago(10), 0.5, "oil", 9_999_999.0, "Stale market"),
+    ]
+    for sid, ts, p, topic, vol, q in rows:
+        c.execute(
+            "INSERT INTO computed_signals(signal_id,ts,run_id,computed_at,value,state,inputs_json)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (
+                sid,
+                ts,
+                "r",
+                ts + "T00:00:00",
+                p,
+                topic,
+                _json.dumps(
+                    {
+                        "question": q,
+                        "outcomes": ["Yes", "No"],
+                        "volume": vol,
+                        "end_date": "2026-12-31",
+                        "slug": sid[11:],
+                    }
+                ),
+            ),
+        )
+    c.commit()
+    c.close()
+    body = client.get("/v1/odds").json()
+    got = [
+        (m["slug"], m["probability"], m["topic"], m["question"], m["volume"], m["end_date"])
+        for m in body["items"]
+    ]
+    assert got == [
+        ("fed-hold", 0.845, "fed", "Will the Fed hold in October?", 8_277_000.0, "2026-12-31"),
+        (
+            "recession-2026",
+            0.065,
+            "recession",
+            "US recession by end of 2026?",
+            2_283_000.0,
+            "2026-12-31",
+        ),
+    ]  # volume desc; a market not refreshed for days is dropped
+    assert body["items"][0]["outcomes"] == ["Yes", "No"]
+    assert client.get("/v1/odds", headers={"x-arkwatch-key": ""}).status_code == 401

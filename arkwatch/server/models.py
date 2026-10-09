@@ -95,6 +95,24 @@ class SignalOut(BaseModel):
     computed_at: str | None = None
 
 
+class OddsItemOut(BaseModel):
+    signal_id: str
+    slug: str
+    topic: str | None = None
+    question: str | None = None
+    probability: Num = None
+    outcomes: list[str] = []
+    volume: Num = None
+    end_date: str | None = None
+    as_of: str
+    computed_at: str | None = None
+
+
+class OddsOut(BaseModel):
+    generated_at: str
+    items: list[OddsItemOut]
+
+
 class SignalPointOut(BaseModel):
     ts: str
     value: Num = None

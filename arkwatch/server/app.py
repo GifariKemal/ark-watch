@@ -59,6 +59,7 @@ from .models import (
     LevelsOut,
     NewsOut,
     ObservationOut,
+    OddsOut,
     OutboxOut,
     Page,
     PerformanceOut,
@@ -350,6 +351,12 @@ def signals_list(
     limit: Annotated[int, Query(ge=1, le=1000)] = 200,
 ):
     return api.list_signals(c, prefix=prefix, cursor=cursor, limit=limit)
+
+
+@v1.get("/odds", response_model=OddsOut, tags=["signals"])
+def odds_list(c: Conn):
+    """Polymarket market-implied probabilities (third-party prediction market; not a forecast)."""
+    return api.list_odds(c)
 
 
 @v1.get("/signals/{signal_id}/history", response_model=Page[SignalPointOut], tags=["signals"])

@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
 
 import requests
 
@@ -117,16 +119,48 @@ def _config() -> dict:
     raise NlpError(f"unknown NLP_PROVIDER: {provider}")
 
 
+# Per-model circuit breaker: a dead free lane must not cost every call a full
+# timeout. (endpoint, model) -> (consecutive failures, open until on _clock).
+BREAKER_FAILURES = 3
+BREAKER_COOLDOWN_S = 120.0
+_clock = time.monotonic
+_lock = threading.Lock()
+_breaker: dict[tuple[str, str], tuple[int, float]] = {}
+
+
+def _read_timeout() -> float:
+    try:
+        return float(os.environ.get("NLP_TIMEOUT_S", "60"))
+    except ValueError:
+        return 60.0
+
+
 def _call(cfg: dict, system: str, user: str) -> str:
-    """Try each model of a comma-separated NLP_MODEL in order (free lanes 502/429 at random)."""
+    """Try each model of a comma-separated NLP_MODEL in order (free lanes 502/429 at random),
+    skipping models whose breaker is open. After the cooldown one call probes the model
+    again (half-open): a failure re-opens it at once, a success closes it."""
     models = [m.strip() for m in str(cfg["model"]).split(",") if m.strip()] or ["default"]
+    with _lock:
+        now = _clock()
+        ready = [m for m in models if _breaker.get((cfg["endpoint"], m), (0, 0.0))[1] <= now]
+    if not ready:
+        raise NlpError("all NLP models are cooling down")
     last: Exception | None = None
-    for model in models:
+    for model in ready:
+        key = (cfg["endpoint"], model)
         try:
-            return _call_one({**cfg, "model": model}, system, user)
+            out = _call_one({**cfg, "model": model}, system, user)
         except (NlpError, requests.RequestException) as ex:
             last = ex
-    raise last  # type: ignore[misc]  # models is never empty
+            with _lock:
+                fails = _breaker.get(key, (0, 0.0))[0] + 1
+                until = _clock() + BREAKER_COOLDOWN_S if fails >= BREAKER_FAILURES else 0.0
+                _breaker[key] = (fails, until)
+            continue
+        with _lock:
+            _breaker.pop(key, None)
+        return out
+    raise last  # type: ignore[misc]  # ready is never empty
 
 
 def _call_one(cfg: dict, system: str, user: str) -> str:
@@ -145,7 +179,7 @@ def _call_one(cfg: dict, system: str, user: str) -> str:
                 "system": system,
                 "messages": [{"role": "user", "content": user}],
             },
-            timeout=(10, 180),
+            timeout=(10, _read_timeout()),
         )
         if r.status_code != 200:
             raise NlpError(f"NLP: HTTP {r.status_code} — {r.text[:100]}")
@@ -167,7 +201,7 @@ def _call_one(cfg: dict, system: str, user: str) -> str:
                 {"role": "user", "content": user},
             ],
         },
-        timeout=(10, 180),
+        timeout=(10, _read_timeout()),
     )
     if r.status_code != 200:
         raise NlpError(f"NLP: HTTP {r.status_code} — {r.text[:100]}")

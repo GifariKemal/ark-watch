@@ -25,6 +25,8 @@ def _seed(monkeypatch, nlp_script: list) -> list:
 
     nlp_script: per-call results — an Exception instance is raised, a dict is
     returned. Returns the list of (source_type) call labels made."""
+    # hermetic: the NLP step is skipped when no key is configured (CI has none; a dev machine may)
+    monkeypatch.setenv("NLP_API_KEY", "test-key")
     calls: list[str] = []
 
     monkeypatch.setattr(

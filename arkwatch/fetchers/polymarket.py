@@ -12,6 +12,7 @@ import argparse
 import json
 import re
 import sqlite3
+import time
 from datetime import UTC, datetime
 
 import requests
@@ -20,7 +21,8 @@ from ..config import _load_yaml
 from ..qa import fetch_log
 
 URL = "https://gamma-api.polymarket.com/markets"
-POOL = 200
+PAGE = 100  # the Gamma API silently caps `limit` at 100
+MAX_PAGES = 15
 TIMEOUT = (5, 20)
 MIN_VOLUME = 50_000.0
 _TOKEN = re.compile(r"[a-z0-9&]+")
@@ -42,12 +44,19 @@ def match_topic(question: str, cfg: dict) -> str | None:
     return None
 
 
-def fetch_markets(url: str | None = None) -> list:
-    params = {"active": "true", "closed": "false", "order": "volumeNum", "ascending": "false"}
+def _get_page(url: str | None, offset: int) -> list:
+    params = {
+        "active": "true",
+        "closed": "false",
+        "order": "volumeNum",
+        "ascending": "false",
+        "limit": PAGE,
+        "offset": offset,
+    }
     last = ""
     for _ in range(2):  # one retry
         try:
-            r = requests.get(url or URL, params={**params, "limit": POOL}, timeout=TIMEOUT)
+            r = requests.get(url or URL, params=params, timeout=TIMEOUT)
             if r.status_code == 200:
                 data = r.json()
                 if isinstance(data, list):
@@ -58,6 +67,24 @@ def fetch_markets(url: str | None = None) -> list:
         except requests.RequestException as ex:  # includes an unparseable body
             last = f"{type(ex).__name__}: {ex}"
     raise PolymarketError(f"polymarket: {last}")
+
+
+def fetch_markets(url: str | None = None, min_volume: float = MIN_VOLUME) -> list:
+    """Walk pages by offset (the API caps `limit` at 100 and sorts by volume desc) until a short
+    page or the last row is under min_volume; macro markets (Fed, recession) sit on later pages."""
+    out: list = []
+    for page in range(MAX_PAGES):
+        rows = _get_page(url, page * PAGE)
+        out += rows
+        if len(rows) < PAGE:
+            break
+        try:
+            if float(rows[-1].get("volumeNum") or 0) < min_volume:
+                break
+        except (TypeError, ValueError):
+            break
+        time.sleep(0.15)  # be polite
+    return out
 
 
 def _listish(v) -> list:
@@ -143,11 +170,13 @@ def store(conn: sqlite3.Connection, rows: list[dict]) -> int:
 def run(conn: sqlite3.Connection) -> int | None:
     """Fetch, select, store; logs fetch_log. Returns rows stored, None on fetch ERROR."""
     try:
-        raw = fetch_markets()
+        topics = load_topics()
+        floor = min(float(t.get("min_volume", MIN_VOLUME)) for t in topics["topics"])
+        raw = fetch_markets(min_volume=floor)
     except PolymarketError as ex:
         fetch_log.log_collection(conn, "polymarket", "polymarket:markets", None, 0, err=str(ex))
         return None
-    n = store(conn, select(raw, load_topics()))
+    n = store(conn, select(raw, topics))
     fetch_log.log_collection(conn, "polymarket", "polymarket:markets", None, n)
     return n
 

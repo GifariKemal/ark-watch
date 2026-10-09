@@ -176,3 +176,49 @@ def test_hourly_schedule_entry():
     assert keys == ["1420-polymarket@2026-10-09"]  # only this hour, never a replay of earlier hours
     assert not [c for c, _d, _k in _due_jobs(at.replace(minute=19), {}) if c == "polymarket"]
     assert not [c for c, _d, _k in _due_jobs(at, {keys[0]: "1"}) if c == "polymarket"]
+
+
+def test_pagination_walks_pages_until_volume_drops_below_minimum(monkeypatch):
+    """The Gamma API silently caps `limit` at 100 rows: macro markets (Fed, recession) sit on
+    later pages. Pages are walked by offset until a short page or volume under the minimum."""
+    calls: list[str] = []
+
+    def page(offset):
+        # 250 rows, descending volume; rows from index 120 on are below the 50k minimum
+        rows = []
+        for i in range(offset, min(offset + 100, 250)):
+            vol = 900_000 - i * 5_000 if i < 120 else 1_000
+            rows.append(
+                _m(
+                    f"m{i}",
+                    "Will the Fed cut rates in 2026?" if i == 105 else f"Will thing {i}?",
+                    vol,
+                )
+            )
+        return rows
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            calls.append(self.path)
+            off = int(self.path.split("offset=")[1].split("&")[0]) if "offset=" in self.path else 0
+            body = json.dumps(page(off)).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setattr(polymarket, "URL", f"http://127.0.0.1:{srv.server_port}/markets")
+    monkeypatch.setattr(polymarket.time, "sleep", lambda _s: None)
+    try:
+        rows = polymarket.fetch_markets()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert any("m105" in (r.get("slug") or "") for r in rows)  # a row only on page 2 is reached
+    assert len(calls) == 2  # page 2 ends below the minimum volume, so page 3 is never requested
+    assert all("limit=100" in c for c in calls)

@@ -40,6 +40,13 @@ fixtures/    captured API responses for parser tests
 - Optional news source: set `ARGUS_TOKEN` (and `ARGUS_URL` if not the default) to add headlines from the self-hosted Argus MCP server; unset = SKIPPED.
 - This is a personal research tool, **not** investment advice.
 
+### Phone push and dead-man switch
+
+- Push: set `NTFY_URL` to a long random ntfy topic URL (for example `https://ntfy.sh/arkwatch-<random>`) and subscribe to the same topic in the ntfy app. Alerts arrive as they fire (urgent ones at high priority), the morning brief as a short summary linking to the dashboard. `NTFY_TOKEN` is only for protected or self-hosted topics.
+- Delivery: the daemon `send` job stays paused until at least one channel (ntfy, Discord or Telegram) is configured; an unconfigured channel row ends as `skipped`, not `failed`.
+- Dead-man switch: create a free healthchecks.io check (period 5 min, grace 10 min) and set `HEALTHCHECK_PING_URL` to its ping URL. The daemon pings it every 5 minutes while healthy and hits `<url>/fail` when a job fails, so a dead or hung daemon pages you by email.
+- The topic URL, token and ping URL are secrets: keep them in the Easypanel environment, they never appear in logs.
+
 GDELT retains the current UTC week in the live database. If Sunday cleanup has eligible rows, it creates a verified temporary snapshot and removes it after post-cleanup checks pass; preview candidates with `python -m arkwatch gdelt-retention`.
 
 ## Deployment

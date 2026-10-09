@@ -75,20 +75,29 @@ def _tag_symbols(source_name: str) -> list[str]:
 
 def fetch_rss_feed(source_name: str, url: str, timeout: int = 10) -> list[dict]:
     """Fetch and parse an RSS feed, returning standardized news dictionaries."""
+    from ..net import proxies_for
+
     data = None
+    proxies = proxies_for(url)
     try:
         from curl_cffi import requests as creq
 
-        from ..net import proxies_for
-
         s = creq.Session(impersonate="chrome")
-        r = s.get(url, timeout=timeout, proxies=proxies_for(url))
+        r = s.get(url, timeout=timeout, proxies=proxies)
         if r.status_code == 200:
             data = r.content
     except Exception:
         pass
 
-    if data is None:
+    if data is None and proxies:
+        # proxied hosts (Yahoo 429s the datacenter IP): the fallback must keep the
+        # proxy; a direct urllib retry is the request that got 429'd
+        import requests
+
+        r = requests.get(url, timeout=timeout, proxies=proxies, headers={"User-Agent": USER_AGENT})
+        r.raise_for_status()
+        data = r.content
+    elif data is None:
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=timeout) as response:
             data = response.read()

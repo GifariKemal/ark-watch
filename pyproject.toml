@@ -38,6 +38,9 @@ analytics = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# the project is not installed (no build-system): put the repo root on sys.path so `pytest`,
+# `uv run pytest` and `python -m pytest` all import `arkwatch`
+pythonpath = ["."]
 markers = ["network: needs a live connection (excluded from the default run)"]
 filterwarnings = ["error"]
 

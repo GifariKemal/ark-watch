@@ -1,6 +1,6 @@
 """test_amt.py — unit tests for advanced Auction Market Theory (AMT) engine."""
 
-from datetime import time
+from datetime import date, time
 
 from arkwatch.signals import amt
 
@@ -222,19 +222,19 @@ def test_find_naked_pocs():
 
 
 def test_get_asset_ib_timing():
-    t_eq, lbl_eq = amt.get_asset_ib_timing("NQ1", is_dst=True)
+    t_eq, lbl_eq = amt.get_asset_ib_timing("NQ1", date(2026, 10, 6))
     assert t_eq == time(13, 30)
     assert lbl_eq == "US_CASH_OPEN_0930ET"
 
-    t_oil, lbl_oil = amt.get_asset_ib_timing("CL1", is_dst=True)
+    t_oil, lbl_oil = amt.get_asset_ib_timing("CL1", date(2026, 10, 6))
     assert t_oil == time(13, 0)
     assert lbl_oil == "NYMEX_ENERGY_PIT_0900ET"
 
-    t_gold, lbl_gold = amt.get_asset_ib_timing("GC1", is_dst=True)
+    t_gold, lbl_gold = amt.get_asset_ib_timing("GC1", date(2026, 10, 6))
     assert t_gold == time(12, 20)
     assert lbl_gold == "COMEX_METALS_PIT_0820ET"
 
-    t_btc, lbl_btc = amt.get_asset_ib_timing("BTCUSD", is_dst=True)
+    t_btc, lbl_btc = amt.get_asset_ib_timing("BTCUSD", date(2026, 10, 6))
     assert t_btc == time(22, 0)
     assert lbl_btc == "CRYPTO_SESSION_OPEN"
 

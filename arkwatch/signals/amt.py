@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from .asof import parse_as_of
-from .horizons import cme_session_date, cme_session_start
+from .horizons import LONDON_TZ, NY_TZ, cme_session_date, cme_session_start, local_open_utc
 
 TPO_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
@@ -40,38 +40,30 @@ ASSET_TICK_SIZES: dict[str, float] = {
     "USDJPY": 0.01,
     "DXY": 0.01,
 }
+CRYPTO_SYMBOLS = frozenset({"BTCUSD", "ETHUSD"})
 
 
-def get_asset_ib_timing(symbol: str, is_dst: bool = True) -> tuple[time, str]:
-    """Determine asset-class-specific Initial Balance start time and institutional label.
+def get_asset_ib_timing(symbol: str, session_date: date) -> tuple[time, str]:
+    """Asset-class Initial Balance start (UTC time-of-day) for a CME session date.
 
-    Different markets have distinct pit/cash openings:
+    Each open is a local-clock time converted with that market's own DST (zoneinfo):
       - CME Equities & US ETFs: 09:30 ET (NYSE/Nasdaq Cash Open)
       - Oil (CL1, BZ1): 09:00 ET (NYMEX Energy Pit Open)
       - Gold/Silver/Copper (GC1, SI1, HG1): 08:20 ET (COMEX Metals Pit Open)
-      - Crypto (BTCUSD, ETHUSD): 18:00 ET (Globex/Session Open)
-      - FX & DXY (EURUSD, GBPUSD, USDJPY, DXY): 08:00 London (London Interbank Open)
+      - Crypto (BTCUSD, ETHUSD): the session open itself (18:00 ET the prior day), evaluated at
+        the session start so a session straddling a DST change is not split by an hour
+      - FX & DXY (EURUSD, GBPUSD, USDJPY, DXY): 08:00 Europe/London (UK DST, not US DST)
     """
     sym = symbol.strip().upper()
-    if sym in ("BTCUSD", "ETHUSD"):
-        # 18:00 ET = 22:00 UTC (EDT) or 23:00 UTC (EST)
-        t = time(22, 0) if is_dst else time(23, 0)
-        return t, "CRYPTO_SESSION_OPEN"
+    if sym in CRYPTO_SYMBOLS:
+        return cme_session_start(session_date).time(), "CRYPTO_SESSION_OPEN"
     if sym in ("CL1", "BZ1"):
-        # 09:00 ET = 13:00 UTC (EDT) or 14:00 UTC (EST)
-        t = time(13, 0) if is_dst else time(14, 0)
-        return t, "NYMEX_ENERGY_PIT_0900ET"
+        return local_open_utc(session_date, 9, 0, NY_TZ), "NYMEX_ENERGY_PIT_0900ET"
     if sym in ("GC1", "SI1", "HG1"):
-        # 08:20 ET = 12:20 UTC (EDT) or 13:20 UTC (EST)
-        t = time(12, 20) if is_dst else time(13, 20)
-        return t, "COMEX_METALS_PIT_0820ET"
+        return local_open_utc(session_date, 8, 20, NY_TZ), "COMEX_METALS_PIT_0820ET"
     if sym in ("EURUSD", "GBPUSD", "USDJPY", "DXY"):
-        # London Open: 08:00 London = 07:00 UTC (BST) or 08:00 UTC (GMT)
-        t = time(7, 0) if is_dst else time(8, 0)
-        return t, "LONDON_FX_OPEN"
-    # Default: US Equity Cash Open 09:30 ET = 13:30 UTC (EDT) or 14:30 UTC (EST)
-    t = time(13, 30) if is_dst else time(14, 30)
-    return t, "US_CASH_OPEN_0930ET"
+        return local_open_utc(session_date, 8, 0, LONDON_TZ), "LONDON_FX_OPEN"
+    return local_open_utc(session_date, 9, 30, NY_TZ), "US_CASH_OPEN_0930ET"
 
 
 def split_rth(
@@ -885,4 +877,68 @@ def evaluate_time_acceptance(
         "consecutive_bars_outside": max(above_count, below_count),
         "duration_minutes": duration_mins,
         "acceptance_level": level,
+    }
+
+
+def detect_market_structure_pivots(
+    bars: list[tuple[str, float, float, float, float, float]],
+    lb: int = 4,
+    rb: int = 4,
+) -> dict[str, Any]:
+    """Detect fractal market structure pivots (HH, HL, LH, LL) based on PineScript strategy.
+
+    Identifies whether price action is in:
+      - BULLISH_STRUCTURE (HH + HL) -> Acceptance of higher prices
+      - BEARISH_STRUCTURE (LL + LH) -> Acceptance of lower prices
+      - VOLATILITY_CHOP / EXPANSION (HH + LL) -> Widening range
+      - ROTATIONAL_CHOP -> Range-bound auction
+    """
+    if len(bars) < (lb + rb + 2):
+        return {
+            "trend": "INSUFFICIENT_BARS",
+            "latest_point": "NONE",
+            "recent_points": [],
+        }
+
+    highs = [b[2] for b in bars]
+    lows = [b[3] for b in bars]
+    n = len(bars)
+    pivots = []
+    for i in range(lb, n - rb):
+        wh = highs[i - lb : i + rb + 1]
+        if highs[i] == max(wh) and wh.count(highs[i]) == 1:
+            pivots.append((i, 1, highs[i], bars[i][0]))
+        wl = lows[i - lb : i + rb + 1]
+        if lows[i] == min(wl) and wl.count(lows[i]) == 1:
+            pivots.append((i, -1, lows[i], bars[i][0]))
+
+    pts = []
+    last_ph = None
+    last_pl = None
+    for p in pivots:
+        idx, p_type, price, ts = p
+        if p_type == 1:
+            tag = "HH" if (last_ph and price > last_ph[2]) else "LH"
+            pts.append({"type": tag, "price": price, "ts": ts})
+            last_ph = p
+        else:
+            tag = "HL" if (last_pl and price > last_pl[2]) else "LL"
+            pts.append({"type": tag, "price": price, "ts": ts})
+            last_pl = p
+
+    if len(pts) >= 2:
+        last_types = [x["type"] for x in pts[-2:]]
+        if "HH" in last_types and "HL" in last_types:
+            trend = "BULLISH_STRUCTURE (HH + HL)"
+        elif "LL" in last_types and "LH" in last_types:
+            trend = "BEARISH_STRUCTURE (LL + LH)"
+        else:
+            trend = f"ROTATIONAL_CHOP ({last_types[-2]} -> {last_types[-1]})"
+    else:
+        trend = "CONSOLIDATION"
+
+    return {
+        "trend": trend,
+        "latest_point": pts[-1] if pts else "NONE",
+        "recent_points": pts[-4:],
     }

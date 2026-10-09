@@ -6,6 +6,18 @@ from arkwatch import api, db
 from arkwatch.signals import levels, playbook, sentiment
 
 
+def _seed_two_sessions(conn, symbol, now, o, h, lo, c):
+    """One closed bar in the current session and one in the prior (Friday) session."""
+    conn.executemany(
+        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close,"
+        " volume, fetched_at) VALUES (?, ?, '5m', 'YAHOO', ?, ?, ?, ?, 100.0, 'now')",
+        [
+            (symbol, (now - dt).isoformat(timespec="seconds"), o, h, lo, c)
+            for dt in (timedelta(days=3), timedelta(minutes=5))
+        ],
+    )
+
+
 def test_compute_value_area_discrete_bins():
     # Synthetic bars: high volume around price 100, low volume at extremes 90 and 110
     bars = [
@@ -295,13 +307,9 @@ def test_playbook_macro_quadrant_and_net_liquidity(tmp_path):
     db_file = tmp_path / "arkwatch.db"
     conn = db.get_conn(db_file, allow_init=True)
     now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
-    now_iso = now.isoformat(timespec="seconds")
 
     # Seed intraday bars and observations
-    conn.execute(
-        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('NQ1', ?, '5m', 'YAHOO', 31000.0, 31100.0, 30900.0, 31050.0, 100.0, ?)",
-        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
-    )
+    _seed_two_sessions(conn, "NQ1", now, 31000.0, 31100.0, 30900.0, 31050.0)
     conn.execute(
         "INSERT INTO series_registry (series_id, name, block, tier, unit, value_format, freq, primary_source) VALUES ('FRED:DFII10', '10Y Real TIPS', 'B', 1, 'pct', 'pct', 'D', 'FRED')"
     )
@@ -329,12 +337,8 @@ def test_playbook_rich_cot_and_positioning_integration(tmp_path):
     db_file = tmp_path / "arkwatch.db"
     conn = db.get_conn(db_file, allow_init=True)
     now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
-    now_iso = now.isoformat(timespec="seconds")
 
-    conn.execute(
-        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('GC1', ?, '5m', 'YAHOO', 4180.0, 4190.0, 4175.0, 4185.0, 100.0, ?)",
-        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
-    )
+    _seed_two_sessions(conn, "GC1", now, 4180.0, 4190.0, 4175.0, 4185.0)
     conn.commit()
     conn.close()
 
@@ -349,12 +353,8 @@ def test_playbook_broad_dollar_and_smile_integration(tmp_path):
     db_file = tmp_path / "arkwatch.db"
     conn = db.get_conn(db_file, allow_init=True)
     now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
-    now_iso = now.isoformat(timespec="seconds")
 
-    conn.execute(
-        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('DXY', ?, '5m', 'YAHOO', 102.0, 102.3, 101.9, 102.2, 100.0, ?)",
-        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
-    )
+    _seed_two_sessions(conn, "DXY", now, 102.0, 102.3, 101.9, 102.2)
     conn.execute(
         "INSERT INTO series_registry (series_id, name, block, tier, unit, value_format, freq, primary_source) VALUES ('FRED:DTWEXBGS', 'Broad Dollar Index', 'A', 1, 'index', 'index', 'D', 'FRED')"
     )
@@ -374,12 +374,8 @@ def test_playbook_news_velocity_and_event_gates(tmp_path):
     db_file = tmp_path / "arkwatch.db"
     conn = db.get_conn(db_file, allow_init=True)
     now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
-    now_iso = now.isoformat(timespec="seconds")
 
-    conn.execute(
-        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('CL1', ?, '5m', 'YAHOO', 90.0, 91.0, 89.5, 90.5, 100.0, ?)",
-        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
-    )
+    _seed_two_sessions(conn, "CL1", now, 90.0, 91.0, 89.5, 90.5)
     # High-impact event scheduled in 1.5 hours
     event_time = (now + timedelta(hours=1, minutes=30)).isoformat(timespec="seconds")
     conn.execute(
@@ -400,12 +396,8 @@ def test_playbook_single_print_repair_scenario(tmp_path):
     db_file = tmp_path / "arkwatch.db"
     conn = db.get_conn(db_file, allow_init=True)
     now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
-    now_iso = now.isoformat(timespec="seconds")
 
-    conn.execute(
-        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('NQ1', ?, '5m', 'YAHOO', 31200.0, 31250.0, 31180.0, 31210.0, 100.0, ?)",
-        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
-    )
+    _seed_two_sessions(conn, "NQ1", now, 31200.0, 31250.0, 31180.0, 31210.0)
     conn.commit()
     conn.close()
 
@@ -419,12 +411,8 @@ def test_playbook_full_power_signals_integration(tmp_path):
     db_file = tmp_path / "arkwatch.db"
     conn = db.get_conn(db_file, allow_init=True)
     now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
-    now_iso = now.isoformat(timespec="seconds")
 
-    conn.execute(
-        "INSERT INTO intraday_bars (symbol, bar_ts_utc, interval, source, open, high, low, close, volume, fetched_at) VALUES ('NQ1', ?, '5m', 'YAHOO', 31200.0, 31250.0, 31180.0, 31210.0, 100.0, ?)",
-        ((now - timedelta(minutes=5)).isoformat(timespec="seconds"), now_iso),
-    )
+    _seed_two_sessions(conn, "NQ1", now, 31200.0, 31250.0, 31180.0, 31210.0)
     conn.commit()
     conn.close()
 

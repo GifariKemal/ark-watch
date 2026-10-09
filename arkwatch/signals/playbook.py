@@ -1447,6 +1447,13 @@ def generate_trading_playbook(
             else "NONE_IN_25D_LOOKBACK (All-Time Low)",
             "multi_horizon_session_profiles": ctx.get("session_profiles", {}),
             "session_value_migration": ctx.get("session_value_migration", {}),
+            "hierarchical_naked_pocs": ctx.get("hierarchical_naked_pocs", {}),
+            "multi_desk_initial_balance": ctx.get("multi_desk_initial_balance", {}),
+            "overnight_cva": ctx.get("overnight_cva", {}),
+            "multi_horizon_time_acceptance": ctx.get("multi_horizon_time_acceptance", {}),
+            "multi_horizon_open_types": ctx.get("multi_horizon_open_types", {}),
+            "multi_horizon_cva_map": ctx.get("multi_horizon_cva_map", {}),
+            "multi_timeframe_market_structure": ctx.get("multi_timeframe_market_structure", {}),
             "ipda_data_ranges": ctx.get("ipda_data_ranges", {}),
             "quarterly_theory": ctx.get("quarterly_theory", {}),
             "tpo_analytics": {

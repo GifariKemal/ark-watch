@@ -28,17 +28,22 @@ def compute_horizon_amt(
     start_str = start_utc.isoformat(timespec="seconds")
     end_str = end_utc.isoformat(timespec="seconds")
 
-    rows = conn.execute(
+    raw = conn.execute(
         """
         SELECT bar_ts_utc, open, high, low, close, COALESCE(volume, 0.0)
         FROM intraday_bars
-        WHERE symbol = ?
+        WHERE symbol = ? AND interval = '5m'
           AND bar_ts_utc >= ?
           AND bar_ts_utc < ?
-        ORDER BY bar_ts_utc ASC
+        ORDER BY bar_ts_utc ASC, source ASC
         """,
         (sym, start_str, end_str),
     ).fetchall()
+    # Several providers can store the same bar: keep one row per timestamp
+    dedup: dict[str, tuple] = {}
+    for r in raw:
+        dedup.setdefault(r[0], r)
+    rows = list(dedup.values())
 
     if not rows:
         return None
@@ -103,12 +108,24 @@ def compute_horizon_amt(
         "vah": va["vah"],
         "val": va["val"],
         "poc": va["poc"],
-        "tpo_vah": tpo_data.get("tpo_vah"),
-        "tpo_val": tpo_data.get("tpo_val"),
-        "tpo_poc": tpo_data.get("tpo_poc"),
+        "tpo_vah": (
+            tpo_data.get("tpo_vah")
+            if tpo_data.get("tpo_vah") is not None
+            else "N/A_DURATION_UNDER_30M"
+        ),
+        "tpo_val": (
+            tpo_data.get("tpo_val")
+            if tpo_data.get("tpo_val") is not None
+            else "N/A_DURATION_UNDER_30M"
+        ),
+        "tpo_poc": (
+            tpo_data.get("tpo_poc")
+            if tpo_data.get("tpo_poc") is not None
+            else "N/A_DURATION_UNDER_30M"
+        ),
         "single_prints_count": len(tpo_data.get("single_prints", [])),
-        "initial_balance_high": round(ib_high, 4),
-        "initial_balance_low": round(ib_low, 4),
+        "initial_balance_high": round(ib_high, 4) if ib_high is not None else "N/A",
+        "initial_balance_low": round(ib_low, 4) if ib_low is not None else "N/A",
         "vpoc_alignment": vpoc_align.get("relationship", "ALIGNED"),
         "vpoc_bias": vpoc_align.get("bias", "NEUTRAL"),
         "high_auction_structure": extremes.get("high_structure", "NORMAL"),

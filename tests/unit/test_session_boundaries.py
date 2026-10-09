@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from arkwatch import db
 from arkwatch.signals import amt, horizons, intraday, levels
@@ -90,7 +90,7 @@ def test_initial_balance_ignores_globex_open_bars():
     bars = [("2026-10-05T22:00:00Z", 100.0, 500.0, 1.0, 100.0, 10.0)] + [
         (f"2026-10-06T13:{m:02d}:00Z", 100.0, 110.0, 100.0, 105.0, 10.0) for m in range(30, 60, 5)
     ]
-    res = amt.analyze_initial_balance(bars, amt.get_asset_ib_timing("NQ1", is_dst=True)[0])
+    res = amt.analyze_initial_balance(bars, amt.get_asset_ib_timing("NQ1", date(2026, 10, 6))[0])
     assert (res["ib_high"], res["ib_low"]) == (110.0, 100.0)
 
 
@@ -99,7 +99,7 @@ def test_crypto_session_open_is_ib_start():
         ("2026-10-05T22:00:00Z", 100.0, 105.0, 99.0, 104.0, 10.0),
         ("2026-10-06T05:00:00Z", 104.0, 130.0, 104.0, 129.0, 10.0),
     ]
-    pre, rth = amt.split_rth(bars, amt.get_asset_ib_timing("BTCUSD", is_dst=True)[0])
+    pre, rth = amt.split_rth(bars, amt.get_asset_ib_timing("BTCUSD", date(2026, 10, 6))[0])
     assert pre == [] and rth == bars
 
 

@@ -218,7 +218,7 @@ def main() -> int:
         res = compute_session_reference_levels(conn, a.symbol)
         conn.close()
         if not res:
-            print(f"No intraday bars found for {a.symbol}")
+            print(f"No closed 5m bars with a completed prior session for {a.symbol}")
             return 1
         print(json.dumps(res, indent=2))
         return 0

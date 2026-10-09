@@ -123,13 +123,17 @@ def fetch_news(queries: tuple[str, ...] = QUERIES, budget_s: float = BUDGET_S) -
         try:
             res = client.call(
                 "news_sentiment_feed",
-                {"query": query, "sentiment": False},
+                # since='week' is the verified window ('day' returns low-relevance junk and an
+                # ISO date makes the server error); results Argus flags degraded are ignored
+                {"query": query, "sentiment": False, "since": "week"},
                 timeout=min(TIMEOUT_S, left),
             )
         except Exception as ex:
             errors.append(f"{query}: {type(ex).__name__}: {ex}")
             continue
         ok += 1
+        if res.get("degraded"):
+            continue
         for item in res.get("items") or []:
             title = str(item.get("title") or "").strip()
             url = str(item.get("url") or "").strip()

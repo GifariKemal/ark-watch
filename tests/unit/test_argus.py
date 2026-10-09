@@ -217,3 +217,24 @@ def test_run_argus_error_is_redacted(tmp_path, news_env, monkeypatch, capsys):
     assert log["ARGUS"][0] == "ERROR" and log["FMP"][0] == "OK"
     out = capsys.readouterr()
     assert TOKEN not in json.dumps(log) and TOKEN not in out.out + out.err
+
+
+def test_fetch_news_week_window_and_drops_degraded(monkeypatch):
+    """since='day' returns junk (low_relevance) and ISO dates error out on the server; 'week'
+    is the verified window, and any response Argus flags degraded is ignored."""
+    seen: list[dict] = []
+
+    class FakeClient:
+        def call(self, tool, args, timeout):
+            seen.append(args)
+            if args["query"] == "bad":
+                return {
+                    "items": [{"title": "farmers market", "url": "https://x.test/1"}],
+                    "degraded": True,
+                }
+            return {"items": [{"title": "ok", "url": "https://ok.test/1"}], "degraded": False}
+
+    monkeypatch.setattr(argus, "Client", FakeClient)
+    rows = argus.fetch_news(("good", "bad"))
+    assert [a["since"] for a in seen] == ["week", "week"]
+    assert [r["url"] for r in rows] == ["https://ok.test/1"]

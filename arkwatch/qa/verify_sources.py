@@ -17,7 +17,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
-from ..config import PROVIDER_ENV, load_anchors, load_registry, missing_env
+from ..config import PROVIDER_ENV, PlanLimited, load_anchors, load_registry, missing_env
 from ..fetchers import (
     atl,
     caldist,
@@ -407,6 +407,8 @@ def verify(
                 )
         except caldist.NoDataYet:  # empty events table (first boot): not a violation
             r.note = "no data yet"
+        except PlanLimited as ex:  # plan/quota (HTTP 402/429): skipped, not a violation
+            r.note = str(ex)[:120]
         except Exception as ex:  # a fetch error is recorded; it must not crash the gate
             r.anchor = r.sanity = r.depth = r.crossval = "✗"
             r.note = (r.note + str(ex))[:120]

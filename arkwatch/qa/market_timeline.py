@@ -793,6 +793,14 @@ def main(argv: list[str] | None = None) -> int:
         interval=args.interval,
         collect_1m=not args.no_1m,
     )
-    failed = [name for name, value in result.items() if value < 0]
-    print(f"=== market timeline: {len(result) - len(failed)} completed, {len(failed)} failed ===")
-    return 1 if failed else 0
+    bad = [name for name, value in result.items() if value < 0]
+    hard = [name for name in bad if name.startswith("okx:")]
+    degraded = [name for name in bad if not name.startswith("okx:")]
+    assets = [name for name in result if not name.startswith("okx:")]
+    print(
+        f"=== market timeline: {len(result) - len(bad)} completed, "
+        f"{len(degraded)} degraded, {len(hard)} failed ==="
+    )
+    # Stale/future after-hours bars degrade a few ETFs every night: that is data quality, not a job
+    # failure (a failure pages the owner). Fail on a collector error or a broad outage (> half).
+    return 1 if hard or (assets and len(degraded) > len(assets) / 2) else 0

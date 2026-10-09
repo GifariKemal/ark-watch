@@ -331,8 +331,8 @@ golden_anchors:
   - series_id: NFCI
     anchor_date: "2026-08-28"
     expected: -0.558
-    tolerance: 0.005     # weekly 3dp index (Saturday obs, Monday release; routine
-                        # backward revisions of ~0.01 do land)
+    tolerance: 0.015     # weekly 3dp index re-estimated every week: routine backward
+                        # revisions of ~0.01 land (live 2026-10-09: -0.558 -> -0.549), 0.005 paged falsely
     provenance: "recalibrated 2026-09-08 (week 08-21 revised −0.566→−0.556,
       the index's normal revision cycle); FRED live"
 

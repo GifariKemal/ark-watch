@@ -17,6 +17,8 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
+import requests
+
 from ..config import PROVIDER_ENV, PlanLimited, load_anchors, load_registry, missing_env
 from ..fetchers import (
     atl,
@@ -120,6 +122,8 @@ def _crossval_fmp(series_id: str, fred_value: float, fred_ts: str, tolerance: fl
             timeout=(10, 30),
         )
         rows = r.json()
+        if not isinstance(rows, list):  # quota/plan error body: {"Error Message": "Limit Reach"}
+            return "· FMP unavailable (plan/quota)"
         if not rows:
             return "✗ FMP response empty (14-day window)"
         by_date = {str(x["date"])[:10]: x for x in rows}
@@ -130,8 +134,8 @@ def _crossval_fmp(series_id: str, fred_value: float, fred_ts: str, tolerance: fl
         diff = abs(float(row[col]) - fred_value)
         tol = tolerance if tolerance is not None else 0.05  # default 5bp
         return "✓" if diff <= tol else f"✗ Δ{diff:.3f} @{fred_ts}"
-    except Exception as ex:
-        return f"✗ {str(ex)[:60]}"
+    except Exception as ex:  # the vendor leg may never block the gate (same rule as EODHD)
+        return f"· {str(ex)[:40]}"
 
 
 # Gate-4c (vendor-api audit #5): FMP economic-indicators crossval for the
@@ -405,6 +409,10 @@ def verify(
                 r.crossval = _crossval_eodhd_ust(
                     e["series_id"], cur["value"], cur["ts"], e.get("tolerance")
                 )
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as ex:
+            # an unreachable/slow upstream says nothing about the data: degrade, never page
+            r.anchor = r.sanity = r.depth = r.crossval = "·"
+            r.note = f"source unreachable: {type(ex).__name__}"
         except caldist.NoDataYet:  # empty events table (first boot): not a violation
             r.note = "no data yet"
         except PlanLimited as ex:  # plan/quota (HTTP 402/429): skipped, not a violation

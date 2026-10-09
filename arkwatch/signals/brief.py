@@ -1332,10 +1332,11 @@ def save_brief(db_path: str, markdown: str, score: float) -> str:
         " VALUES (?,?,?,?)",
         (today, markdown, score, now),
     )
-    conn.execute(
+    # one row per known channel; an unconfigured one ends 'skipped' at send time
+    conn.executemany(
         "INSERT OR IGNORE INTO brief_deliveries(brief_date, channel, status, created_at)"
         " VALUES (?,?, 'pending', ?)",
-        (today, "telegram", now),
+        [(today, ch, now) for ch in ("telegram", "ntfy")],
     )
     conn.execute("COMMIT")
     conn.close()

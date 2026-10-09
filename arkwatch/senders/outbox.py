@@ -18,6 +18,7 @@ from .base import active_channels
 CHANNEL_ENV = {
     "telegram": ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
     "discord": ("DISCORD_WEBHOOK_URL",),
+    "ntfy": ("NTFY_URL",),
 }
 
 CLAIM_STALE_MIN = 10  # re-claim a sending row only after >10 min
@@ -128,7 +129,9 @@ def send_pending(db_path: str) -> dict:
                     results["failed"] += 1
                     continue
                 try:
-                    ext_id = ch.send_text(md_row[0])
+                    # optional per-channel hook: push channels send a short form
+                    fmt = getattr(ch, "format_brief", None)
+                    ext_id = ch.send_text(fmt(md_row[0], brief_date) if fmt else md_row[0])
                 except Exception as ex:
                     from ..qa.harvest import _redact  # webhook URL / bot token
 
@@ -187,7 +190,10 @@ def send_pending_alerts(
                 conn.executemany(
                     "UPDATE alert_deliveries SET status='skipped', last_error=? WHERE id=?",
                     [
-                        ("unconfigured: no alert channel (TELEGRAM_* or DISCORD_WEBHOOK_URL)", r[0])
+                        (
+                            "unconfigured: no alert channel (TELEGRAM_*, DISCORD_WEBHOOK_URL or NTFY_URL)",
+                            r[0],
+                        )
                         for r in rows
                     ],
                 )

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import io
 import logging
 import os
 import signal
@@ -77,7 +78,13 @@ SCHEDULE = [
         "brief",
         "Generate brief + outbox (skip if Saturday edition already published)",
     ),
-    (7, 5, "daily", "send", "Send brief via Telegram (PAUSED holder — see _run_job guard)"),
+    (
+        7,
+        5,
+        "daily",
+        "send",
+        "Send brief to configured channels (paused when none, see _paused_jobs)",
+    ),
     (7, 15, "daily", "verify", "Truth gate"),
     (8, 15, "daily", "cme", "CME settlements + CVOL + VOI (gray harvester)"),
     (8, 30, "daily", "f2", "COT + flows (Bybit/Farside/PBoC/LBMA/TIC/LME) + FedWatch"),
@@ -147,10 +154,16 @@ def _market_news_interval(now: datetime) -> int:
     return MARKET_ACTIVE_INTERVAL_MINUTES if active else MARKET_NEWS_INTERVAL_MINUTES
 
 
-# D-023 data-first phase (owner 2026-09-13): GENERATION must keep running
-# (the brief pipeline persists five audit-trail store_* families), only the
-# OUTBOUND delivery is held. Resume delivery by emptying this set.
-PAUSED_JOBS = {"send"}
+def _paused_jobs() -> set[str]:
+    """D-023 data-first hold (owner 2026-09-13): generation always runs, OUTBOUND
+    delivery (`send`) runs only once at least one channel (ntfy, Discord,
+    Telegram) is configured. Re-read every call: env changes need no code edit."""
+    from .senders.base import active_channels
+
+    return set() if active_channels() else {"send"}
+
+
+PING_EVERY_S = 300  # dead-man ping cadence (healthchecks.io-style HEALTHCHECK_PING_URL)
 
 DAY_MAP = {
     "mon": 0,
@@ -230,6 +243,41 @@ def healthcheck(heartbeat: Path | None = None, db_path: Path | None = None) -> i
         return 1
     print(f"ok: heartbeat {age:.0f}s old")
     return 0
+
+
+def _ping(suffix: str = ""):
+    """Fire-and-forget GET to HEALTHCHECK_PING_URL (+suffix, e.g. '/fail') in a daemon
+    thread: never raises, never blocks the loop. The URL is a secret: never logged.
+    Returns the thread (tests join it) or None when unset."""
+    import threading
+    import urllib.request
+
+    url = os.environ.get("HEALTHCHECK_PING_URL", "").strip()
+    if not url:
+        return None
+
+    def _get():
+        try:
+            urllib.request.urlopen(url.rstrip("/") + suffix, timeout=5).close()
+        except Exception as ex:
+            logger.warning(f"healthcheck ping failed: {type(ex).__name__}")
+
+    t = threading.Thread(target=_get, daemon=True)
+    t.start()
+    return t
+
+
+def _maybe_ping(last: float, now: float | None = None) -> float:
+    """Ping at most once per PING_EVERY_S, only while healthcheck() passes (same notion
+    as the Docker HEALTHCHECK); returns the new last-check time."""
+    now = time.monotonic() if now is None else now
+    if now - last < PING_EVERY_S:
+        return last
+    with contextlib.redirect_stdout(io.StringIO()):  # healthcheck() prints its verdict
+        healthy = healthcheck() == 0
+    if healthy:
+        _ping()
+    return now
 
 
 def _acquire_lock(path: Path | None = None):
@@ -339,6 +387,7 @@ def _alert_job_failed(cmd: str, detail: str) -> None:
     transient 5xx pages crossed the spam tripwire falsely. Dated-per-job:
     retry echoes suppressed, next-day episodes re-page, jobs never mask
     each other, tripwire counts stay 1/key/day."""
+    _ping("/fail")
     try:
         from . import db as _db
         from .qa.watcher import _fire
@@ -361,8 +410,8 @@ def _alert_job_failed(cmd: str, detail: str) -> None:
 
 
 def _run_job(cmd: str, desc: str) -> bool:
-    if cmd in PAUSED_JOBS:
-        logger.info(f"⏸ {cmd} paused (D-023 data-first) — {desc}")
+    if cmd in _paused_jobs():
+        logger.info(f"⏸ {cmd} paused (no delivery channel configured) — {desc}")
         return True
     t0 = time.monotonic()
     logger.info(f"▶ {cmd} — {desc}")
@@ -565,6 +614,7 @@ def run_loop():
     next_retry: dict[str, float] = {}  # cmd → monotonic retry time (non-blocking)
     log_day = datetime.now(UTC).date()
     last_watch = 0.0
+    last_ping = float("-inf")
     last_market_bucket = ""
     last_news_bucket = ""
     daemon_start = datetime.now(UTC).isoformat(timespec="seconds")
@@ -572,6 +622,7 @@ def run_loop():
         _bootstrap(last_run)
         while True:
             _heartbeat()
+            last_ping = _maybe_ping(last_ping)
             now_wib = datetime.now(WIB)
 
             # Retry failed jobs (NON-BLOCKING: an inline sleep would freeze the

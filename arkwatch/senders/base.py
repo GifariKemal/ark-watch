@@ -44,4 +44,9 @@ def active_channels() -> dict[str, Channel]:
 
         ch = DiscordWebhookChannel()
         channels[ch.name] = ch
+    if os.environ.get("NTFY_URL"):
+        from .ntfy import NtfyChannel
+
+        ch = NtfyChannel()
+        channels[ch.name] = ch
     return channels

@@ -40,6 +40,10 @@ fixtures/    captured API responses for parser tests
 - Optional news source: set `ARGUS_TOKEN` (and `ARGUS_URL` if not the default) to add headlines from the self-hosted Argus MCP server; unset = SKIPPED.
 - This is a personal research tool, **not** investment advice.
 
+### Polymarket crowd probabilities
+
+`python -m arkwatch polymarket` (daemon: every hour at minute 20) reads the free Polymarket Gamma API (no key) and keeps the highest-volume active markets for the curated topics in `config/polymarket_queries.yaml` (Fed, recession, inflation, shutdown/debt ceiling, oil, gold, Bitcoin, S&P 500, Iran, Israel, Russia, China-Taiwan). Each market is a `computed_signals` row `polymarket:<slug>` whose value is the probability of the first outcome (usually "Yes", 0..1); question, outcomes, volume, end date and source URL sit in `inputs_json`. List them with `GET /v1/signals?prefix=polymarket:`. Markets below a topic's `min_volume` (default 50000 USD) are ignored.
+
 ### Phone push and dead-man switch
 
 - Push: set `NTFY_URL` to a long random ntfy topic URL (for example `https://ntfy.sh/arkwatch-<random>`) and subscribe to the same topic in the ntfy app. Alerts arrive as they fire (urgent ones at high priority), the morning brief as a short summary linking to the dashboard. `NTFY_TOKEN` is only for protected or self-hosted topics.

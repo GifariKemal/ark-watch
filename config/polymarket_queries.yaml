@@ -1,0 +1,30 @@
+# Curated Polymarket topics (fetchers/polymarket.py).
+# A keyword matches when ALL its words are whole tokens of the market question;
+# a topic matches when ANY of its keywords does. First matching topic wins.
+# min_volume (USD, optional) defaults to 50000; top_n markets per topic by volume.
+top_n: 3
+topics:
+  - name: fed
+    keywords: [fed rates, fed cut, fed hike, fed decrease, fed increase, fomc, fed bps]
+  - name: recession
+    keywords: [recession]
+  - name: inflation
+    keywords: [inflation, cpi]
+  - name: us_shutdown
+    keywords: [government shutdown, debt ceiling]
+  - name: oil
+    keywords: [oil, crude, wti, brent]
+  - name: gold
+    keywords: [gold]
+  - name: bitcoin
+    keywords: [bitcoin, btc]
+  - name: sp500
+    keywords: [s&p 500, spx]
+  - name: iran
+    keywords: [iran]
+  - name: israel
+    keywords: [israel, gaza, hamas, hezbollah]
+  - name: russia
+    keywords: [russia, ukraine, putin]
+  - name: china_taiwan
+    keywords: [taiwan, china invade]

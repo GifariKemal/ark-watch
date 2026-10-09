@@ -40,7 +40,8 @@ LONDON = ZoneInfo("Europe/London")
 NEW_YORK = ZoneInfo("America/New_York")
 
 # Schedule entries: (hour, minute, day, job_cmd, description)
-# day: daily | monday..saturday | sunday — literal day tokens as used below;
+# day: daily | hourly | monday..saturday | sunday — literal day tokens as used below
+# (hourly: runs every hour at `minute`, the hour field is ignored);
 # weekday names accept both short and long forms (both must map to the same
 # weekday key)
 SCHEDULE = [
@@ -131,6 +132,7 @@ SCHEDULE = [
         "fedsurvey",
         "Fed surveys + FOMC comms (SLOOS/BeigeBook/Minutes/PressConf NLP)",
     ),
+    (0, 20, "hourly", "polymarket", "Polymarket crowd probabilities (macro/geo topics)"),
 ]
 # The watcher is a recurring 60-second task, not part of SCHEDULE — the daemon
 # runs it as its own subprocess each cycle
@@ -366,7 +368,9 @@ def _due_jobs(now_wib, last_run: dict[str, str]) -> list[tuple[str, str, str]]:
     wd = now_wib.weekday()  # 0=Monday
     hhmm = now_wib.hour * 100 + now_wib.minute
     for h, m, day, cmd, desc in SCHEDULE:
-        if day == "daily" or DAY_MAP.get(day) == wd:
+        if day == "hourly":  # the hour field is ignored: this hour only, never a replay
+            h = now_wib.hour
+        if day in ("daily", "hourly") or DAY_MAP.get(day) == wd:
             target = h * 100 + m
             if hhmm >= target:
                 key = f"{h:02d}{m:02d}-{cmd}@{now_wib.date()}"

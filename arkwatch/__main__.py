@@ -34,6 +34,7 @@ PENGGUNAAN:
   market-news                    Pemanenan berita breaking dari 14 sumber resmi
   breadth                        S&P 500 Constituent Breadth (504 saham)
   crypto                         Sinyal derivatif & likuidasi kripto (OKX/Bybit)
+  polymarket                     Probabilitas crowd Polymarket untuk topik makro/geo
 
 [3. INSPEKSI SISTEM & RISET DATA]
   watch                          Pemeriksaan alert anomali makro & lelang
@@ -88,6 +89,10 @@ def main() -> int:
         from .qa.equity_breadth import main as breadth_main
 
         return breadth_main(sys.argv[2:])
+    if cmd == "polymarket":
+        from .fetchers import polymarket
+
+        return polymarket.main(sys.argv[2:])
     if cmd == "liquidations":
         from .qa.okx_liquidations import main as liquidations_main
 

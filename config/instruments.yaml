@@ -1,36 +1,36 @@
 # ark-watch — config/instruments.yaml — instrument matrix
-# symbol = stable ark-watch ID; yahoo/eodhd/twelve = per-source tickers (null = unavailable).
+# symbol = stable ark-watch ID; class = asset class (scorecard / book-risk grouping); yahoo/eodhd/twelve = per-source tickers (null = unavailable).
 # Source assignment: EODHD primary for spot metals + crypto backtests; Yahoo primary
 # for futures, indexes, DXY and FX majors.
 instruments:
-  - {symbol: XAUUSD,  yahoo: null,     eodhd: XAUUSD.FOREX,  twelve: "XAU/USD"}   # spot: EODHD primary (~12.5k bars)
-  - {symbol: XAGUSD,  yahoo: null,     eodhd: XAGUSD.FOREX,  twelve: null}
-  - {symbol: XPTUSD,  yahoo: null,     eodhd: XPTUSD.FOREX,  twelve: null}
-  - {symbol: XAUEUR,  yahoo: null,     eodhd: XAUEUR.FOREX,  twelve: null}
-  - {symbol: XAGEUR,  yahoo: null,     eodhd: XAGEUR.FOREX,  twelve: null}
-  - {symbol: BTCUSD,  yahoo: BTC-USD,  eodhd: BTC-USD.CC,    twelve: "BTC/USD"}   # backtests use EODHD (deepest history, ~2010)
-  - {symbol: ETHUSD,  yahoo: ETH-USD,  eodhd: ETH-USD.CC,    twelve: "ETH/USD"}
-  - {symbol: US100,   yahoo: "^NDX",   eodhd: NDX.INDX,      twelve: null}
-  - {symbol: US500,   yahoo: "^GSPC",  eodhd: GSPC.INDX,     twelve: null}
-  - {symbol: US30,    yahoo: "^DJI",   eodhd: DJI.INDX,      twelve: null}
-  - {symbol: DXY,     yahoo: "DX-Y.NYB", eodhd: DXY.INDX,    twelve: null}        # Yahoo has the deepest history (1971+)
-  - {symbol: VIX,     yahoo: "^VIX",   eodhd: VIX.INDX,      twelve: null}
-  - {symbol: EURUSD,  yahoo: "EURUSD=X", eodhd: EURUSD.FOREX, twelve: "EUR/USD"}
-  - {symbol: GBPUSD,  yahoo: "GBPUSD=X", eodhd: GBPUSD.FOREX, twelve: "GBP/USD"}
-  - {symbol: USDJPY,  yahoo: "USDJPY=X", eodhd: USDJPY.FOREX, twelve: "USD/JPY"}
-  - {symbol: AUDUSD,  yahoo: "AUDUSD=X", eodhd: AUDUSD.FOREX, twelve: null}
-  - {symbol: GC1,     yahoo: "GC=F",   eodhd: null,          twelve: null}        # continuous futures (roll-gap caveat)
-  - {symbol: SI1,     yahoo: "SI=F",   eodhd: null,          twelve: null}
-  - {symbol: PL1,     yahoo: "PL=F",   eodhd: null,          twelve: null}
-  - {symbol: HG1,     yahoo: "HG=F",   eodhd: null,          twelve: null}        # EODHD copper spot is stale — futures are primary
-  - {symbol: ES1,     yahoo: "ES=F",   eodhd: null,          twelve: null}
-  - {symbol: NQ1,     yahoo: "NQ=F",   eodhd: null,          twelve: null}
-  - {symbol: YM1,     yahoo: "YM=F",   eodhd: null,          twelve: null}
-  - {symbol: ZQ1,     yahoo: "ZQ=F",   eodhd: null,          twelve: null}        # feeds the historical FedWatch-DIY backfill
-  - {symbol: CL1,     yahoo: "CL=F",   eodhd: CL.COMM,       twelve: null}        # WTI front (roll-gap caveat)
-  - {symbol: BZ1,     yahoo: "BZ=F",   eodhd: BZ.COMM,       twelve: null}        # Brent front (tracks a DIFFERENT expiry month than CL=F — never naive-spread them)
-  - {symbol: NG1,     yahoo: "NG=F",   eodhd: NG.COMM,       twelve: null}
-  - {symbol: RB1,     yahoo: "RB=F",   eodhd: RB.COMM,       twelve: null}        # RBOB $/gal — crack needs x42
-  - {symbol: HO1,     yahoo: "HO=F",   eodhd: HO.COMM,       twelve: null}        # heating oil $/gal
+  - {symbol: XAUUSD,  class: metals, yahoo: null,     eodhd: XAUUSD.FOREX,  twelve: "XAU/USD"}   # spot: EODHD primary (~12.5k bars)
+  - {symbol: XAGUSD,  class: metals, yahoo: null,     eodhd: XAGUSD.FOREX,  twelve: null}
+  - {symbol: XPTUSD,  class: metals, yahoo: null,     eodhd: XPTUSD.FOREX,  twelve: null}
+  - {symbol: XAUEUR,  class: metals, yahoo: null,     eodhd: XAUEUR.FOREX,  twelve: null}
+  - {symbol: XAGEUR,  class: metals, yahoo: null,     eodhd: XAGEUR.FOREX,  twelve: null}
+  - {symbol: BTCUSD,  class: crypto, yahoo: BTC-USD,  eodhd: BTC-USD.CC,    twelve: "BTC/USD"}   # backtests use EODHD (deepest history, ~2010)
+  - {symbol: ETHUSD,  class: crypto, yahoo: ETH-USD,  eodhd: ETH-USD.CC,    twelve: "ETH/USD"}
+  - {symbol: US100,   class: equity_index, yahoo: "^NDX",   eodhd: NDX.INDX,      twelve: null}
+  - {symbol: US500,   class: equity_index, yahoo: "^GSPC",  eodhd: GSPC.INDX,     twelve: null}
+  - {symbol: US30,    class: equity_index, yahoo: "^DJI",   eodhd: DJI.INDX,      twelve: null}
+  - {symbol: DXY,     class: fx, yahoo: "DX-Y.NYB", eodhd: DXY.INDX,    twelve: null}        # Yahoo has the deepest history (1971+)
+  - {symbol: VIX,     class: volatility, yahoo: "^VIX",   eodhd: VIX.INDX,      twelve: null}
+  - {symbol: EURUSD,  class: fx, yahoo: "EURUSD=X", eodhd: EURUSD.FOREX, twelve: "EUR/USD"}
+  - {symbol: GBPUSD,  class: fx, yahoo: "GBPUSD=X", eodhd: GBPUSD.FOREX, twelve: "GBP/USD"}
+  - {symbol: USDJPY,  class: fx, yahoo: "USDJPY=X", eodhd: USDJPY.FOREX, twelve: "USD/JPY"}
+  - {symbol: AUDUSD,  class: fx, yahoo: "AUDUSD=X", eodhd: AUDUSD.FOREX, twelve: null}
+  - {symbol: GC1,     class: metals, yahoo: "GC=F",   eodhd: null,          twelve: null}        # continuous futures (roll-gap caveat)
+  - {symbol: SI1,     class: metals, yahoo: "SI=F",   eodhd: null,          twelve: null}
+  - {symbol: PL1,     class: metals, yahoo: "PL=F",   eodhd: null,          twelve: null}
+  - {symbol: HG1,     class: metals, yahoo: "HG=F",   eodhd: null,          twelve: null}        # EODHD copper spot is stale — futures are primary
+  - {symbol: ES1,     class: equity_index, yahoo: "ES=F",   eodhd: null,          twelve: null}
+  - {symbol: NQ1,     class: equity_index, yahoo: "NQ=F",   eodhd: null,          twelve: null}
+  - {symbol: YM1,     class: equity_index, yahoo: "YM=F",   eodhd: null,          twelve: null}
+  - {symbol: ZQ1,     class: rates, yahoo: "ZQ=F",   eodhd: null,          twelve: null}        # feeds the historical FedWatch-DIY backfill
+  - {symbol: CL1,     class: energy, yahoo: "CL=F",   eodhd: CL.COMM,       twelve: null}        # WTI front (roll-gap caveat)
+  - {symbol: BZ1,     class: energy, yahoo: "BZ=F",   eodhd: BZ.COMM,       twelve: null}        # Brent front (tracks a DIFFERENT expiry month than CL=F — never naive-spread them)
+  - {symbol: NG1,     class: energy, yahoo: "NG=F",   eodhd: NG.COMM,       twelve: null}
+  - {symbol: RB1,     class: energy, yahoo: "RB=F",   eodhd: RB.COMM,       twelve: null}        # RBOB $/gal — crack needs x42
+  - {symbol: HO1,     class: energy, yahoo: "HO=F",   eodhd: HO.COMM,       twelve: null}        # heating oil $/gal
 # Synthetic crosses (XAGGBP etc.) are NOT listed here — they are computed downstream
 # (build via division, never multiplication).

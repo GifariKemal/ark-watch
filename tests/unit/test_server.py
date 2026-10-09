@@ -123,6 +123,8 @@ AUTH_PATHS = (
     "/v1/briefs/latest",
     "/v1/briefs/2026-10-01",
     "/v1/graph",
+    "/v1/playbook/scorecard",
+    "/v1/risk/book",
 )
 
 
@@ -255,6 +257,39 @@ def test_playbooks_list_detail_and_news_calendar(client):
     assert [n["news_id"] for n in client.get("/v1/news?symbol=GC").json()["items"]] == ["n0"]
     cal = client.get("/v1/calendar").json()["items"]
     assert [e["event_uid"] for e in cal] == ["e1"]
+
+
+def test_scorecard_and_book_risk_endpoints(client, seeded):
+    c = db.get_conn(seeded)
+    c.execute(
+        "UPDATE playbook_scenarios SET entry_price=100, r_multiple=2, resolved_at_utc="
+        "'2026-10-03T20:00:00+00:00' WHERE scenario_uid='PB-WIN'"
+    )
+    c.close()
+    body = client.get("/v1/playbook/scorecard").json()
+    assert set(body) >= {"generated_at", "groups", "overall", "disclaimer"}
+    (g,) = body["groups"]
+    assert (g["scenario_type"], g["asset_class"], g["n"], g["tier"]) == (
+        "s1",
+        "equity_index",
+        1,
+        "unvalidated",
+    )
+    assert client.get("/v1/playbook/scorecard?asset_class=crypto").json()["groups"] == []
+    assert client.get("/v1/playbook/scorecard?direction=long").json()["overall"]["n"] == 1
+    assert client.get("/v1/playbook/scorecard?horizon=bogus").status_code == 422
+    # detail: own-type scorecard, or null with a reason
+    assert client.get("/v1/playbooks/PB-ACTIVE").json()["scorecard"]["n"] == 1
+    c = db.get_conn(seeded)
+    c.execute("UPDATE playbook_scenarios SET scenario_id='s2' WHERE scenario_uid='PB-PENDING'")
+    c.close()
+    d = client.get("/v1/playbooks/PB-PENDING").json()
+    assert d["scorecard"] is None and "no resolved trades" in d["scorecard_reason"]
+
+    risk = client.get("/v1/risk/book").json()
+    assert risk["open_count"] == 2 and risk["r_at_stake"] == 1
+    assert {s["scenario_uid"] for s in risk["scenarios"]} == {"PB-PENDING", "PB-ACTIVE"}
+    assert any("expiry" in f for f in risk["flags"]) and risk["veto_hints"]
 
 
 def test_levels_mixed_fields_become_null_plus_status(client, monkeypatch):
@@ -610,6 +645,7 @@ def test_export_openapi(tmp_path):
     assert {"/v1/health", "/v1/series/{series_id}/observations", "/v1/jobs"} <= set(spec["paths"])
     new = {"/v1/alerts", "/v1/alerts/summary", "/v1/briefs/{date}", "/v1/graph"}
     assert new <= set(spec["paths"])
+    assert {"/v1/playbook/scorecard", "/v1/risk/book"} <= set(spec["paths"])
     assert "APIKeyHeader" in spec["components"]["securitySchemes"]
     kinds = spec["components"]["schemas"]["JobIn"]["properties"]["kind"]["enum"]
     assert set(kinds) == set(jobs_runner.JOB_KINDS)

@@ -156,8 +156,80 @@ class PlaybookOut(BaseModel):
     note: str | None = None
 
 
+class ScorecardStatsOut(BaseModel):
+    n: int
+    wins: int
+    losses: int
+    n_sessions: int
+    effective_n: Num = None
+    win_rate: Num = None
+    win_rate_ci95: list[float] | None = None
+    expectancy_r: Num = None
+    expectancy_ci95: list[float] | None = None
+    avg_win_r: Num = None
+    avg_loss_r: Num = None
+    profit_factor: Num = None
+    breakeven_win_rate: Num = None
+    p_value_vs_breakeven: Num = None
+    tier: Literal["unvalidated", "emerging", "supported", "rejected"]
+    sample_warning: str | None = None
+    last_updated: str | None = None
+    calibration: dict[str, Num] | None = None
+    calibration_reason: str | None = None
+
+
+class ScorecardGroupOut(ScorecardStatsOut):
+    scenario_type: str
+    direction: str
+    horizon: str
+    asset_class: str
+
+
+class ScorecardOut(BaseModel):
+    generated_at: str
+    disclaimer: str
+    groups: list[ScorecardGroupOut]
+    overall: ScorecardStatsOut
+
+
 class PlaybookDetailOut(PlaybookOut):
     payload: Any = None
+    scorecard: ScorecardGroupOut | None = None
+    scorecard_reason: str | None = None
+
+
+class BookScenarioOut(BaseModel):
+    scenario_uid: str
+    symbol: str
+    scenario_type: str
+    horizon: str
+    direction: str
+    state: str
+    asset_class: str
+    cluster: str | None = None
+    ref_price: Num = None
+    stop: Num = None
+    target: Num = None
+    risk_pct: Num = None
+    reward_to_risk: Num = None
+    age_hours: Num = None
+    expired: bool
+
+
+class BookRiskOut(BaseModel):
+    generated_at: str
+    advisory: str
+    open_count: int
+    by_state: dict[str, int]
+    by_direction: dict[str, int]
+    by_asset_class: dict[str, int]
+    net_by_asset_class: dict[str, dict[str, int]]
+    clusters: dict[str, dict[str, int]]
+    r_at_stake: int
+    r_at_stake_assumption: str
+    scenarios: list[BookScenarioOut]
+    flags: list[str]
+    veto_hints: list[str]
 
 
 class PerformanceOut(BaseModel):

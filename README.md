@@ -113,6 +113,16 @@ Dashboard reads (the Zonelab web dashboard replaces Telegram delivery):
 
 The graph uses stored data only. Series are the pillar inputs plus the active registry series of the same block letter (block H has no pillar and is left out). Instruments link to the regime core because no asset to pillar mapping exists in config. Caps: 300 series, 60 scenarios, 50 events, so at most 446 nodes. Cached like `/v1/regime`.
 
+Playbook track record and open-book risk (computed on the fly from `playbook_scenarios`):
+
+| Route | Returns |
+|---|---|
+| `GET /v1/playbook/scorecard?symbol=&horizon=&direction=&asset_class=` | per scenario type (`scenario_id`) x direction x horizon x asset class: n, win rate with Wilson 95% CI, expectancy R with a session-clustered bootstrap CI, avg win/loss R, profit factor, breakeven win rate, effective n, `sample_warning`, evidence `tier`; plus `overall` |
+| `GET /v1/playbooks/{uid}` | now also `scorecard`: the group of that scenario's own type, or null with `scorecard_reason` |
+| `GET /v1/risk/book` | open scenarios (PENDING_TRIGGER, ACTIVE) with risk % of entry, reward to risk, age; counts by state, direction, asset class and cluster (`config/risk_clusters.yaml`); `r_at_stake` (1R per ACTIVE scenario, stated in the response); plain-text `flags` and advisory `veto_hints` |
+
+Tiers: `unvalidated` below 20 trades; `supported` needs 100+ trades, a Wilson lower bound above the breakeven win rate and an expectancy CI above 0; `rejected` needs 100+ trades and a Wilson upper bound below breakeven; everything else is `emerging`. Tiers describe tracked outcomes only. They are not a forecast and promise no future edge. Calibration is null because scenarios carry no claimed win probability. Asset class comes from the `class` field in `config/instruments.yaml` (unknown symbols are `other`).
+
 ## License
 
 [MIT](LICENSE)

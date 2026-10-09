@@ -1,0 +1,11 @@
+# ark-watch - config/risk_clusters.yaml - correlated symbol clusters for GET /v1/risk/book.
+# A symbol belongs to at most one cluster; unlisted symbols are not clustered.
+# Direction is taken at face value: LONG EURUSD and LONG DXY count as the same
+# direction even though they are opposite USD bets (quote inversion is not modelled).
+clusters:
+  us_equity_index: [NQ1, ES1, YM1, US500, US100, US30]
+  precious_metals: [XAUUSD, XAGUSD, XPTUSD, XAUEUR, XAGEUR, GC1, SI1, PL1]
+  usd_complex: [DXY, EURUSD, GBPUSD, USDJPY, AUDUSD]
+  crypto: [BTCUSD, ETHUSD]
+  energy: [CL1, BZ1, NG1, RB1, HO1]
+  rates: [ZQ1]

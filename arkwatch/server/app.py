@@ -36,10 +36,13 @@ from fastapi.security import APIKeyHeader
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import api, db
+from ..signals.book_risk import compute_book_risk
+from ..signals.scorecard import asset_class, compute_scorecard
 from .models import (
     AlertOut,
     AlertsSummaryOut,
     AlertStatus,
+    BookRiskOut,
     BriefListOut,
     BriefOut,
     CalendarEventOut,
@@ -65,6 +68,7 @@ from .models import (
     RadarOut,
     RegimeOut,
     RetryOut,
+    ScorecardOut,
     SeriesDetailOut,
     SeriesOut,
     SeriesPatchIn,
@@ -394,12 +398,59 @@ def playbooks_list(
     return api.list_playbooks(c, state=state, symbol=symbol, cursor=cursor, limit=limit)
 
 
+def _scorecard(request: Request, c: sqlite3.Connection, **kw: str | None) -> dict:
+    return cached(request, "scorecard", tuple(kw.items()), lambda: compute_scorecard(c, **kw))
+
+
 @v1.get("/playbooks/{uid}", response_model=PlaybookDetailOut, tags=["playbooks"])
-def playbooks_get(c: Conn, uid: Annotated[str, Path(max_length=200)]):
+def playbooks_get(request: Request, c: Conn, uid: Annotated[str, Path(max_length=200)]):
     out = api.playbook_detail(c, uid)
     if out is None:
         raise api.ApiNotFound(f"playbook scenario '{uid}' not found")
+    key = (out["scenario_id"], out["direction"], out["horizon"], asset_class(out["symbol"]))
+    out["scorecard"] = next(
+        (
+            g
+            for g in _scorecard(request, c)["groups"]
+            if (g["scenario_type"], g["direction"], g["horizon"], g["asset_class"]) == key
+        ),
+        None,
+    )
+    if out["scorecard"] is None:
+        out["scorecard_reason"] = "no resolved trades yet for this scenario type"
     return out
+
+
+@v1.get(
+    "/playbook/scorecard",
+    response_model=ScorecardOut,
+    tags=["playbooks"],
+    description="Track record per scenario type x direction x horizon x asset class, with "
+    "evidence tiers (unvalidated n<20; supported/rejected need n>=100). Describes tracked "
+    "outcomes only; not a forecast.",
+)
+def playbook_scorecard(
+    request: Request,
+    c: Conn,
+    symbol: Annotated[str | None, Query(max_length=16)] = None,
+    horizon: Annotated[str | None, Query(pattern=r"(?i)^(intraday|swing)$")] = None,
+    direction: Annotated[str | None, Query(pattern=r"(?i)^(long|short|neutral_range)$")] = None,
+    asset_class: Annotated[str | None, Query(max_length=32)] = None,
+):
+    return _scorecard(
+        request, c, symbol=symbol, horizon=horizon, direction=direction, asset_class=asset_class
+    )
+
+
+@v1.get(
+    "/risk/book",
+    response_model=BookRiskOut,
+    tags=["playbooks"],
+    description="Deterministic risk of the open scenario book (PENDING_TRIGGER + ACTIVE). "
+    "Advisory only.",
+)
+def risk_book(c: Conn):
+    return compute_book_risk(c)
 
 
 @v1.get("/playbook/performance", response_model=PerformanceOut, tags=["playbooks"])

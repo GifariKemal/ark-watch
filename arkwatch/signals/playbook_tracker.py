@@ -884,10 +884,10 @@ def format_report(res: dict[str, Any], *, journal: int = 15) -> str:
     lines += [""] + table(lambda t: t["scenario_id"].removeprefix("SCENARIO_"), "BY SETUP", "Setup")
     lines += [
         "",
-        "RECENT JOURNAL (newest first)",
+        "RECENT JOURNAL (running first, then newest resolved)",
         "Resolved (ET)    | Sym    | Dir   | R     | Status | Setup",
     ]
-    for t in rows[:journal]:
+    for t in sorted(rows, key=lambda t: t["resolved_at_utc"] or "9", reverse=True)[:journal]:
         ts = t["resolved_at_utc"]
         when = (
             datetime.fromisoformat(ts).astimezone(_ET).strftime("%m-%d %H:%M") if ts else "running"

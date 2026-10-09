@@ -109,3 +109,21 @@ The graph uses stored data only. Series are the pillar inputs plus the active re
 ## License
 
 [MIT](LICENSE)
+
+### Free LLM endpoint (optional)
+
+The `ofm` compose service runs [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)
+(`packages/standalone`, MIT) so news NLP works without a paid key. It is third-party code: the image
+is built from a pinned commit (not vendored here), one patch disables its sealed EAC path, and it runs
+on its own network (`ofm-net`, shared only with the daemon) with no secrets, a read-only rootfs and
+dropped capabilities. Its anonymous free lane presents itself as an OpenCode client, so it can be
+throttled or closed by the upstream at any time; only public news text is sent. Host hardening for
+the subnet (blocks the VPC, other Docker networks and the cloud metadata address):
+
+```bash
+iptables -N OFM-EGRESS
+iptables -A OFM-EGRESS -d 172.31.77.0/24 -j RETURN
+for n in 169.254.0.0/16 100.64.0.0/10 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do iptables -A OFM-EGRESS -d $n -j DROP; done
+iptables -A OFM-EGRESS -j RETURN
+iptables -I DOCKER-USER 1 -s 172.31.77.0/24 -j OFM-EGRESS && netfilter-persistent save
+```

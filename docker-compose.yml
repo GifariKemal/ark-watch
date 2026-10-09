@@ -27,6 +27,9 @@ services:
     env_file:
       - path: .env
         required: false
+    networks:
+      - default
+      - ofm-net
     # Yahoo 429s and CFTC 403s the VPS datacenter IP; only allowlisted hosts use it
     # (ARKWATCH_PROXY_HOSTS, default finance.yahoo.com,publicreporting.cftc.gov)
     environment:
@@ -76,6 +79,36 @@ services:
       start_period: 30s
       retries: 3
 
+  # Free LLM for news NLP (OpenAI-compatible, via anonymous OpenCode Zen + Kilo free pools).
+  # Third-party code pinned by commit in ofm/Dockerfile. Own network (ofm-net) shared ONLY with the
+  # daemon, no ports published, no env secrets, read-only rootfs. The host firewall chain OFM-EGRESS
+  # (see README) additionally blocks this subnet from the VPC, other Docker networks and the
+  # cloud metadata address. Daemon uses NLP_BASE_URL=http://ofm:18901/v1 and the bearer key from
+  # /data/settings.json (`forwardKey`).
+  ofm:
+    build: ./ofm
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp"]
+    volumes:
+      - ofm-data:/data
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - ofm-net
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:18901/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
   # Cloudflare WARP egress as SOCKS5 on :9091 (default network only, never
   # published). Pinned by digest. No healthcheck: shell tooling in the image
   # is not guaranteed; a dead proxy surfaces as Yahoo errors in fetch_log.
@@ -114,8 +147,13 @@ services:
 
 volumes:
   arkwatch-data:
+  ofm-data:
 
 networks:
   arkwatch-internal:
     external: true
     name: arkwatch-internal
+  ofm-net:
+    ipam:
+      config:
+        - subnet: 172.31.77.0/24

@@ -118,6 +118,18 @@ def _config() -> dict:
 
 
 def _call(cfg: dict, system: str, user: str) -> str:
+    """Try each model of a comma-separated NLP_MODEL in order (free lanes 502/429 at random)."""
+    models = [m.strip() for m in str(cfg["model"]).split(",") if m.strip()] or ["default"]
+    last: Exception | None = None
+    for model in models:
+        try:
+            return _call_one({**cfg, "model": model}, system, user)
+        except (NlpError, requests.RequestException) as ex:
+            last = ex
+    raise last  # type: ignore[misc]  # models is never empty
+
+
+def _call_one(cfg: dict, system: str, user: str) -> str:
     """Route to the correct API format and extract text response."""
     if cfg["format"] == "anthropic":
         r = requests.post(

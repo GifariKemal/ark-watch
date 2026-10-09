@@ -163,13 +163,15 @@ def extract_news_intelligence(
 
     now_utc = datetime.now(UTC).isoformat(timespec="seconds")
     processed_count = 0
+    failures: list[str] = []
 
     for news_id, source, title, summary, pub_utc in pending:
         user_prompt = f"SOURCE: {source}\nTITLE: {title}\nSUMMARY: {summary or ''}"
         try:
             raw_resp = _call(cfg, system=EXTRACTION_SYSTEM_PROMPT, user=user_prompt)
             payload = _extract_json(raw_resp)
-        except Exception:
+        except Exception as ex:
+            failures.append(f"{type(ex).__name__}: {ex}")
             continue
 
         if not isinstance(payload, dict):
@@ -254,6 +256,13 @@ def extract_news_intelligence(
             processed_count += 1
             conn.commit()
 
+    if failures and not processed_count:
+        # the endpoint is down / every call failed: say so instead of a silent rc 0
+        from ..qa.fetch_log import log_collection
+
+        msg = f"all {len(failures)} NLP calls failed; last: {failures[-1]}"
+        print(f"  ! NLP: {msg}")
+        log_collection(conn, "sentiment", "NLP", None, 0, err=msg, status="DEGRADED")
     return processed_count
 
 

@@ -252,3 +252,38 @@ def test_single_stale_article_is_shrunk_toward_neutral(tmp_path):
     radar = sentiment.compute_intraday_catalyst_radar(conn, "NQ1", window_hours=4, as_of=now)
     assert 0.0 < radar["net_stance_score"] < sentiment.STANCE_THRESHOLD
     assert radar["stance"] == "NEUTRAL"
+
+
+def test_all_llm_calls_failing_is_recorded_not_silent(tmp_path, monkeypatch, capsys):
+    """If the NLP endpoint is down every article fails; that used to be swallowed (rc 0, no trace)."""
+    conn = db.get_conn(tmp_path / "arkwatch.db", allow_init=True)
+    now_iso = datetime.now(UTC).isoformat(timespec="seconds")
+    conn.execute(
+        "INSERT INTO market_news (news_id, source, title, url, summary, symbols_json, cluster_id,"
+        " relevance, novelty, fetched_at, published_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "n1",
+            "RSS_FED",
+            "Fed holds",
+            "https://fed.gov/1",
+            "s",
+            "[]",
+            "c1",
+            0.9,
+            0.9,
+            now_iso,
+            now_iso,
+        ),
+    )
+    conn.commit()
+
+    def down(_cfg, **_kw):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(sentiment, "_call", down)
+    assert sentiment.extract_news_intelligence(conn, limit=5, cfg={}) == 0
+    row = conn.execute(
+        "SELECT status, error FROM fetch_log WHERE fetcher='sentiment' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row[0] == "DEGRADED" and "connection refused" in row[1]
+    assert "NLP" in capsys.readouterr().out

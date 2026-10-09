@@ -20,6 +20,7 @@ from ..config import PlanLimited, missing_env
 from ..gdelt_storage import compress_record
 from . import gdelt_archive
 from .fetch_log import log_collection
+from .harvest import _redact
 
 SESSION = requests.Session()
 SESSION.mount(
@@ -456,6 +457,7 @@ def _gdelt_gkg(rows: list[list[str]]) -> list[tuple]:
 def run(db_path: str) -> dict[str, int]:
     conn = _db.get_conn(db_path, allow_init=True)
     out: dict[str, int] = {}
+    from ..fetchers.argus import fetch_news as fetch_argus_news
     from ..fetchers.cryptopanic import fetch_cryptopanic_posts
     from ..fetchers.rss_news import fetch_all_rss_feeds
     from ..fetchers.tree_news import fetch_tree_news
@@ -466,8 +468,13 @@ def run(db_path: str) -> dict[str, int]:
         ("TREE_NEWS", fetch_tree_news),
         ("RSS_FEEDS", fetch_all_rss_feeds),
         ("CRYPTOPANIC", fetch_cryptopanic_posts),
+        ("ARGUS", fetch_argus_news),
     )
-    needs_env = {"EODHD": "EODHD_API_TOKEN", "CRYPTOPANIC": "CRYPTOPANIC_API_KEY"}
+    needs_env = {
+        "EODHD": "EODHD_API_TOKEN",
+        "CRYPTOPANIC": "CRYPTOPANIC_API_KEY",
+        "ARGUS": "ARGUS_TOKEN",
+    }
     for name, fetch in sources:
         reason = missing_env(needs_env[name]) if name in needs_env else None
         if reason:
@@ -545,7 +552,7 @@ def run(db_path: str) -> dict[str, int]:
             log_collection(conn, "market_news", name, None, 0, err=str(ex), status="SKIPPED")
         except Exception as ex:
             out[name] = -1
-            print(f"{name}: {type(ex).__name__}: {str(ex)[:160]}")
+            print(f"{name}: {type(ex).__name__}: {_redact(str(ex))[:160]}")
             log_collection(conn, "market_news", name, None, 0, err=str(ex))
     gdelt_feeds = (
         (

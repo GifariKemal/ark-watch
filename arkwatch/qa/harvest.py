@@ -42,6 +42,7 @@ def _redact(text: str) -> str:
             r"((?:api_key|api_token|apikey|token|key)=)[^&\s]+"
             r"|(/bot)\d+:[\w-]+"  # Telegram bot token in an echoed URL path
             r"|(/api/webhooks/)[^\s'\"]+"  # Discord webhook id/token
+            r"|(bearer\s+)[^\s'\"]+"  # Authorization: Bearer <token> echo
             r"|((?:set-)?cookie[\"']?\s*[:=]\s*)[^\n]+",  # Cookie header/env echo
             _re.IGNORECASE,
         )

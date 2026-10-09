@@ -37,6 +37,7 @@ fixtures/    captured API responses for parser tests
 
 - Keys go in `.env` only (see `.env.example`) — never commit them.
 - Some sources are unofficial CDN endpoints; every source is degradable — one going down never breaks the brief.
+- Optional news source: set `ARGUS_TOKEN` (and `ARGUS_URL` if not the default) to add headlines from the self-hosted Argus MCP server; unset = SKIPPED.
 - This is a personal research tool, **not** investment advice.
 
 GDELT retains the current UTC week in the live database. If Sunday cleanup has eligible rows, it creates a verified temporary snapshot and removes it after post-cleanup checks pass; preview candidates with `python -m arkwatch gdelt-retention`.

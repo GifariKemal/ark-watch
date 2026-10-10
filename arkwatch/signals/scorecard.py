@@ -11,6 +11,12 @@ Tiers describe tracked outcomes only. They are not a forecast and promise no fut
                and session-clustered bootstrap 95% lower bound of expectancy > 0
   rejected     n >= 100, Wilson 95% upper bound of the win rate < breakeven win rate
   emerging     everything else (enough trades to look at, not enough to separate)
+
+Random-entry control (random_entry.py): for groups with n >= 20 each trade is replayed from
+random entry bars of the same symbol and window with the same direction and stop / target
+geometry. null_mean_r, null_p and beats_random report whether the group's expectancy beats that
+null. A group that would be 'supported' but does not beat random is capped at 'emerging'. When
+the null was not computed (n < 20, cost cap, no bars) beats_random is None and the tier stands.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ from typing import Any
 from ..config import _load_yaml
 from ..qa.stats import binom_pvalue_vs_base_rate, cluster_bootstrap_ci, effective_n, wilson_ci
 from .playbook_tracker import _OPEN
+from .random_entry import K_MAX, K_MIN, MAX_WALKS, NO_NULL, null_summary, trade_draws
 
 MIN_N, SUPPORT_N = 20, 100
 DISCLAIMER = (
@@ -57,8 +64,12 @@ def _tier(n: int, wr_ci, be: float | None, exp_ci) -> str:
     return "emerging"
 
 
-def group_stats(rs: list[float], sessions: list[str], resolved: list[str]) -> dict[str, Any]:
-    """Stats of one group of trades: realized R, their session ids and resolve timestamps."""
+def group_stats(
+    rs: list[float], sessions: list[str], resolved: list[str], null: dict | None = None
+) -> dict[str, Any]:
+    """Stats of one group of trades: realized R, their session ids and resolve timestamps, plus
+    the random-entry null summary when it was computed."""
+    null = null or NO_NULL
     n = len(rs)
     wins = [r for r in rs if r > 0]
     losses = [r for r in rs if r < 0]
@@ -75,6 +86,9 @@ def group_stats(rs: list[float], sessions: list[str], resolved: list[str]) -> di
             f"{n} trades come from {k} session(s) (effective n ~{n_eff}); outcomes within a"
             " session move together, so the rates are less certain than n suggests"
         )
+    tier = _tier(n, wr_ci, be, exp_ci)
+    if tier == "supported" and null["beats_random"] is False:
+        tier = "emerging"
     return {
         "n": n,
         "wins": len(wins),
@@ -92,12 +106,12 @@ def group_stats(rs: list[float], sessions: list[str], resolved: list[str]) -> di
         "p_value_vs_breakeven": binom_pvalue_vs_base_rate(len(wins), n, be)
         if be is not None
         else None,
-        "tier": _tier(n, wr_ci, be, exp_ci),
+        "tier": tier,
         "sample_warning": warning,
         "last_updated": max(resolved) if resolved else None,
         "calibration": None,
         "calibration_reason": NO_CALIBRATION,
-    }
+    } | null
 
 
 def compute_scorecard(
@@ -114,24 +128,39 @@ def compute_scorecard(
             where += f" AND {col} = ?"  # col is an internal literal
             params.append(val.strip().upper())
     rows = conn.execute(
-        "SELECT scenario_id, direction, horizon, symbol, session_id, r_multiple, resolved_at_utc"
+        "SELECT scenario_id, direction, horizon, symbol, session_id, r_multiple, resolved_at_utc,"
+        " scenario_uid, created_at_utc, entry_price, invalidation_level, target_profit"
         f" FROM playbook_scenarios WHERE state NOT IN ({','.join('?' * len(_OPEN))})"
         f" AND entry_price IS NOT NULL{where}",
         (*_OPEN, *params),
     ).fetchall()
     groups: dict[tuple, list[tuple]] = {}
-    for sid, d, h, sym, sess, r, res in rows:
+    for sid, d, h, sym, sess, r, res, uid, created, entry, stop, target in rows:
         cls = _classes().get(sym.upper(), "other")
         if asset_class and cls != asset_class.strip().lower():
             continue
-        groups.setdefault((sid, d, h, cls), []).append((r or 0.0, sess, res))
+        geo = (uid, sym, d, h, sess, created, entry, stop, target)
+        groups.setdefault((sid, d, h, cls), []).append((r or 0.0, sess, res, geo))
 
-    def stats(trades: list[tuple]) -> dict[str, Any]:
-        rs, sess, res = (list(x) for x in zip(*trades, strict=True)) if trades else ([], [], [])
-        return group_stats(rs, sess, [x for x in res if x])
+    # random-entry null only where a tier can be earned, within the MAX_WALKS budget
+    eligible = sum(len(t) for t in groups.values() if len(t) >= MIN_N)
+    n_draws = min(K_MAX, MAX_WALKS // eligible) if eligible else 0
+    bar_cache: dict = {}
+
+    def null(trades: list[tuple]) -> dict | None:
+        if len(trades) < MIN_N or n_draws < K_MIN:
+            return None
+        pairs = [(t[0], trade_draws(conn, t[3], n_draws, bar_cache)) for t in trades]
+        pairs = [(r, d) for r, d in pairs if d is not None]
+        return null_summary([r for r, _ in pairs], [d for _, d in pairs]) if pairs else None
+
+    def stats(trades: list[tuple], with_null: bool = False) -> dict[str, Any]:
+        rs, sess, res = ([t[i] for t in trades] for i in range(3))
+        return group_stats(rs, sess, [x for x in res if x], null(trades) if with_null else None)
 
     out = [
-        {"scenario_type": k[0], "direction": k[1], "horizon": k[2], "asset_class": k[3]} | stats(t)
+        {"scenario_type": k[0], "direction": k[1], "horizon": k[2], "asset_class": k[3]}
+        | stats(t, with_null=True)
         for k, t in sorted(groups.items())
     ]
     return {

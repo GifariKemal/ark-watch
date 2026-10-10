@@ -40,14 +40,16 @@ COT_Z_CONTRACTS = (
 def _cot_zscore(conn: sqlite3.Connection, contract_code: str) -> float | None:
     """3y z-score — auto-selects the right category (mm for metals, lev for financials)."""
     # try 'mm' (Disaggregated) first; fall back to 'lev' (TFF) for financials
+    # only the newest window is ever used: the watcher calls this every 60 s, so read just
+    # that tail (max(): the MIN gate below must see the same row count as a full read)
     for cat in ("mm", "lev"):
         rows = conn.execute(
             "SELECT report_date, long, short FROM cot_raw "
             "WHERE contract_code=? AND category=? AND long IS NOT NULL AND long > 0 "
             "AND report_type NOT LIKE '%_c' "  # futures-only (not combined)
-            "ORDER BY report_date",
-            (contract_code, cat),
-        ).fetchall()
+            "ORDER BY report_date DESC LIMIT ?",
+            (contract_code, cat, max(COT_Z_WINDOW_WEEKS, COT_Z_MIN_WEEKS)),
+        ).fetchall()[::-1]
         if len(rows) >= COT_Z_MIN_WEEKS:
             break
     else:

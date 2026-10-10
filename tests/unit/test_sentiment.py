@@ -287,3 +287,80 @@ def test_all_llm_calls_failing_is_recorded_not_silent(tmp_path, monkeypatch, cap
     ).fetchone()
     assert row[0] == "DEGRADED" and "connection refused" in row[1]
     assert "NLP" in capsys.readouterr().out
+
+
+def _one_article(tmp_path, title="Fed holds rates", summary="Powell said inflation is easing."):
+    conn = db.get_conn(tmp_path / "arkwatch.db", allow_init=True)
+    now_iso = datetime.now(UTC).isoformat(timespec="seconds")
+    conn.execute(
+        "INSERT INTO market_news (news_id, source, title, url, summary, symbols_json, cluster_id,"
+        " relevance, novelty, fetched_at, published_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        ("n1", "RSS_FED", title, "https://fed.gov/1", summary, "[]", "c1", 1, 1, now_iso, now_iso),
+    )
+    conn.commit()
+    return conn
+
+
+def _impact(asset, **kw):
+    base = {
+        "asset": asset,
+        "stance": "BULLISH",
+        "magnitude": 0.5,
+        "confidence": 0.8,
+        "horizon": "SWING_MULTIDAY",
+        "evidence_level": "OBSERVED",
+        "evidence_quote": "inflation is easing",
+        "transmission_rationale": "r",
+    }
+    return base | kw
+
+
+def test_one_malformed_impact_is_skipped_not_the_batch(tmp_path, monkeypatch, capsys):
+    """float(None) / float('high') used to raise out of the loop and lose the whole batch."""
+    conn = _one_article(tmp_path)
+    payload = {
+        "asset_impacts": [
+            _impact("NQ1", magnitude=None),
+            _impact("ES1", magnitude="high"),
+            _impact("YM1", stance="MAYBE"),
+            _impact("GC1", confidence=float("nan")),
+            "not a dict",
+            _impact("DXY", stance="bearish", magnitude=7, confidence="0.9"),
+        ]
+    }
+    monkeypatch.setattr(sentiment, "_call", lambda _cfg, **_kw: json.dumps(payload))
+    assert sentiment.extract_news_intelligence(conn, limit=5, cfg={}) == 1
+    rows = conn.execute(
+        "SELECT asset, stance, magnitude, confidence FROM news_intelligence"
+    ).fetchall()
+    assert rows == [("DXY", "BEARISH", 1.0, 0.9)]  # coerced + clamped
+    assert "5 invalid impact items" in capsys.readouterr().out
+
+
+def test_ungrounded_quote_is_downgraded(tmp_path, monkeypatch):
+    conn = _one_article(tmp_path, summary="Powell said  Inflation is\nEASING, slowly.")
+    payload = {
+        "asset_impacts": [
+            # quote marks, ellipsis, case and whitespace differ: still grounded
+            _impact("NQ1", evidence_quote='"inflation is easing..."'),
+            # the model's own paraphrase: not in the article
+            _impact("GC1", evidence_quote="the Fed signalled imminent cuts", confidence=0.8),
+            _impact("DXY", evidence_quote=""),
+        ]
+    }
+    monkeypatch.setattr(sentiment, "_call", lambda _cfg, **_kw: json.dumps(payload))
+    sentiment.extract_news_intelligence(conn, limit=5, cfg={})
+    got = {
+        a: (lvl, conf)
+        for a, lvl, conf in conn.execute(
+            "SELECT asset, evidence_level, confidence FROM news_intelligence"
+        )
+    }
+    assert got == {"NQ1": ("OBSERVED", 0.8), "GC1": ("INFERRED", 0.4), "DXY": ("INFERRED", 0.4)}
+
+
+def test_grounded_normalisation():
+    assert sentiment._grounded("\u201cYields  DECLINE.\u201d", "t", "Treasury yields decline")
+    assert sentiment._grounded("fed holds", "Fed Holds Rates", None)
+    assert not sentiment._grounded("...", "t", "s")
+    assert not sentiment._grounded("yields rise", "t", "Treasury yields decline")

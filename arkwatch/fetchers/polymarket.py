@@ -9,7 +9,9 @@ value = probability of the first outcome (usually "Yes"), 0..1.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import random
 import re
 import sqlite3
 import time
@@ -25,6 +27,9 @@ PAGE = 100  # the Gamma API silently caps `limit` at 100
 MAX_PAGES = 15
 TIMEOUT = (5, 20)
 MIN_VOLUME = 50_000.0
+RETRY_AFTER_CAP_S = 10.0
+# worth one more try; a 4xx (other than 429) or a junk 200 body will not change in 2 s
+_TRANSIENT = (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError)
 _TOKEN = re.compile(r"[a-z0-9&]+")
 
 
@@ -53,8 +58,11 @@ def _get_page(url: str | None, offset: int) -> list:
         "limit": PAGE,
         "offset": offset,
     }
-    last = ""
-    for _ in range(2):  # one retry
+    last, wait = "", 0.0
+    for attempt in range(2):  # one retry, transient failures only
+        if attempt:
+            time.sleep(wait)
+        wait = random.uniform(1.0, 2.0)  # jitter: hourly cron hosts should not retry in lockstep
         try:
             r = requests.get(url or URL, params=params, timeout=TIMEOUT)
             if r.status_code == 200:
@@ -62,10 +70,17 @@ def _get_page(url: str | None, offset: int) -> list:
                 if isinstance(data, list):
                     return data
                 last = "unexpected payload shape"
-            else:
-                last = f"HTTP {r.status_code}"
+                break
+            last = f"HTTP {r.status_code}"
+            if r.status_code != 429 and r.status_code < 500:
+                break
+            # seconds form only; an HTTP-date falls back to the jitter
+            with contextlib.suppress(KeyError, ValueError):
+                wait = max(0.0, min(float(r.headers["Retry-After"]), RETRY_AFTER_CAP_S))
         except requests.RequestException as ex:  # includes an unparseable body
             last = f"{type(ex).__name__}: {ex}"
+            if not isinstance(ex, _TRANSIENT):
+                break
     raise PolymarketError(f"polymarket: {last}")
 
 

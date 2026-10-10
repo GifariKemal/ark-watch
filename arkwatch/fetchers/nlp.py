@@ -62,9 +62,13 @@ def _openai_content(response: requests.Response) -> str:
             if payload is None:
                 raise NlpError("NLP: malformed OpenAI-compatible response") from None
     try:
-        return payload["choices"][0]["message"]["content"]
+        choice = payload["choices"][0]
+        content = choice["message"]["content"]
     except (KeyError, IndexError, TypeError) as ex:
         raise NlpError("NLP: response has no completion content") from ex
+    if choice.get("finish_reason") == "length":
+        raise NlpError("NLP: completion truncated (finish_reason=length)")
+    return content
 
 
 def _config() -> dict:
@@ -183,7 +187,11 @@ def _call_one(cfg: dict, system: str, user: str) -> str:
         )
         if r.status_code != 200:
             raise NlpError(f"NLP: HTTP {r.status_code} — {r.text[:100]}")
-        blocks = r.json().get("content", [])
+        body = r.json()
+        if body.get("stop_reason") == "max_tokens":
+            # half a JSON object: fail the call so the breaker / next model take over
+            raise NlpError("NLP: completion truncated (stop_reason=max_tokens)")
+        blocks = body.get("content", [])
         return next((b.get("text", "") for b in blocks if b.get("type") == "text"), "")
 
     # openai format
@@ -215,8 +223,9 @@ def _extract_json(content: str) -> dict:
         raise NlpError(f"no JSON in response — {content[:100]}")
     try:
         return json.loads(jm.group())
-    except json.JSONDecodeError:
-        return {"error": "parse_failed", "raw": content[:500]}
+    except json.JSONDecodeError as ex:
+        # raise, not {"error": ...}: a dict here read as a successful (empty) analysis
+        raise NlpError(f"unparseable JSON in response ({ex.msg}) — {content[:100]}") from None
 
 
 # --- Analysis functions -------------------------------------------------------

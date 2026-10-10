@@ -10,8 +10,11 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import string
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError, field_validator
 
 from ..fetchers.nlp import _call, _config, _extract_json
 from .asof import parse_as_of
@@ -107,6 +110,57 @@ Respond ONLY with valid JSON (no markdown):
 }"""
 
 
+_Text = Annotated[str, BeforeValidator(lambda v: "" if v is None else str(v).strip())]
+
+
+def _upper(v: Any) -> str:
+    return str(v).strip().upper()
+
+
+_Upper = Annotated[str, BeforeValidator(_upper)]
+
+
+class _Impact(BaseModel):
+    """One LLM asset impact. Anything off-schema raises, so the caller skips that item only."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    asset: _Text
+    stance: Annotated[Literal["BULLISH", "BEARISH", "NEUTRAL"], BeforeValidator(_upper)] = "NEUTRAL"
+    magnitude: float = 0.5
+    confidence: float = 0.7
+    horizon: _Upper = "SWING_MULTIDAY"
+    macro_channel: _Text = ""
+    evidence_level: _Text = ""
+    evidence_quote: _Text = ""
+    transmission_rationale: _Text = ""
+
+    @field_validator("magnitude")
+    @classmethod
+    def _clamp_mag(cls, v: float) -> float:
+        return max(0.1, min(1.0, v))
+
+    @field_validator("confidence")
+    @classmethod
+    def _clamp_conf(cls, v: float) -> float:
+        return max(0.0, min(1.0, v))
+
+
+# ends of an LLM quote often carry quote marks / ellipsis / a full stop the source lacks
+_QUOTE_EDGE = string.punctuation + string.whitespace + "\u201c\u201d\u2018\u2019\u2026"
+UNGROUNDED_CONFIDENCE = 0.5  # a quote not found in the article is the model's words, not evidence
+
+
+def _squash(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+def _grounded(quote: str, title: str, summary: str | None) -> bool:
+    """Is the evidence quote (normalised) really a substring of the article the LLM was shown?"""
+    q = _squash(quote).strip(_QUOTE_EDGE)
+    return bool(q) and q in _squash(f"{title} {summary or ''}")
+
+
 def _normalize_asset(ticker: str) -> str | None:
     t = ticker.strip().upper()
     if t in TRACKED_ASSETS:
@@ -164,6 +218,7 @@ def extract_news_intelligence(
     now_utc = datetime.now(UTC).isoformat(timespec="seconds")
     processed_count = 0
     failures: list[str] = []
+    invalid = ungrounded = 0
 
     for news_id, source, title, summary, pub_utc in pending:
         user_prompt = f"SOURCE: {source}\nTITLE: {title}\nSUMMARY: {summary or ''}"
@@ -182,37 +237,33 @@ def extract_news_intelligence(
             continue
 
         inserted_for_article = 0
-        for imp in impacts:
-            if not isinstance(imp, dict):
+        for raw in impacts:
+            try:
+                imp = _Impact.model_validate(raw)
+            except ValidationError:
+                invalid += 1  # one bad item ("magnitude": null) must not abort the batch
                 continue
-            asset_raw = str(imp.get("asset", ""))
-            norm_asset = _normalize_asset(asset_raw)
+            norm_asset = _normalize_asset(imp.asset)
             if not norm_asset:
                 continue
 
-            stance = str(imp.get("stance", "NEUTRAL")).upper()
-            if stance not in ("BULLISH", "BEARISH", "NEUTRAL"):
-                stance = "NEUTRAL"
-
-            magnitude = float(imp.get("magnitude", 0.5))
-            magnitude = max(0.1, min(1.0, magnitude))
-
-            confidence = float(imp.get("confidence", 0.7))
-            confidence = max(0.0, min(1.0, confidence))
-
-            channel = str(
-                imp.get("macro_channel") or payload.get("primary_channel") or "GROWTH_DEMAND"
+            confidence = imp.confidence
+            channel = (
+                imp.macro_channel or str(payload.get("primary_channel") or "") or "GROWTH_DEMAND"
             ).upper()
-            horizon = str(imp.get("horizon", "SWING_MULTIDAY")).upper()
 
-            evidence_level = str(
-                imp.get("evidence_level") or payload.get("evidence_level") or "INFERRED"
+            evidence_level = (
+                imp.evidence_level or str(payload.get("evidence_level") or "") or "INFERRED"
             ).upper()
             if evidence_level not in ("OBSERVED", "SOURCED", "INFERRED"):
                 evidence_level = "INFERRED"
 
-            quote = str(imp.get("evidence_quote") or "").strip()
-            rationale = str(imp.get("transmission_rationale") or "").strip()
+            quote, rationale = imp.evidence_quote, imp.transmission_rationale
+            if not _grounded(quote, title, summary):
+                # the radar weighs OBSERVED/SOURCED higher and shows the quote: do not trust it
+                ungrounded += 1
+                evidence_level = "INFERRED"
+                confidence = round(confidence * UNGROUNDED_CONFIDENCE, 3)
 
             try:
                 conn.execute(
@@ -236,11 +287,11 @@ def extract_news_intelligence(
                     (
                         news_id,
                         norm_asset,
-                        stance,
-                        magnitude,
+                        imp.stance,
+                        imp.magnitude,
                         confidence,
                         channel,
-                        horizon,
+                        imp.horizon,
                         evidence_level,
                         quote,
                         rationale,
@@ -256,6 +307,11 @@ def extract_news_intelligence(
             processed_count += 1
             conn.commit()
 
+    if invalid or ungrounded or failures:
+        print(
+            f"  · NLP: {len(failures)} failed calls, {invalid} invalid impact items skipped,"
+            f" {ungrounded} ungrounded quotes downgraded to INFERRED"
+        )
     if failures and not processed_count:
         # the endpoint is down / every call failed: say so instead of a silent rc 0
         from ..qa.fetch_log import log_collection

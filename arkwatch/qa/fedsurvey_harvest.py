@@ -24,6 +24,7 @@ automatically. Any error → exit 1 → the daemon's dated alert pages the owner
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -86,9 +87,18 @@ def _nlp_tone(text: str, source_type: str) -> dict:
     try:
         from ..fetchers.nlp import analyze_tone
 
-        return analyze_tone(text, source_type=source_type)
+        tone = analyze_tone(text, source_type=source_type)
     except Exception as ex:
         return {"score": None, "summary": f"nlp unavailable: {str(ex)[:80]}"}
+    # LLM output: a "high" / null / 250 score must not land in computed_signals as-is
+    raw = tone.get("score") if isinstance(tone, dict) else None
+    try:
+        score = float(raw) if not isinstance(raw, bool) else math.nan
+    except (TypeError, ValueError):
+        score = math.nan
+    if not math.isfinite(score):
+        return {"score": None, "summary": f"nlp invalid score: {str(raw)[:40]}"}
+    return {**tone, "score": max(-100.0, min(100.0, score))}  # analyze_tone's -100..+100 scale
 
 
 def _nlp_failed(ts: str, tone: dict, stored: str = "") -> str:

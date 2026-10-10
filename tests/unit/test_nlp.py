@@ -159,3 +159,50 @@ def test_read_timeout_from_env(monkeypatch):
     monkeypatch.setenv("NLP_TIMEOUT_S", "junk")
     nlp._call_one(CFG, "s", "u")
     assert seen == [(10, 60.0), (10, 7.5), (10, 60.0)]
+
+
+# --- truncation / unparseable output are failures, not empty successes ----------------
+
+
+def _post_returning(monkeypatch, bodies: dict[str, dict]):
+    class R:
+        status_code = 200
+
+        def __init__(self, body):
+            self._body = body
+
+        def json(self):
+            return self._body
+
+    monkeypatch.setattr(nlp.requests, "post", lambda url, **k: R(bodies[k["json"]["model"]]))
+
+
+@pytest.mark.parametrize(
+    ("fmt", "cut", "whole"),
+    [
+        (
+            "openai",
+            {"choices": [{"message": {"content": '{"a": 1'}, "finish_reason": "length"}]},
+            {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]},
+        ),
+        (
+            "anthropic",
+            {"stop_reason": "max_tokens", "content": [{"type": "text", "text": '{"a": 1'}]},
+            {"stop_reason": "end_turn", "content": [{"type": "text", "text": "ok"}]},
+        ),
+    ],
+)
+def test_truncated_completion_fails_over_to_next_model(monkeypatch, fmt, cut, whole):
+    _post_returning(monkeypatch, {"cut": cut, "whole": whole})
+    endpoint = f"https://trunc-{fmt}.test"
+    cfg = {"format": fmt, "model": "cut,whole", "endpoint": endpoint, "api_key": "k"}
+    assert nlp._call(cfg, "s", "u") == "ok"
+    assert nlp._breaker[(endpoint, "cut")][0] == 1  # counted against the breaker
+    with pytest.raises(nlp.NlpError, match="truncated"):
+        nlp._call_one({**cfg, "model": "cut"}, "s", "u")
+
+
+def test_unparseable_json_raises_instead_of_error_dict():
+    assert nlp._extract_json('```json\n{"score": 5}\n```') == {"score": 5}
+    with pytest.raises(nlp.NlpError, match="unparseable"):
+        nlp._extract_json('{"score": 5,, }')

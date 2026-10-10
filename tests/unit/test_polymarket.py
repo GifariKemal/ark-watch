@@ -222,3 +222,73 @@ def test_pagination_walks_pages_until_volume_drops_below_minimum(monkeypatch):
     assert any("m105" in (r.get("slug") or "") for r in rows)  # a row only on page 2 is reached
     assert len(calls) == 2  # page 2 ends below the minimum volume, so page 3 is never requested
     assert all("limit=100" in c for c in calls)
+
+
+# --- retry policy: transient only, with backoff ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("status", "headers", "hits", "waits"),
+    [
+        (429, {"Retry-After": "3"}, 2, [3.0]),
+        (429, {"Retry-After": "120"}, 2, [polymarket.RETRY_AFTER_CAP_S]),
+        (503, {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, 2, ["jitter"]),
+        (502, {}, 2, ["jitter"]),
+        (404, {}, 1, []),  # a 4xx will not fix itself: no retry, no wait
+        (403, {"Retry-After": "3"}, 1, []),
+    ],
+)
+def test_get_page_retries_only_transient_status_with_backoff(
+    monkeypatch, status, headers, hits, waits
+):
+    seen = {"hits": 0}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen["hits"] += 1
+            self.send_response(status)
+            for k, v in headers.items():
+                self.send_header(k, v)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    slept: list[float] = []
+    monkeypatch.setattr(polymarket.time, "sleep", slept.append)
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+    try:
+        with pytest.raises(polymarket.PolymarketError, match=f"HTTP {status}"):
+            polymarket._get_page(f"http://127.0.0.1:{srv.server_port}/markets", 0)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert seen["hits"] == hits
+    assert len(slept) == len(waits)
+    for got, want in zip(slept, waits, strict=True):
+        assert 1.0 <= got <= 2.0 if want == "jitter" else got == want
+
+
+def test_get_page_retries_a_transport_error_then_succeeds(monkeypatch):
+    calls = []
+
+    class R:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return [{"slug": "ok"}]
+
+    def get(*_a, **_kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise polymarket.requests.ConnectionError("reset")
+        return R()
+
+    slept: list[float] = []
+    monkeypatch.setattr(polymarket.requests, "get", get)
+    monkeypatch.setattr(polymarket.time, "sleep", slept.append)
+    assert polymarket._get_page(None, 0) == [{"slug": "ok"}]
+    assert len(calls) == 2 and len(slept) == 1 and 1.0 <= slept[0] <= 2.0

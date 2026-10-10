@@ -488,7 +488,14 @@ def run(db_path: str) -> dict[str, int]:
             now = datetime.now(UTC).isoformat(timespec="seconds")
             values = []
             payloads = []
+            bad_time = 0
             for row in rows:
+                try:
+                    published = _time(row.get("published"))
+                except ValueError:
+                    # one bad stamp used to drop the whole source batch; now = what the
+                    # other news fetchers already fall back to
+                    published, bad_time = now, bad_time + 1
                 title = str(row["title"]).strip()
                 url = _canonical_url(row.get("url"))
                 cluster, novelty = _cluster(conn, title)
@@ -520,7 +527,7 @@ def run(db_path: str) -> dict[str, int]:
                 values.append(
                     (
                         uid,
-                        _time(row.get("published")),
+                        published,
                         row["source"],
                         title,
                         url,
@@ -548,7 +555,15 @@ def run(db_path: str) -> dict[str, int]:
             )
             out[name] = len(values)
             log_collection(
-                conn, "market_news", name, rows[0] if rows else None, len(values), status="OK"
+                conn,
+                "market_news",
+                name,
+                rows[0] if rows else None,
+                len(values),
+                err=f"{bad_time} rows with an invalid published time stamped now"
+                if bad_time
+                else None,
+                status="OK",
             )
         except PlanLimited as ex:
             out[name] = 0

@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .. import db
-from ..fetchers import cme
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
 
@@ -245,6 +246,15 @@ def _fed_ops_resume(conn, quiet_days: int) -> tuple[str, str, str, str] | None:
     return None
 
 
+@contextmanager
+def _trigger(name: str) -> Iterator[None]:
+    """Isolate one trigger: its failure is logged and the remaining triggers still run."""
+    try:
+        yield
+    except Exception as ex:
+        print(f"⚠ {name} trigger skipped: {type(ex).__name__}: {str(ex)[:120]}")
+
+
 def _fire(
     conn,
     alert_type: str,
@@ -276,31 +286,21 @@ def _fire(
         f"{condition}\n{context}\n💡 {action}"
     )
     conn.execute("BEGIN IMMEDIATE")
-    conn.execute(
-        "INSERT INTO alert_deliveries"
-        "(alert_type, triggered_at, cooldown_key, priority, status, message)"
-        " VALUES (?,?,?,?, 'pending', ?)",
-        (alert_type, now, key, priority, msg),
-    )
-    conn.execute("COMMIT")
-    # Try an immediate send (fast path); on failure it stays pending for the
-    # sender retry. Escape HTML consistently with the retry path
-    # (send_pending_alerts).
-    import html as _html
-
-    from ..senders.telegram import _chat_id, _send_message
-
     try:
-        mid = _send_message(_html.escape(msg), _chat_id())
-    except Exception:
-        mid = None
-    if mid:
         conn.execute(
-            "UPDATE alert_deliveries SET status='sent', telegram_message_id=?,"
-            " sent_at=?, attempts=attempts+1 WHERE cooldown_key=? AND triggered_at=?",
-            (mid, now, key, now),
+            "INSERT INTO alert_deliveries"
+            "(alert_type, triggered_at, cooldown_key, priority, status, message)"
+            " VALUES (?,?,?,?, 'pending', ?)",
+            (alert_type, now, key, priority, msg),
         )
-        conn.commit()
+        conn.execute("COMMIT")
+    except BaseException:
+        # a transaction left open makes every later BEGIN IMMEDIATE in check_all raise
+        conn.execute("ROLLBACK")
+        raise
+    # No Telegram-only fast path: it marked the row 'sent', so ntfy/Discord never got it.
+    # The row stays 'pending'; send_pending_alerts (run right after check_all in main and
+    # on every watch cycle) broadcasts it to every active channel.
     return True
 
 
@@ -309,101 +309,106 @@ def check_all(conn) -> list[str]:
     fired = []
 
     # 1. VIX/VXV backwardation (VIX > VXV)
-    vix = latest_value(conn, "FRED:VIXCLS")
-    vxv = latest_value(conn, "FRED:VXVCLS")
-    if vix and vxv and vix[1] > vxv[1]:
-        ratio = vix[1] / vxv[1]
-        if ratio > VIX_BACKWARDATION_RATIO:
-            if _fire(
-                conn,
-                "vix_backwardation",
-                f"VIX {vix[1]:.1f} > VXV {vxv[1]:.1f} (ratio {ratio:.2f})",
-                "Historically: acute short-term stress",
-                "Reduce US100 sizing; no new longs until ratio < 1.0",
-                cooldown_key=f"vix_backwardation@{vix[0][:10]}",
-            ):
-                fired.append("vix_backwardation")
+    with _trigger("vix_backwardation"):
+        vix = latest_value(conn, "FRED:VIXCLS")
+        vxv = latest_value(conn, "FRED:VXVCLS")
+        if vix and vxv and vix[1] > vxv[1]:
+            ratio = vix[1] / vxv[1]
+            if ratio > VIX_BACKWARDATION_RATIO:
+                if _fire(
+                    conn,
+                    "vix_backwardation",
+                    f"VIX {vix[1]:.1f} > VXV {vxv[1]:.1f} (ratio {ratio:.2f})",
+                    "Historically: acute short-term stress",
+                    "Reduce US100 sizing; no new longs until ratio < 1.0",
+                    cooldown_key=f"vix_backwardation@{vix[0][:10]}",
+                ):
+                    fired.append("vix_backwardation")
 
     # 2. HY extreme percentile (<p10 or >p90 — thresholds in params_signals.yaml)
-    hy = recent_values(conn, "FRED:BAMLH0A0HYM2", 756)  # 3y window
-    hy_lv = latest_value(conn, "FRED:BAMLH0A0HYM2")
-    if len(hy) > 100:
-        cur = hy[-1]
-        pct = sum(1 for v in hy if v <= cur) / len(hy) * 100
-        if pct < HY_EXTREME_PCT_LOW:
-            if _fire(
-                conn,
-                "hy_extreme_low",
-                f"HY OAS {cur:.2f}% = percentile {pct:.0f} (very tight)",
-                "Very tight spreads = complacency; risk of repricing",
-                "Beware mean-reversion; do not chase risk-on",
-                cooldown_key=f"hy_extreme@{hy_lv[0][:10] if hy_lv else '?'}",
-            ):
-                fired.append("hy_extreme_low")
-        elif pct > HY_EXTREME_PCT_HIGH:
-            if _fire(
-                conn,
-                "hy_extreme_high",
-                f"HY OAS {cur:.2f}% = percentile {pct:.0f} (very wide)",
-                "High credit stress; historical contrarian-buy zone",
-                "Watch for a contrarian entry if it stabilizes",
-                cooldown_key=f"hy_extreme@{hy_lv[0][:10] if hy_lv else '?'}",
-            ):
-                fired.append("hy_extreme_high")
+    with _trigger("hy_extreme"):
+        hy = recent_values(conn, "FRED:BAMLH0A0HYM2", 756)  # 3y window
+        hy_lv = latest_value(conn, "FRED:BAMLH0A0HYM2")
+        if len(hy) > 100:
+            cur = hy[-1]
+            pct = sum(1 for v in hy if v <= cur) / len(hy) * 100
+            if pct < HY_EXTREME_PCT_LOW:
+                if _fire(
+                    conn,
+                    "hy_extreme_low",
+                    f"HY OAS {cur:.2f}% = percentile {pct:.0f} (very tight)",
+                    "Very tight spreads = complacency; risk of repricing",
+                    "Beware mean-reversion; do not chase risk-on",
+                    cooldown_key=f"hy_extreme@{hy_lv[0][:10] if hy_lv else '?'}",
+                ):
+                    fired.append("hy_extreme_low")
+            elif pct > HY_EXTREME_PCT_HIGH:
+                if _fire(
+                    conn,
+                    "hy_extreme_high",
+                    f"HY OAS {cur:.2f}% = percentile {pct:.0f} (very wide)",
+                    "High credit stress; historical contrarian-buy zone",
+                    "Watch for a contrarian entry if it stabilizes",
+                    cooldown_key=f"hy_extreme@{hy_lv[0][:10] if hy_lv else '?'}",
+                ):
+                    fired.append("hy_extreme_high")
 
     # 3. COT crowded (|z| > cot_crowded_z) — one shared z definition AND one
     # shared threshold for brief + alert (signals/cot_signals)
-    from ..signals.cot_signals import COT_CROWDED_Z, _cot_zscore
+    latest_cot = None  # trigger 7/8 read it even if this block fails
+    with _trigger("cot_crowded"):
+        from ..signals.cot_signals import COT_CROWDED_Z, _cot_zscore
 
-    # shared per-report anchor: COT is WEEKLY — a windowed 6h cooldown
-    # re-announced the same report 4×/day all week once the daemon went
-    # 24/7 on the server (live: cot_broad_divergence 06:06 AND 12:07 WIB
-    # from the same 09-11 report). Per-snapshot keys = one announcement
-    # per report, ever (the SOMA pattern).
-    latest_cot = conn.execute("SELECT MAX(report_date) FROM cot_raw").fetchone()[0]
-    for code, name in [("088691", "Gold"), ("084691", "Silver"), ("085692", "Copper")]:
-        z = _cot_zscore(conn, code)
-        if z is not None and abs(z) > COT_CROWDED_Z:
-            direction = "LONG" if z > 0 else "SHORT"
-            if _fire(
-                conn,
-                f"cot_crowded_{name.lower()}",
-                f"{name} MM z={z:+.1f} CROWDED {direction}",
-                "Positioning extreme vs 3y history",
-                f"{'Do not chase' if z > 0 else 'Beware a squeeze'}",
-                cooldown_key=f"cot_crowded_{name.lower()}@{latest_cot}",
-            ):
-                fired.append(f"cot_crowded_{name.lower()}")
+        # shared per-report anchor: COT is WEEKLY — a windowed 6h cooldown
+        # re-announced the same report 4×/day all week once the daemon went
+        # 24/7 on the server (live: cot_broad_divergence 06:06 AND 12:07 WIB
+        # from the same 09-11 report). Per-snapshot keys = one announcement
+        # per report, ever (the SOMA pattern).
+        latest_cot = conn.execute("SELECT MAX(report_date) FROM cot_raw").fetchone()[0]
+        for code, name in [("088691", "Gold"), ("084691", "Silver"), ("085692", "Copper")]:
+            z = _cot_zscore(conn, code)
+            if z is not None and abs(z) > COT_CROWDED_Z:
+                direction = "LONG" if z > 0 else "SHORT"
+                if _fire(
+                    conn,
+                    f"cot_crowded_{name.lower()}",
+                    f"{name} MM z={z:+.1f} CROWDED {direction}",
+                    "Positioning extreme vs 3y history",
+                    f"{'Do not chase' if z > 0 else 'Beware a squeeze'}",
+                    cooldown_key=f"cot_crowded_{name.lower()}@{latest_cot}",
+                ):
+                    fired.append(f"cot_crowded_{name.lower()}")
 
     # 4. Fed-BS reversal (ΔWoW sign change). Computed from ΔWALCL only
     # (RRP/TGA not merged yet → the label reads "Fed BS", not full net-liq;
     # a full net-liq would merge WALCL−RRP−TGA once 3-series weekly
     # alignment is ready)
-    walcl = recent_values(conn, "FRED:WALCL", 10)
-    walcl_lv = latest_value(conn, "FRED:WALCL")
-    if len(walcl) >= 5:
-        delta = walcl[-1] - walcl[-5]
-        prev_delta = walcl[-5] - walcl[-9] if len(walcl) >= 9 else None
-        # ROUND-6: magnitude deadband — ±0.01-0.3% balance-sheet noise fired
-        # two contradictory URGENT alerts 18h apart; a reversal must MOVE.
-        # ROUND-8: the ×1000 claimed by 9ddd78a never landed (pattern
-        # mismatch) — WALCL is stored $M, the threshold is $B; the message's
-        # own /1000 display proves the unit convention.
-        if (
-            prev_delta is not None
-            and abs(delta) >= NET_LIQ_MIN_ABS_B * 1000
-            and ((delta > 0) != (prev_delta > 0))
-        ):
-            direction = "EXPANSION" if delta > 0 else "CONTRACTION"
-            if _fire(
-                conn,
-                "net_liq_reversal",
-                f"Fed BS ΔWoM: {delta / 1000:+.0f}B (from {prev_delta / 1000:+.0f}B)",
-                f"Reversal to {direction} (liquidity proxy)",
-                "This is a liquidity-regime signal; adjust BTC/index risk",
-                cooldown_key=(f"net_liq_reversal@{walcl_lv[0][:10] if walcl_lv else '?'}"),
+    with _trigger("net_liq_reversal"):
+        walcl = recent_values(conn, "FRED:WALCL", 10)
+        walcl_lv = latest_value(conn, "FRED:WALCL")
+        if len(walcl) >= 5:
+            delta = walcl[-1] - walcl[-5]
+            prev_delta = walcl[-5] - walcl[-9] if len(walcl) >= 9 else None
+            # ROUND-6: magnitude deadband — ±0.01-0.3% balance-sheet noise fired
+            # two contradictory URGENT alerts 18h apart; a reversal must MOVE.
+            # ROUND-8: the ×1000 claimed by 9ddd78a never landed (pattern
+            # mismatch) — WALCL is stored $M, the threshold is $B; the message's
+            # own /1000 display proves the unit convention.
+            if (
+                prev_delta is not None
+                and abs(delta) >= NET_LIQ_MIN_ABS_B * 1000
+                and ((delta > 0) != (prev_delta > 0))
             ):
-                fired.append("net_liq_reversal")
+                direction = "EXPANSION" if delta > 0 else "CONTRACTION"
+                if _fire(
+                    conn,
+                    "net_liq_reversal",
+                    f"Fed BS ΔWoM: {delta / 1000:+.0f}B (from {prev_delta / 1000:+.0f}B)",
+                    f"Reversal to {direction} (liquidity proxy)",
+                    "This is a liquidity-regime signal; adjust BTC/index risk",
+                    cooldown_key=(f"net_liq_reversal@{walcl_lv[0][:10] if walcl_lv else '?'}"),
+                ):
+                    fired.append("net_liq_reversal")
 
     # 4b. Surprise flip — ESI sign change. Requires |ESI| ≥ 0.25 on both
     # sides to avoid noise around zero; the ESI history comes from
@@ -643,258 +648,270 @@ def check_all(conn) -> list[str]:
     # The FUNDING_EXTREME_BPS threshold stays in params_signals.yaml (provenance).
 
     # 6. Gold↔RY divergence (simple form: RY up & gold up)
-    ry = recent_values(conn, "FRED:DFII10", 60)
-    ry_lv = latest_value(conn, "FRED:DFII10")
-    gold = conn.execute(
-        "SELECT close FROM instrument_prices WHERE symbol='XAUUSD' AND source='EODHD' "
-        "AND (SELECT MAX(ts) FROM instrument_prices WHERE symbol='XAUUSD' "
-        "AND source='EODHD' AND close IS NOT NULL) >= date('now','-4 day') "
-        "ORDER BY ts DESC LIMIT 60"
-    ).fetchall()
-    if len(ry) >= 20 and len(gold) >= 20:
-        # ROUND-6: the gold list is DESC (newest first) — the old
-        # gold[-1]-gold[-20] compared the OLDEST sessions in the 60-row
-        # window (ancient data, wrong direction). Compare the LATEST 20
-        # sessions: newest − 20-sessions-ago.
-        ry_m = ry[-1] - ry[-20]
-        gold_m = gold[0][0] - gold[19][0]
-        # ROUND-6: magnitude gate on the gold leg — a +$4 (+0.09%) drift
-        # was announced 8× as a 'structural bid'; require a real move
-        gold_pct = gold_m / gold[19][0] if gold[19][0] else 0.0
-        if ry_m > GOLD_RY_DIV_MIN_BP / 100 and gold_pct >= GOLD_RY_DIV_MIN_GOLD_PCT:
-            if _fire(
-                conn,
-                "gold_ry_divergence",
-                f"Gold +{gold_pct:+.1%} (+{gold_m:.0f}) BUT DFII10 +{ry_m * 100:.0f}bps (20d)",
-                "Divergence: gold rising despite rising real yields = structural bid (CB?)",
-                "Watch PBoC/CB buying in the flows data",
-                cooldown_key=f"gold_ry_divergence@{ry_lv[0][:10] if ry_lv else '?'}",
-            ):
-                fired.append("gold_ry_divergence")
+    with _trigger("gold_ry_divergence"):
+        ry = recent_values(conn, "FRED:DFII10", 60)
+        ry_lv = latest_value(conn, "FRED:DFII10")
+        gold = conn.execute(
+            "SELECT close FROM instrument_prices WHERE symbol='XAUUSD' AND source='EODHD' "
+            "AND (SELECT MAX(ts) FROM instrument_prices WHERE symbol='XAUUSD' "
+            "AND source='EODHD' AND close IS NOT NULL) >= date('now','-4 day') "
+            "ORDER BY ts DESC LIMIT 60"
+        ).fetchall()
+        if len(ry) >= 20 and len(gold) >= 20:
+            # ROUND-6: the gold list is DESC (newest first) — the old
+            # gold[-1]-gold[-20] compared the OLDEST sessions in the 60-row
+            # window (ancient data, wrong direction). Compare the LATEST 20
+            # sessions: newest − 20-sessions-ago.
+            ry_m = ry[-1] - ry[-20]
+            gold_m = gold[0][0] - gold[19][0]
+            # ROUND-6: magnitude gate on the gold leg — a +$4 (+0.09%) drift
+            # was announced 8× as a 'structural bid'; require a real move
+            gold_pct = gold_m / gold[19][0] if gold[19][0] else 0.0
+            if ry_m > GOLD_RY_DIV_MIN_BP / 100 and gold_pct >= GOLD_RY_DIV_MIN_GOLD_PCT:
+                if _fire(
+                    conn,
+                    "gold_ry_divergence",
+                    f"Gold +{gold_pct:+.1%} (+{gold_m:.0f}) BUT DFII10 +{ry_m * 100:.0f}bps (20d)",
+                    "Divergence: gold rising despite rising real yields = structural bid (CB?)",
+                    "Watch PBoC/CB buying in the flows data",
+                    cooldown_key=f"gold_ry_divergence@{ry_lv[0][:10] if ry_lv else '?'}",
+                ):
+                    fired.append("gold_ry_divergence")
 
     # 7. COT Lev-vs-AM divergence (broad across financials = strong signal)
     # (latest_cot is fetched before trigger 3 — shared per-report anchor)
-    if latest_cot:
-        diverge_count = 0
-        for code in ("099741", "133741", "13874+", "209742"):
-            lev = conn.execute(
-                "SELECT long, short FROM cot_raw WHERE contract_code=? "
-                "AND report_date=? AND report_type='tff' AND category='lev'",
-                (code, latest_cot),
-            ).fetchone()
-            am = conn.execute(
-                "SELECT long, short FROM cot_raw WHERE contract_code=? "
-                "AND report_date=? AND report_type='tff' AND category='am'",
-                (code, latest_cot),
-            ).fetchone()
-            if lev and am:
-                lev_net = (lev[0] or 0) - (lev[1] or 0)
-                am_net = (am[0] or 0) - (am[1] or 0)
-                if (lev_net > 0) != (am_net > 0):
-                    diverge_count += 1
-        if diverge_count >= COT_BROAD_DIV_MIN:  # 3+ financials aligned = strong signal
-            if _fire(
-                conn,
-                "cot_broad_divergence",
-                f"{diverge_count}/4 financials: Lev vs AM in opposite directions",
-                "A broad fast-money vs real-money split — resolution = volatility",
-                "Watch for the breaking direction; reduce leverage until it is clear",
-                cooldown_key=f"cot_broad_divergence@{latest_cot}",
-            ):
-                fired.append("cot_broad_divergence")
+    with _trigger("cot_broad_divergence"):
+        if latest_cot:
+            diverge_count = 0
+            for code in ("099741", "133741", "13874+", "209742"):
+                lev = conn.execute(
+                    "SELECT long, short FROM cot_raw WHERE contract_code=? "
+                    "AND report_date=? AND report_type='tff' AND category='lev'",
+                    (code, latest_cot),
+                ).fetchone()
+                am = conn.execute(
+                    "SELECT long, short FROM cot_raw WHERE contract_code=? "
+                    "AND report_date=? AND report_type='tff' AND category='am'",
+                    (code, latest_cot),
+                ).fetchone()
+                if lev and am:
+                    lev_net = (lev[0] or 0) - (lev[1] or 0)
+                    am_net = (am[0] or 0) - (am[1] or 0)
+                    if (lev_net > 0) != (am_net > 0):
+                        diverge_count += 1
+            if diverge_count >= COT_BROAD_DIV_MIN:  # 3+ financials aligned = strong signal
+                if _fire(
+                    conn,
+                    "cot_broad_divergence",
+                    f"{diverge_count}/4 financials: Lev vs AM in opposite directions",
+                    "A broad fast-money vs real-money split — resolution = volatility",
+                    "Watch for the breaking direction; reduce leverage until it is clear",
+                    cooldown_key=f"cot_broad_divergence@{latest_cot}",
+                ):
+                    fired.append("cot_broad_divergence")
 
     # 8. COT covering (a large position shrinking fast, >10K/week). Category
     # per report type: Gold = disagg (mm only), SPX = tff (lev only)
-    for code, name, cat in [("088691", "Gold", "mm"), ("13874+", "SPX", "lev")]:
-        row = (
-            conn.execute(
-                "SELECT change_long, change_short, long, short FROM cot_raw "
-                "WHERE contract_code=? AND report_date=? AND category=? "
-                "AND report_type NOT LIKE '%_c'",
-                (code, latest_cot, cat),
-            ).fetchone()
-            if latest_cot
-            else None
-        )
-        if row and row[2] is not None:
-            net = row[2] - (row[3] or 0)
-            chg = (row[0] or 0) - (row[1] or 0)
-            # Covering = a large position shrinking fast
-            if net > COT_COVERING_NET_MIN and chg < -COT_COVERING_CHG_MIN:
-                if _fire(
-                    conn,
-                    f"cot_covering_{name.lower()}",
-                    f"{name} {cat.upper()} net={net:+,} Δ{chg:+,}/w (COVERING)",
-                    f"Large {cat.upper()} position being unwound rapidly",
-                    "Momentum fade — watch for a reversal",
-                    cooldown_key=f"cot_covering_{name.lower()}@{latest_cot}",
-                ):
-                    fired.append(f"cot_covering_{name.lower()}")
-            elif net < -COT_COVERING_NET_MIN and chg > COT_COVERING_CHG_MIN:
-                if _fire(
-                    conn,
-                    f"cot_short_cover_{name.lower()}",
-                    f"{name} {cat.upper()} net={net:+,} Δ{chg:+,}/w (SHORT COVERING)",
-                    "Large short being covered = squeeze potential",
-                    "Beware a sustained rally",
-                    cooldown_key=f"cot_short_cover_{name.lower()}@{latest_cot}",
-                ):
-                    fired.append(f"cot_short_cover_{name.lower()}")
+    with _trigger("cot_covering"):
+        for code, name, cat in [("088691", "Gold", "mm"), ("13874+", "SPX", "lev")]:
+            row = (
+                conn.execute(
+                    "SELECT change_long, change_short, long, short FROM cot_raw "
+                    "WHERE contract_code=? AND report_date=? AND category=? "
+                    "AND report_type NOT LIKE '%_c'",
+                    (code, latest_cot, cat),
+                ).fetchone()
+                if latest_cot
+                else None
+            )
+            if row and row[2] is not None:
+                net = row[2] - (row[3] or 0)
+                chg = (row[0] or 0) - (row[1] or 0)
+                # Covering = a large position shrinking fast
+                if net > COT_COVERING_NET_MIN and chg < -COT_COVERING_CHG_MIN:
+                    if _fire(
+                        conn,
+                        f"cot_covering_{name.lower()}",
+                        f"{name} {cat.upper()} net={net:+,} Δ{chg:+,}/w (COVERING)",
+                        f"Large {cat.upper()} position being unwound rapidly",
+                        "Momentum fade — watch for a reversal",
+                        cooldown_key=f"cot_covering_{name.lower()}@{latest_cot}",
+                    ):
+                        fired.append(f"cot_covering_{name.lower()}")
+                elif net < -COT_COVERING_NET_MIN and chg > COT_COVERING_CHG_MIN:
+                    if _fire(
+                        conn,
+                        f"cot_short_cover_{name.lower()}",
+                        f"{name} {cat.upper()} net={net:+,} Δ{chg:+,}/w (SHORT COVERING)",
+                        "Large short being covered = squeeze potential",
+                        "Beware a sustained rally",
+                        cooldown_key=f"cot_short_cover_{name.lower()}@{latest_cot}",
+                    ):
+                        fired.append(f"cot_short_cover_{name.lower()}")
 
     # 9. Copper stocks drain (LME physical). Drain = 20-trading-day Δ ≤
     # copper_drain_20d_pct (default −15%) OR a ≥copper_drain_streak_weeks
     # (default 5) consecutive down streak; HG curve context from
     # cme_settlements (backwardation corroborates a squeeze) + 3y percentile
-    cu = recent_values(conn, "LME:CA_STOCKS", 800)
-    # AUDIT P2 (2026-09-13): the channel is a MONTHLY XLSX (newest point ages
-    # 1 day..~5 weeks mid-month) — Δ20d/streak on a frozen window is noise.
-    # Gate: skip the trigger entirely when the newest observation is >45 days
-    # old (publication stalled), and label the intra-month age otherwise.
-    cu_ts = conn.execute(
-        "SELECT MAX(ts) FROM raw_observations WHERE series_id='LME:CA_STOCKS'"
-        " AND vintage_ts='realtime'"
-    ).fetchone()[0]
-    cu_age = (
-        (datetime.now(UTC).date() - datetime.fromisoformat(cu_ts[:10]).date()).days
-        if cu_ts
-        else 9999
-    )
-    if cu_age > 45:
-        print(f"  ⚠ copper trigger skipped: LME stocks frozen {cu_age}d ({cu_ts})")
-    elif len(cu) >= 60:
-        lvl = cu[-1]
-        d20 = (cu[-1] / cu[-21] - 1) if len(cu) >= 21 else None
-        streak, i = 0, len(cu) - 1  # a week ≈ 5 trading days
-        while i - 5 >= 0 and cu[i] < cu[i - 5]:
-            streak += 1
-            i -= 5
-        if (d20 is not None and d20 <= COPPER_DRAIN_20D_PCT) or streak >= COPPER_DRAIN_STREAK_WEEKS:
-            # Sort contracts by approximate IMM date: alphabetical month order
-            # would compare 'APR 27' vs 'APR 28' (distant contracts) and
-            # mislabel the curve; same approach as transforms/xccy._imm_approx
-            curve = conn.execute(
-                "SELECT month, settle FROM cme_settlements WHERE product_id=? "
-                "AND trade_date=(SELECT MAX(trade_date) FROM cme_settlements "
-                "WHERE product_id=?)",
-                (cme.PRODUCTS["HG"], cme.PRODUCTS["HG"]),
-            ).fetchall()
-            _MON = {
-                "JAN": 1,
-                "FEB": 2,
-                "MAR": 3,
-                "APR": 4,
-                "MAY": 5,
-                "JUN": 6,
-                "JUL": 7,
-                "AUG": 8,
-                "SEP": 9,
-                "OCT": 10,
-                "NOV": 11,
-                "DEC": 12,
-            }
+    with _trigger("copper_stocks_drain"):
+        cu = recent_values(conn, "LME:CA_STOCKS", 800)
+        # AUDIT P2 (2026-09-13): the channel is a MONTHLY XLSX (newest point ages
+        # 1 day..~5 weeks mid-month) — Δ20d/streak on a frozen window is noise.
+        # Gate: skip the trigger entirely when the newest observation is >45 days
+        # old (publication stalled), and label the intra-month age otherwise.
+        cu_ts = conn.execute(
+            "SELECT MAX(ts) FROM raw_observations WHERE series_id='LME:CA_STOCKS'"
+            " AND vintage_ts='realtime'"
+        ).fetchone()[0]
+        cu_age = (
+            (datetime.now(UTC).date() - datetime.fromisoformat(cu_ts[:10]).date()).days
+            if cu_ts
+            else 9999
+        )
+        if cu_age > 45:
+            print(f"  ⚠ copper trigger skipped: LME stocks frozen {cu_age}d ({cu_ts})")
+        elif len(cu) >= 60:
+            lvl = cu[-1]
+            d20 = (cu[-1] / cu[-21] - 1) if len(cu) >= 21 else None
+            streak, i = 0, len(cu) - 1  # a week ≈ 5 trading days
+            while i - 5 >= 0 and cu[i] < cu[i - 5]:
+                streak += 1
+                i -= 5
+            if (
+                d20 is not None and d20 <= COPPER_DRAIN_20D_PCT
+            ) or streak >= COPPER_DRAIN_STREAK_WEEKS:
+                # Sort contracts by approximate IMM date: alphabetical month order
+                # would compare 'APR 27' vs 'APR 28' (distant contracts) and
+                # mislabel the curve; same approach as transforms/xccy._imm_approx
+                from ..fetchers.cme import PRODUCTS  # lazy: the watcher spawns every 60 s
 
-            def _imm(m_code):
-                try:
-                    mon, yr = m_code.upper().split()
-                    return (2000 + int(yr), _MON[mon])
-                except (ValueError, KeyError, AttributeError):
-                    return (9999, 12)
+                hg = PRODUCTS["HG"]
+                curve = conn.execute(
+                    "SELECT month, settle FROM cme_settlements WHERE product_id=? "
+                    "AND trade_date=(SELECT MAX(trade_date) FROM cme_settlements "
+                    "WHERE product_id=?)",
+                    (hg, hg),
+                ).fetchall()
+                _MON = {
+                    "JAN": 1,
+                    "FEB": 2,
+                    "MAR": 3,
+                    "APR": 4,
+                    "MAY": 5,
+                    "JUN": 6,
+                    "JUL": 7,
+                    "AUG": 8,
+                    "SEP": 9,
+                    "OCT": 10,
+                    "NOV": 11,
+                    "DEC": 12,
+                }
 
-            curve = sorted([c for c in curve if c[1] is not None], key=lambda c: _imm(c[0]))
-            if len(curve) >= 2 and curve[0][1] and curve[1][1]:
-                curve_txt = (
-                    "backwardation curve (corroborates the squeeze)"
-                    if curve[0][1] > curve[1][1]
-                    else "contango curve"
-                )
-            else:
-                curve_txt = "curve N/A"
-            win = cu[-750:] if len(cu) >= 750 else cu
-            pct = 100 * sum(1 for v in win if v < lvl) / len(win)
-            d20_txt = f"Δ20d {d20:+.0%}" if d20 is not None else ""
-            # off-warrant shadow supply (daily OWSR, T+3): thick shadow supply
-            # can cap a squeeze (hidden metal can be warranted anytime); thin
-            # supply makes the same drain far more serious
-            ow = conn.execute(
-                "SELECT period, value FROM flows_periodic WHERE kind='lme_owsr_cu'"
-                " AND period=(SELECT MAX(period) FROM flows_periodic"
-                "             WHERE kind='lme_owsr_cu')"
-            ).fetchone()
-            ow_txt = ""
-            if ow and ow[1] and lvl:
-                ow_txt = f"; off-warrant {ow[1]:,.0f}t = {ow[1] / lvl * 100:.0f}% of LME"
-            if _fire(
-                conn,
-                "copper_stocks_drain",
-                f"LME Cu stocks {lvl:,.0f}t ({d20_txt} streak {streak}w, data {cu_age}d old)",
-                f"Physical tightness: {curve_txt}; percentile {pct:.0f} of 3y{ow_txt}",
-                "XCUUSD squeeze-watch: avoid fresh shorts; check COT top-4 HG",
-                cooldown_key=f"copper_stocks_drain@{cu_ts[:10]}",
-            ):
-                fired.append("copper_stocks_drain")
+                def _imm(m_code):
+                    try:
+                        mon, yr = m_code.upper().split()
+                        return (2000 + int(yr), _MON[mon])
+                    except (ValueError, KeyError, AttributeError):
+                        return (9999, 12)
+
+                curve = sorted([c for c in curve if c[1] is not None], key=lambda c: _imm(c[0]))
+                if len(curve) >= 2 and curve[0][1] and curve[1][1]:
+                    curve_txt = (
+                        "backwardation curve (corroborates the squeeze)"
+                        if curve[0][1] > curve[1][1]
+                        else "contango curve"
+                    )
+                else:
+                    curve_txt = "curve N/A"
+                win = cu[-750:] if len(cu) >= 750 else cu
+                pct = 100 * sum(1 for v in win if v < lvl) / len(win)
+                d20_txt = f"Δ20d {d20:+.0%}" if d20 is not None else ""
+                # off-warrant shadow supply (daily OWSR, T+3): thick shadow supply
+                # can cap a squeeze (hidden metal can be warranted anytime); thin
+                # supply makes the same drain far more serious
+                ow = conn.execute(
+                    "SELECT period, value FROM flows_periodic WHERE kind='lme_owsr_cu'"
+                    " AND period=(SELECT MAX(period) FROM flows_periodic"
+                    "             WHERE kind='lme_owsr_cu')"
+                ).fetchone()
+                ow_txt = ""
+                if ow and ow[1] and lvl:
+                    ow_txt = f"; off-warrant {ow[1]:,.0f}t = {ow[1] / lvl * 100:.0f}% of LME"
+                if _fire(
+                    conn,
+                    "copper_stocks_drain",
+                    f"LME Cu stocks {lvl:,.0f}t ({d20_txt} streak {streak}w, data {cu_age}d old)",
+                    f"Physical tightness: {curve_txt}; percentile {pct:.0f} of 3y{ow_txt}",
+                    "XCUUSD squeeze-watch: avoid fresh shorts; check COT top-4 HG",
+                    cooldown_key=f"copper_stocks_drain@{cu_ts[:10]}",
+                ):
+                    fired.append("copper_stocks_drain")
 
     # ECBWatch (D-006 ESTRWatch) — policy-probability triggers. Quiet when
     # no diy_ecb rows exist (funding-NULL convention: a missing source is
     # never an alert).
-    ecb_dates = [
-        r[0]
-        for r in conn.execute(
-            "SELECT DISTINCT date FROM fedwatch_snapshots WHERE source='diy_ecb'"
-            " ORDER BY date DESC LIMIT 2"
-        ).fetchall()
-    ]
-    if ecb_dates:
+    with _trigger("ecb_watch"):
+        ecb_dates = [
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT date FROM fedwatch_snapshots WHERE source='diy_ecb'"
+                " ORDER BY date DESC LIMIT 2"
+            ).fetchall()
+        ]
+        if ecb_dates:
 
-        def _nearest(d: str):
-            return conn.execute(
-                "SELECT meeting_date, prob_ease, prob_hold, prob_hike, implied_rate"
-                " FROM fedwatch_snapshots WHERE source='diy_ecb' AND date=?"
-                " AND meeting_date >= date('now') ORDER BY meeting_date LIMIT 1",
-                (d,),
-            ).fetchone()
+            def _nearest(d: str):
+                return conn.execute(
+                    "SELECT meeting_date, prob_ease, prob_hold, prob_hike, implied_rate"
+                    " FROM fedwatch_snapshots WHERE source='diy_ecb' AND date=?"
+                    " AND meeting_date >= date('now') ORDER BY meeting_date LIMIT 1",
+                    (d,),
+                ).fetchone()
 
-        cur = _nearest(ecb_dates[0])
-        if cur:
+            cur = _nearest(ecb_dates[0])
+            if cur:
 
-            def _dominant(r):
-                vals = {"cut": r[1], "hold": r[2], "hike": r[3]}
-                return max(vals, key=vals.get)
+                def _dominant(r):
+                    vals = {"cut": r[1], "hold": r[2], "hike": r[3]}
+                    return max(vals, key=vals.get)
 
-            act, prob = _dominant(cur), max(cur[1], cur[2], cur[3])
-            # (a) flip: dominant action changed vs the previous snapshot
-            # date. Cooldown key = SNAPSHOT date (the SOMA pattern), NOT
-            # the meeting: probabilities rewrite daily, so a per-meeting
-            # permanent key would swallow a genuine re-flip (hike→cut→hike)
-            # for the same meeting — the most tradeable signal of all
-            if len(ecb_dates) == 2:
-                prev = _nearest(ecb_dates[1])
-                if prev and _dominant(prev) != act:
-                    if _fire(
-                        conn,
-                        "ecb_watch_flip",
-                        f"ECB {cur[0]}: market pricing flipped to {act.upper()}",
-                        f"Nearest GC meeting {cur[0]}: {act} {prob:.0%}"
-                        f" (prev snapshot {ecb_dates[1]}: {_dominant(prev)})",
-                        "EUR crosses / DXY: policy-path repricing in motion",
-                        cooldown_key=f"ecb_flip@{ecb_dates[0]}",
-                    ):
-                        fired.append("ecb_watch_flip")
-            # (b) high conviction inside the decision window — one alert
-            # per snapshot date (≤1/day across the window)
-            if prob >= ECB_HIGH_CONVICT_PROB and act in ("hike", "cut"):
-                days_left = (datetime.fromisoformat(cur[0]).date() - datetime.now(UTC).date()).days
-                if 0 <= days_left <= ECB_HIGH_CONVICT_DAYS:
-                    if _fire(
-                        conn,
-                        "ecb_high_conviction",
-                        f"ECB {cur[0]} (in {days_left}d): {act} priced {prob:.0%}",
-                        f"ESR-implied DFR after meeting: {cur[4]:.2f}%"
-                        if cur[4] is not None
-                        else "implied rate n/a",
-                        "EUR-cross book: position for the decision window",
-                        cooldown_key=f"ecb_conviction@{ecb_dates[0]}",
-                    ):
-                        fired.append("ecb_high_conviction")
+                act, prob = _dominant(cur), max(cur[1], cur[2], cur[3])
+                # (a) flip: dominant action changed vs the previous snapshot
+                # date. Cooldown key = SNAPSHOT date (the SOMA pattern), NOT
+                # the meeting: probabilities rewrite daily, so a per-meeting
+                # permanent key would swallow a genuine re-flip (hike→cut→hike)
+                # for the same meeting — the most tradeable signal of all
+                if len(ecb_dates) == 2:
+                    prev = _nearest(ecb_dates[1])
+                    if prev and _dominant(prev) != act:
+                        if _fire(
+                            conn,
+                            "ecb_watch_flip",
+                            f"ECB {cur[0]}: market pricing flipped to {act.upper()}",
+                            f"Nearest GC meeting {cur[0]}: {act} {prob:.0%}"
+                            f" (prev snapshot {ecb_dates[1]}: {_dominant(prev)})",
+                            "EUR crosses / DXY: policy-path repricing in motion",
+                            cooldown_key=f"ecb_flip@{ecb_dates[0]}",
+                        ):
+                            fired.append("ecb_watch_flip")
+                # (b) high conviction inside the decision window — one alert
+                # per snapshot date (≤1/day across the window)
+                if prob >= ECB_HIGH_CONVICT_PROB and act in ("hike", "cut"):
+                    days_left = (
+                        datetime.fromisoformat(cur[0]).date() - datetime.now(UTC).date()
+                    ).days
+                    if 0 <= days_left <= ECB_HIGH_CONVICT_DAYS:
+                        if _fire(
+                            conn,
+                            "ecb_high_conviction",
+                            f"ECB {cur[0]} (in {days_left}d): {act} priced {prob:.0%}",
+                            f"ESR-implied DFR after meeting: {cur[4]:.2f}%"
+                            if cur[4] is not None
+                            else "implied rate n/a",
+                            "EUR-cross book: position for the decision window",
+                            cooldown_key=f"ecb_conviction@{ecb_dates[0]}",
+                        ):
+                            fired.append("ecb_high_conviction")
 
     # Alert-spam tripwire (round-2): the Telegram channel is the only active
     # delivery path — a dedup regression here spam-burned the user for 17

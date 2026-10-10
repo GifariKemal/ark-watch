@@ -66,3 +66,4 @@ wait %1 %2 %3 %4 %5 %7  # not %6: uvicorn never exits on its own
 kill $API 2>/dev/null
 echo "integrity: $(.venv/bin/python -c "import sqlite3; print(sqlite3.connect('$DB').execute('PRAGMA integrity_check').fetchone()[0])")"
 for f in /tmp/*.fail.*; do [ -f "$f" ] && { echo "--- $f"; grep -iE "error|locked|Traceback" "$f" | head -5; }; done
+exit 0  # the loop above ends non-zero when no job failed

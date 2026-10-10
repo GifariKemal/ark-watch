@@ -60,7 +60,8 @@ One image, two roles, run as an Easypanel **Compose** service from `docker-compo
 ```mermaid
 flowchart LR
   T[Traefik / Easypanel] -->|domain route| A[api: uvicorn :8000]
-  D[daemon: scheduler + job subprocesses] -->|single writer| V[(arkwatch-data volume /data)]
+  D[daemon: scheduler + job subprocesses] -->|writer| V[(arkwatch-data volume /data)]
+  O[okxws: OKX WebSocket collector] -->|OKX_WS rows| V
   A -->|read-only, mode=ro| V
   L[litestream, optional profile] -->|WAL stream| R[(Cloudflare R2)]
   V --> L
@@ -69,6 +70,7 @@ flowchart LR
 | Service | Command | Limits | Health |
 |---|---|---|---|
 | `daemon` | `python -m arkwatch daemon` | 1 GB, 60 s stop grace | `python -m arkwatch healthcheck` |
+| `okxws` | `python -m arkwatch liquidations` | 128 MB, 20 s stop grace | unhealthy when the newest `OKX_WS` trade batch is older than 5 min |
 | `api` | `uvicorn arkwatch.server.app:app --workers 1` | 512 MB | `GET /v1/health` via Python urllib |
 | `litestream` | `litestream replicate` | 256 MB | profile `litestream`, opt-in |
 

@@ -45,6 +45,28 @@ services:
       start_period: 120s
       retries: 3
 
+  # OKX public WebSocket (liquidations, trades, books5): the only OKX_WS writer.
+  # Direct egress: OKX answers the VPS datacenter IP (no warp, no credentials).
+  # Unhealthy once no OKX_WS trade batch landed for 5 minutes; the collector
+  # itself reconnects with capped backoff and REST-backfills each reconnect gap.
+  okxws:
+    <<: *app
+    command: ["python", "-m", "arkwatch", "liquidations"]
+    mem_limit: 128m  # 11 min soak incl. a forced reconnect peaked at 57 MiB
+    stop_grace_period: 20s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sqlite3,datetime as d;t=sqlite3.connect('file:/data/arkwatch.db?mode=ro',uri=True,timeout=5).execute(\"SELECT MAX(batch_ts_utc) FROM crypto_trade_raw_batches WHERE source='OKX_WS'\").fetchone()[0];raise SystemExit(not t or d.datetime.now(d.UTC)-d.datetime.fromisoformat(t)>d.timedelta(minutes=5))",
+        ]
+      interval: 60s
+      timeout: 15s
+      start_period: 120s
+      retries: 3
+
   api:
     <<: *app
     command:

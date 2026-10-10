@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import random
 import signal
 import time
 from datetime import UTC, datetime
@@ -13,7 +14,13 @@ import websocket
 
 from .. import db as _db
 from .fetch_log import log_collection
-from .okx_market import _instrument_snapshot, instrument_specs, normalize_contract_size
+from .okx_market import (
+    REST_GAP_WARNING,
+    _instrument_snapshot,
+    instrument_specs,
+    normalize_contract_size,
+    rest_trades,
+)
 from .okx_tradeflow import TradeFlowBuffer
 
 URL = "wss://ws.okx.com:8443/ws/v5/public"
@@ -193,12 +200,42 @@ def collect(db_path: str, seconds: int | None = None) -> int:
             for instrument in INSTRUMENTS
         )
         ws.send(json.dumps({"op": "subscribe", "args": args}))
+        # close the disconnect gap: REST trades go in before any queued WS
+        # message, the buffer highwater then drops the overlap
+        for instrument in INSTRUMENTS:
+            try:
+                count, gap = rest_trades(instrument, trade_buffer)
+                log_collection(
+                    conn,
+                    "okx_liquidations",
+                    f"OKX:{instrument}:trades-rest-backfill",
+                    None,
+                    count,
+                    err=REST_GAP_WARNING if gap else None,
+                    status="DEGRADED" if gap else "OK",
+                )
+            except Exception as ex:
+                log_collection(
+                    conn,
+                    "okx_liquidations",
+                    f"OKX:{instrument}:trades-rest-backfill",
+                    None,
+                    0,
+                    err=str(ex),
+                )
+        pinged = False
         while deadline is None or time.monotonic() < deadline:
             try:
                 raw = ws.recv()
             except websocket.WebSocketTimeoutException:
+                # books5 pushes several times a second: a silent socket after a
+                # ping is a dead TCP path the OS has not noticed yet
+                if pinged:
+                    raise ConnectionError("OKX WebSocket silent after ping") from None
                 ws.send("ping")
+                pinged = True
                 continue
+            pinged = False
             if raw == "pong":
                 continue
             message = json.loads(raw)
@@ -234,15 +271,19 @@ def run_forever(db_path: str) -> None:
     signal.signal(signal.SIGTERM, terminate)
     delay = 2
     while True:
+        started = time.monotonic()
         try:
             collect(db_path)
-            delay = 2
         except Exception as ex:
+            # a session that streamed for a while was healthy: restart the backoff
+            if time.monotonic() - started > 60:
+                delay = 2
+            wait = delay * random.uniform(0.5, 1.0)
             print(
-                f"OKX liquidation reconnect in {delay}s: {type(ex).__name__}: {str(ex)[:160]}",
+                f"OKX liquidation reconnect in {wait:.1f}s: {type(ex).__name__}: {str(ex)[:160]}",
                 flush=True,
             )
-            time.sleep(delay)
+            time.sleep(wait)
             delay = min(delay * 2, 60)
 
 
@@ -260,5 +301,8 @@ def main(argv=None):
             "Petunjuk: Gunakan 'arkwatch liquidations --seconds 10' untuk sampling, atau tekan Ctrl+C untuk berhenti.",
             flush=True,
         )
-        run_forever(args.db)
+        try:
+            run_forever(args.db)
+        except KeyboardInterrupt:  # SIGTERM/Ctrl+C: collect() already flushed
+            print("OKX liquidation collector stopped", flush=True)
     return 0

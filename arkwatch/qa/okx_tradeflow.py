@@ -103,7 +103,7 @@ class TradeFlowBuffer:
                     ),
                 )
             self.conn.execute("COMMIT")
-        except Exception:
+        except BaseException:  # SIGTERM arrives as KeyboardInterrupt
             self.conn.execute("ROLLBACK")
             raise
 
@@ -231,7 +231,7 @@ class TradeFlowBuffer:
             for (instrument, minute), rows in flow_groups.items():
                 inserted += self._flow_row(instrument, minute, rows)
             self.conn.execute("COMMIT")
-        except Exception:
+        except BaseException:  # keep `pending` for the shutdown flush
             self.conn.execute("ROLLBACK")
             raise
         self.pending.clear()

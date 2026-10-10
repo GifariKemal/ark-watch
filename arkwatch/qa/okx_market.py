@@ -192,6 +192,21 @@ def _book_snapshot(conn, instrument: str) -> int:
     return cursor.rowcount
 
 
+REST_GAP_WARNING = (
+    "REST trades do not reach back to the stored highwater; gap coverage is uncertain"
+)
+
+
+def rest_trades(instrument: str, buffer: TradeFlowBuffer) -> tuple[int, bool]:
+    """Feed the latest REST trades (500 cap) to `buffer`; True when the oldest
+    one is past the stored highwater + 1, i.e. trades in between may be missing."""
+    highwater = buffer.highwater.get(instrument, -1)
+    rows = _get("market/trades", {"instId": instrument, "limit": "500"})
+    ids = [int(row["tradeId"]) for row in rows if str(row.get("tradeId", "")).isdigit()]
+    gap = highwater >= 0 and bool(ids) and min(ids) > highwater + 1
+    return buffer.add(rows, source="OKX_REST", instrument=instrument), gap
+
+
 def _trade_recovery(conn, instrument: str, buffer: TradeFlowBuffer) -> tuple[int, bool] | None:
     latest = conn.execute(
         "SELECT MAX(batch_ts_utc) FROM crypto_trade_raw_batches WHERE instrument=? AND source='OKX_WS'",
@@ -199,8 +214,7 @@ def _trade_recovery(conn, instrument: str, buffer: TradeFlowBuffer) -> tuple[int
     ).fetchone()[0]
     if latest and datetime.now(UTC) - datetime.fromisoformat(latest) <= timedelta(seconds=60):
         return None
-    rows = _get("market/trades", {"instId": instrument, "limit": "500"})
-    return buffer.add(rows, source="OKX_REST", instrument=instrument), len(rows) >= 500
+    return rest_trades(instrument, buffer)
 
 
 def collect(db_path: str) -> dict[str, int]:
@@ -282,11 +296,7 @@ def collect(db_path: str) -> dict[str, int]:
                         count, capped = count
                         degraded = bool(capped)
                     out[f"{instrument}:{name}"] = count
-                    warning = (
-                        "REST returned its 500-trade cap; gap coverage is uncertain"
-                        if degraded
-                        else None
-                    )
+                    warning = REST_GAP_WARNING if degraded else None
                     log_collection(
                         conn,
                         "okx_market",

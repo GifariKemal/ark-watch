@@ -216,6 +216,8 @@ Actor = Annotated[
     Header(alias="x-arkwatch-actor", max_length=64, pattern=r"^[\w.@:-]+$"),
 ]
 Cursor = Annotated[str | None, Query(max_length=512)]
+# SQLite INTEGER is int64: a bigger id overflows at bind time (500), so 422 it
+RowId = Annotated[int, Path(le=2**63 - 1)]
 FromTs = Annotated[str | None, Query(alias="from", max_length=32)]
 ToTs = Annotated[str | None, Query(alias="to", max_length=32)]
 
@@ -547,7 +549,7 @@ def jobs(c: Conn, cursor: Cursor = None, limit: Annotated[int, Query(ge=1, le=10
 
 
 @v1.get("/jobs/{job_id}", response_model=JobOut, tags=["ops"])
-def job_get(c: Conn, job_id: int):
+def job_get(c: Conn, job_id: RowId):
     out = api.job_detail(c, job_id)
     if out is None:
         raise api.ApiNotFound(f"job {job_id} not found")
@@ -610,7 +612,7 @@ def playbooks_cancel(
 
 
 @v1.post("/outbox/{outbox_id}/retry", response_model=RetryOut, tags=["ops"])
-def outbox_retry(c: WConn, outbox_id: int, actor: Actor = "api"):
+def outbox_retry(c: WConn, outbox_id: RowId, actor: Actor = "api"):
     return api.retry_outbox(c, outbox_id, actor=actor)
 
 

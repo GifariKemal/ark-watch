@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import pytest
 
 from arkwatch.qa import stats
@@ -48,3 +51,12 @@ def test_cluster_bootstrap_ci():
     ci = stats.cluster_bootstrap_ci(vals, cl, seed=7)
     assert ci == stats.cluster_bootstrap_ci(vals, cl, seed=7)  # deterministic
     assert ci[0] < sum(vals) / len(vals) < ci[1]
+
+
+def test_api_server_import_skips_scipy_statsmodels():
+    # the API reaches qa.stats via the scorecard; the heavy libs load lazily
+    code = (
+        "import sys, arkwatch.server.app; "
+        "assert not {'scipy', 'statsmodels'} & set(sys.modules), 'heavy import at startup'"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

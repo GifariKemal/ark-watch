@@ -123,13 +123,20 @@ def get_energy_intelligence(
     conn: sqlite3.Connection | None = None, db_path: str | Path | None = None
 ) -> dict:
     """Retrieve energy curve intelligence: 3:2:1 crack spread, gasoline crack, heating oil crack, WTI backwardation."""
-    from .qa.energy import compute, compute_crack_321_history
+    from .qa.energy import compute_crack_321_history
 
     with _get_connection(conn, db_path) as c:
-        try:
-            current_signals = compute(c)
-        except Exception as ex:
-            current_signals = {"error": str(ex)}
+        # what the daily `energy` job stored (energy_* rows, run_id 'energy'),
+        # latest per signal: a GET never fetches upstream nor writes. The
+        # range ('`' follows '_') seeks the PK where LIKE 'energy\_%' scans.
+        rows = c.execute(
+            "SELECT signal_id, MAX(ts), value FROM computed_signals"
+            " WHERE signal_id >= 'energy_' AND signal_id < 'energy`' AND run_id = 'energy'"
+            " GROUP BY signal_id"
+        ).fetchall()
+        current_signals: dict = {sid: {"ts": ts, "value": v} for sid, ts, v in rows} or {
+            "error": "no energy signals stored yet (the daily energy job has not run)"
+        }
 
         history_321 = compute_crack_321_history(c, limit=30)
 
@@ -665,8 +672,10 @@ def list_signals(
 ) -> dict:
     where, params = "", []
     if prefix:
-        where = " WHERE signal_id LIKE ? ESCAPE '\\'"
-        params.append(_like_escape(prefix) + "%")
+        # PK range seek (LIKE cannot use the BINARY-collated PK) and no
+        # wildcard escaping; U+10FFFF sorts after any char a prefix extends with
+        where = " WHERE signal_id >= ? AND signal_id < ?"
+        params += [prefix, prefix + "\U0010ffff"]
     # bare columns next to MAX() come from the max row (SQLite guarantee)
     inner = (
         "SELECT signal_id, MAX(ts) AS last_ts, value, state, computed_at"
@@ -684,7 +693,9 @@ def list_odds(c: sqlite3.Connection, *, max_age_days: int = 3) -> dict:
     floor = (datetime.now(UTC).date() - timedelta(days=max_age_days)).isoformat()
     rows = c.execute(
         "SELECT signal_id, MAX(ts), value, state, inputs_json, computed_at FROM computed_signals"
-        " WHERE signal_id LIKE 'polymarket:%' GROUP BY signal_id HAVING MAX(ts) >= ?",
+        # range, not LIKE 'polymarket:%': the PK is searched (';' follows ':')
+        " WHERE signal_id >= 'polymarket:' AND signal_id < 'polymarket;'"
+        " GROUP BY signal_id HAVING MAX(ts) >= ?",
         (floor,),
     ).fetchall()
     items = []
@@ -917,10 +928,18 @@ def data_freshness(c: sqlite3.Connection) -> list[dict]:
         " WHERE o.series_id = r.series_id) AS last_ts FROM series_registry r"
         " WHERE r.active = 1 ORDER BY r.series_id",
     )
-    # latest fetch_log row per target (SQLite: bare column follows MAX(id)).
-    # A harvest SKIPPED row on the provider prefix ('EODHD:') newer than the
-    # series' own last fetch = unconfigured provider, not a stale series.
-    sql = "SELECT target, MAX(id), status, error FROM fetch_log GROUP BY target"
+    # latest fetch_log row per target that can matter: each active series and
+    # its provider prefix ('EODHD:'), one idx_fetch_log_target_id seek each
+    # instead of a GROUP BY over the whole log. A harvest SKIPPED row on the
+    # prefix newer than the series' own last fetch = unconfigured provider,
+    # not a stale series.
+    sql = (
+        "WITH t(target) AS (SELECT series_id FROM series_registry WHERE active = 1"
+        " UNION SELECT substr(series_id || ':', 1, instr(series_id || ':', ':'))"
+        " FROM series_registry WHERE active = 1)"
+        " SELECT f.target, f.id, f.status, f.error FROM t JOIN fetch_log f"
+        " ON f.id = (SELECT MAX(id) FROM fetch_log WHERE target = t.target)"
+    )
     last = {t: (i, st, e or "") for t, i, st, e in c.execute(sql)}
     out = []
     for r in rows:

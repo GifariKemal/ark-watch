@@ -48,9 +48,24 @@ def test_get_options_intelligence():
 
 def test_get_energy_intelligence():
     conn = _setup_test_db()
+    intel = api.get_energy_intelligence(conn)  # the energy job has not run yet
+    assert set(intel["signals"]) == {"error"}
+    assert intel["crack_321_history"] == []
+    conn.executemany(
+        "INSERT INTO computed_signals(signal_id, ts, run_id, computed_at, value)"
+        " VALUES (?, ?, ?, '2026-10-09T06:25:00+00:00', ?)",
+        [
+            ("energy_crack_321", "2026-10-08", "energy", 30.0),
+            ("energy_crack_321", "2026-10-09", "energy", 31.5),
+            ("energy_wti_bwd", "2026-10-09", "energy", 0.4),
+            ("energy_x", "2026-10-09", "other", 1.0),  # another job's row stays out
+        ],
+    )
     intel = api.get_energy_intelligence(conn)
-    assert "signals" in intel
-    assert "crack_321_history" in intel
+    assert intel["signals"] == {
+        "energy_crack_321": {"ts": "2026-10-09", "value": 31.5},
+        "energy_wti_bwd": {"ts": "2026-10-09", "value": 0.4},
+    }
 
 
 def test_get_market_news_and_calendar():

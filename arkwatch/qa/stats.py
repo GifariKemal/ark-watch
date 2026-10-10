@@ -1,7 +1,9 @@
 """stats.py — small, pure inference helpers shared by the backtest harnesses.
 
 Each function is deliberately thin over scipy/statsmodels/numpy so the
-statistics are the library's, not hand-rolled.
+statistics are the library's, not hand-rolled. scipy/statsmodels are imported
+inside the functions: the API process imports this module (via the scorecard)
+and must not pay their ~85 MB RSS at startup for endpoints that never call them.
 """
 
 from __future__ import annotations
@@ -9,19 +11,20 @@ from __future__ import annotations
 from collections.abc import Hashable, Sequence
 
 import numpy as np
-from scipy import stats as scipy_stats
-from statsmodels.stats.multitest import multipletests
-from statsmodels.stats.proportion import proportion_confint
 
 
 def wilson_ci(wins: int, n: int, alpha: float = 0.05) -> tuple[float, float]:
     """Wilson score interval for a binomial proportion."""
+    from statsmodels.stats.proportion import proportion_confint
+
     lo, hi = proportion_confint(wins, n, alpha=alpha, method="wilson")
     return float(lo), float(hi)
 
 
 def binom_pvalue_vs_base_rate(wins: int, n: int, base_rate: float) -> float:
     """One-sided P(X >= wins | n, base_rate) — is the hit-rate above the base rate?"""
+    from scipy import stats as scipy_stats
+
     return float(scipy_stats.binomtest(wins, n, base_rate, alternative="greater").pvalue)
 
 
@@ -30,6 +33,8 @@ def fdr_by(
 ) -> tuple[list[bool], list[float]]:
     """(rejected, q). Benjamini-Yekutieli by default (valid under any dependence
     between tests, which overlapping hypothesis cells have); "fdr_bh" optional."""
+    from statsmodels.stats.multitest import multipletests
+
     rejected, q, _, _ = multipletests(list(pvals), alpha=alpha, method=method)
     return [bool(r) for r in rejected], [float(x) for x in q]
 

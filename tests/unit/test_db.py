@@ -54,6 +54,25 @@ def test_pragma_pack(conn):
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 10000
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    assert conn.execute("PRAGMA temp_store").fetchone()[0] == 2  # MEMORY
+    assert conn.execute("PRAGMA cache_size").fetchone()[0] == -16384
+
+
+def test_read_only_pragmas_and_v34_indexes(tmp_path):
+    path = tmp_path / "v34.db"
+    db.get_conn(path, allow_init=True).close()
+    ro = db.get_conn(path, read_only=True)
+    assert ro.execute("PRAGMA temp_store").fetchone()[0] == 2
+    assert ro.execute("PRAGMA cache_size").fetchone()[0] == -16384
+    idx = {r[0] for r in ro.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    ro.close()
+    assert {"idx_fetch_log_target_id", "idx_fetch_log_ts", "idx_intraday_sym_int_ts"} <= idx
+    assert not {"idx_intraday_symbol_ts", "idx_raw_series_ts"} & idx
+    w = db.get_conn(path)
+    w.executescript(db.MIGRATIONS[34])  # idempotent replay
+    plan = w.execute("EXPLAIN QUERY PLAN SELECT MAX(id) FROM fetch_log WHERE target = 'X'")
+    assert "idx_fetch_log_target_id" in str(plan.fetchall())
+    w.close()
 
 
 def test_gdelt_gzip_migration_preserves_existing_raw_json(tmp_path):

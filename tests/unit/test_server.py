@@ -501,7 +501,9 @@ def test_v33_migration_from_v32_keeps_playbooks(tmp_path, monkeypatch):
     c.close()
     monkeypatch.undo()
     c = db.get_conn(path, allow_init=True)
-    assert c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 33
+    assert (
+        c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == db.SCHEMA_VERSION
+    )
     assert c.execute("SELECT state, note FROM playbook_scenarios").fetchall() == [
         ("PENDING_TRIGGER", None)
     ]
@@ -557,6 +559,13 @@ def test_outbox_retry(client, seeded):
     assert client.post("/v1/outbox/99/retry").status_code == 404
     assert _audit_count(seeded) == 1
     assert [o["id"] for o in client.get("/v1/outbox?status=pending").json()["items"]] == [1]
+
+
+def test_oversized_row_ids_are_422_not_500(client):
+    big = 2**63  # one past SQLite INTEGER max: would overflow at bind time
+    assert client.get(f"/v1/jobs/{big}").status_code == 422
+    assert client.post(f"/v1/outbox/{big}/retry").status_code == 422
+    assert client.get(f"/v1/jobs/{big - 1}").status_code == 404
 
 
 def test_series_patch_locks_against_yaml_sync(client, seeded):

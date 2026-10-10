@@ -17,7 +17,7 @@ import sqlite3
 from datetime import UTC
 from pathlib import Path
 
-SCHEMA_VERSION = 33
+SCHEMA_VERSION = 34
 
 SCHEMA_V1 = """
 CREATE TABLE series_registry (
@@ -690,6 +690,19 @@ CREATE INDEX IF NOT EXISTS idx_playbook_session ON playbook_scenarios(session_id
 CREATE INDEX IF NOT EXISTS idx_playbook_state_created
   ON playbook_scenarios(state, created_at_utc);
 """,
+    34: """-- v34: read-path indexes (EXPLAIN-checked on a prod copy).
+-- fetch_log had none: the freshness/brief per-target lookups and the 180-day
+-- prune all full-scanned it. intraday_bars readers always pin interval, which
+-- the PK (symbol, bar_ts_utc, ...) cannot seek on; the old (symbol, ts) index
+-- was a strict prefix of that PK. raw_observations is WITHOUT ROWID with PK
+-- (series_id, ts, ...), so idx_raw_series_ts only duplicated it.
+CREATE INDEX IF NOT EXISTS idx_fetch_log_target_id ON fetch_log(target, id DESC);
+CREATE INDEX IF NOT EXISTS idx_fetch_log_ts ON fetch_log(ts);
+CREATE INDEX IF NOT EXISTS idx_intraday_sym_int_ts
+  ON intraday_bars(symbol, interval, bar_ts_utc DESC, source);
+DROP INDEX IF EXISTS idx_intraday_symbol_ts;
+DROP INDEX IF EXISTS idx_raw_series_ts;
+""",
 }
 
 
@@ -704,6 +717,13 @@ def data_dir() -> Path:
 def default_db_path() -> Path:
     """env ARKWATCH_DB, else <data_dir>/arkwatch.db — resolved at call time."""
     return Path(os.environ.get("ARKWATCH_DB") or data_dir() / "arkwatch.db")
+
+
+def _cache_pragmas(conn: sqlite3.Connection) -> None:
+    # sorts/temp B-trees (GROUP BY, ORDER BY) stay in RAM; 16 MB page cache
+    # (default 2 MB) holds the hot indexes. No mmap: WAL + several processes.
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA cache_size=-16384")
 
 
 def _open_read_only(path: Path) -> sqlite3.Connection:
@@ -721,6 +741,7 @@ def _open_read_only(path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA query_only=ON")
+    _cache_pragmas(conn)
     current = _schema_version(conn)
     if current != SCHEMA_VERSION:
         conn.close()
@@ -753,6 +774,7 @@ def get_conn(
     # instead of the 1000-page default — fewer stalls for batch writers
     conn.execute("PRAGMA journal_size_limit=67108864")
     conn.execute("PRAGMA wal_autocheckpoint=4000")
+    _cache_pragmas(conn)
     # ROUND-7: a DB restored from a VACUUM INTO backup permanently carries
     # journal_mode=delete (the backup file has no WAL) — every connection
     # re-asserts WAL so the restore path cannot silently lose the invariant

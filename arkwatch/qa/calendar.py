@@ -130,7 +130,9 @@ def pull(from_d: str | None = None, to_d: str | None = None) -> tuple[list[dict]
         try:
             fetched[src] = fn(from_d, to_d)
         except Exception as ex:
-            print(f"  ⚠ {src} failed: {str(ex)[:110]}")
+            from .harvest import _redact  # HTTPError text carries the URL incl. apikey=
+
+            print(f"  ⚠ {src} failed: {_redact(str(ex))[:110]}")
             fetched[src] = []
     counts = {k: len(v) for k, v in fetched.items()}
 

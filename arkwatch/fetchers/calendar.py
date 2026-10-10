@@ -15,6 +15,8 @@ from datetime import UTC, datetime
 
 import requests
 
+from ..config import PLAN_LIMIT_STATUSES, PlanLimited
+
 UA = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36"
 }
@@ -65,6 +67,8 @@ def fetch_fmp(from_d: str, to_d: str) -> list[dict]:
         params={"country": "US", "from": from_d, "to": to_d, "apikey": key},
         timeout=(10, 30),
     )
+    if r.status_code in PLAN_LIMIT_STATUSES:
+        raise PlanLimited(f"plan-limited: FMP economic-calendar (HTTP {r.status_code})")
     r.raise_for_status()
     out = []
     for x in r.json():

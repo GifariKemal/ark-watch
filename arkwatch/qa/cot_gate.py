@@ -25,6 +25,7 @@ import os
 
 import requests
 
+from ..config import PLAN_LIMIT_STATUSES, PlanLimited
 from .fetch_log import log_collection
 
 # our contract_code -> FMP v4 symbol (fallback when cftc code differs in
@@ -60,6 +61,8 @@ def fetch_fmp_cot_dump() -> list[dict]:
         params={"apikey": key},
         timeout=(30, 180),
     )
+    if r.status_code in PLAN_LIMIT_STATUSES:
+        raise PlanLimited(f"plan-limited: FMP COT (HTTP {r.status_code})")
     if r.status_code != 200:
         raise RuntimeError(f"FMP COT: HTTP {r.status_code}")
     j = r.json()

@@ -1148,7 +1148,9 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as ex:
             from .fetch_log import log_collection as _lc
 
-            _lc(conn, "f2", "FMP:COT-GATE", None, 0, err=str(ex)[:140])
+            # a spent FMP quota is SKIPPED: the gate is a vendor cross-check, not our data
+            status = "SKIPPED" if isinstance(ex, PlanLimited) else None
+            _lc(conn, "f2", "FMP:COT-GATE", None, 0, err=str(ex)[:140], status=status)
             print(f"  ⚠ cot-gate: {str(ex)[:90]}")
 
     conn.close()

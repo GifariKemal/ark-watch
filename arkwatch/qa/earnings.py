@@ -20,6 +20,7 @@ from pathlib import Path
 
 import yaml
 
+from ..config import PlanLimited
 from .fetch_log import log_collection
 
 _CFG = Path(__file__).resolve().parent.parent.parent / "config" / "index_heavyweights.yaml"
@@ -53,6 +54,9 @@ def harvest_earnings(conn, days: int = 42) -> int:
         rows = fetch_earnings_calendar(
             today.isoformat(), (today + timedelta(days=days)).isoformat()
         )
+    except PlanLimited as ex:  # free-plan quota/plan limit: SKIPPED, not a failure
+        log_collection(conn, "f2", "FMP:EARNINGS", None, 0, err=str(ex)[:140], status="SKIPPED")
+        return 0
     except Exception as ex:
         log_collection(conn, "f2", "FMP:EARNINGS", None, 0, err=str(ex)[:140])
         raise

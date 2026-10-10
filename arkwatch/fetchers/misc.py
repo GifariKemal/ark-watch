@@ -77,6 +77,8 @@ def fetch_earnings_calendar(from_d: str, to_d: str, page: int = 0) -> list[dict]
             params={"from": from_d, "to": to_d, "page": page, "apikey": key},
             timeout=(10, 60),
         )
+        if r.status_code in PLAN_LIMIT_STATUSES:
+            raise PlanLimited(f"plan-limited: FMP earnings-calendar (HTTP {r.status_code})")
         if r.status_code != 200:
             raise RuntimeError(f"FMP earnings-calendar: HTTP {r.status_code}")
         rows = r.json()

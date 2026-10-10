@@ -318,7 +318,12 @@ def test_regime_cache_invalidated_by_data_version(client, seeded, monkeypatch):
     calls = []
     real = api.get_regime_snapshot
     monkeypatch.setattr(api, "get_regime_snapshot", lambda c: calls.append(1) or real(c))
-    assert client.get("/v1/regime").json()["label"] in ("RISK-ON", "RISK-OFF", "NEUTRAL", "INSUFFICIENT DATA")
+    assert client.get("/v1/regime").json()["label"] in (
+        "RISK-ON",
+        "RISK-OFF",
+        "NEUTRAL",
+        "INSUFFICIENT DATA",
+    )
     client.get("/v1/regime")
     assert len(calls) == 1  # served from cache
     w = db.get_conn(seeded)

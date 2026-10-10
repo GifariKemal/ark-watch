@@ -35,6 +35,7 @@ PENGGUNAAN:
   breadth                        S&P 500 Constituent Breadth (504 saham)
   crypto                         Sinyal derivatif & likuidasi kripto (OKX/Bybit)
   polymarket                     Probabilitas crowd Polymarket untuk topik makro/geo
+  calibration [--history N]      Brier score probabilitas Polymarket & FedWatch (1d/7d/30d)
 
 [3. INSPEKSI SISTEM & RISET DATA]
   watch                          Pemeriksaan alert anomali makro & lelang
@@ -93,6 +94,10 @@ def main() -> int:
         from .fetchers import polymarket
 
         return polymarket.main(sys.argv[2:])
+    if cmd == "calibration":
+        from .signals import calibration
+
+        return calibration.main(sys.argv[2:])
     if cmd == "liquidations":
         from .qa.okx_liquidations import main as liquidations_main
 

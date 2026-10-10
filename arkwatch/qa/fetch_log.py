@@ -63,7 +63,7 @@ def log_collection(
     HEALTHY no-news day (fedsurvey 'all sources unchanged', ~95% of days) pass
     status='OK' explicitly — the EMPTY badge is reserved for fetches that
     returned zero OBSERVATIONS (the suspicious case)."""
-    from .harvest import _redact
+    from .redact import _redact
 
     if err:
         err = _redact(err)

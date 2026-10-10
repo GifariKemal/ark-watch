@@ -60,7 +60,7 @@ def gamma(monkeypatch):
             pass
 
     srv = http.server.HTTPServer(("127.0.0.1", 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     monkeypatch.setattr(polymarket, "URL", f"http://127.0.0.1:{srv.server_port}/markets")
     yield state
     srv.shutdown()
@@ -211,7 +211,7 @@ def test_pagination_walks_pages_until_volume_drops_below_minimum(monkeypatch):
             pass
 
     srv = http.server.HTTPServer(("127.0.0.1", 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     monkeypatch.setattr(polymarket, "URL", f"http://127.0.0.1:{srv.server_port}/markets")
     monkeypatch.setattr(polymarket.time, "sleep", lambda _s: None)
     try:

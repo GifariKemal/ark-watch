@@ -17,6 +17,7 @@ from .. import db
 from ..config import PROVIDER_ENV, PlanLimited, load_registry, missing_env
 from ..fetchers.caldist import NoDataYet
 from ..qa.verify_sources import ROUTES
+from .redact import _redact  # noqa: F401  (re-export for older importers)
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
 
@@ -25,29 +26,6 @@ DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.
 # the first print forever → realtime holds the source's LATEST value (FRED
 # semantics), and the previous value is preserved as a vintage row whenever it
 # changes. Implemented in the harvest loop below.
-
-
-_SECRET_RE = None
-
-
-def _redact(text: str) -> str:
-    """ROUND-4 (security): fetch exceptions echo the failing URL — keys ride
-    query params (api_key=…&api_token=…). One 4xx away from a key persisting
-    into fetch_log; scrub centrally at both writers."""
-    global _SECRET_RE
-    if _SECRET_RE is None:
-        import re as _re
-
-        _SECRET_RE = _re.compile(
-            r"((?:api_key|api_token|apikey|token|key)=)[^&\s]+"
-            r"|(/bot)\d+:[\w-]+"  # Telegram bot token in an echoed URL path
-            r"|(/api/webhooks/)[^\s'\"]+"  # Discord webhook id/token
-            r"|(ntfy[\w.:-]*/)[^\s'\"]+"  # ntfy topic (the topic name is the secret)
-            r"|(bearer\s+)[^\s'\"]+"  # Authorization: Bearer <token> echo
-            r"|((?:set-)?cookie[\"']?\s*[:=]\s*)[^\n]+",  # Cookie header/env echo
-            _re.IGNORECASE,
-        )
-    return _SECRET_RE.sub(lambda m: next(g for g in m.groups() if g) + "REDACTED", text)
 
 
 def _window_or_latest(

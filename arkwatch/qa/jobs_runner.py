@@ -17,7 +17,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .harvest import _redact
+from .redact import _redact
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 

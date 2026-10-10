@@ -39,7 +39,7 @@ def test_retry_recovers_after_503(monkeypatch):
             pass
 
     srv = http.server.HTTPServer(("127.0.0.1", 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     monkeypatch.setenv("FRED_API_KEY", "k")
     monkeypatch.setattr(fred, "BASE", f"http://127.0.0.1:{srv.server_port}/x")
     monkeypatch.setattr(fred, "THROTTLE_S", 0.0)

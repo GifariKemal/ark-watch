@@ -9,8 +9,10 @@ gaps longer than ~3 trading days mean permanently lost data.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
-from curl_cffi import requests as creq
+if TYPE_CHECKING:  # lazy at runtime: watcher imports this every 60 s, only sessions need it
+    from curl_cffi import requests as creq
 
 BASE = "https://www.cmegroup.com"
 
@@ -113,6 +115,8 @@ def _session() -> creq.Session:
     first)."""
     global _SESSION
     if _SESSION is None:
+        from curl_cffi import requests as creq
+
         _SESSION = creq.Session(impersonate="chrome")
     return _SESSION
 

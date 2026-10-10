@@ -133,7 +133,7 @@ def send_pending(db_path: str) -> dict:
                     fmt = getattr(ch, "format_brief", None)
                     ext_id = ch.send_text(fmt(md_row[0], brief_date) if fmt else md_row[0])
                 except Exception as ex:
-                    from ..qa.harvest import _redact  # webhook URL / bot token
+                    from ..qa.redact import _redact  # webhook URL / bot token
 
                     print(f"  ⚠ {channel_name}: {_redact(str(ex))[:80]}")
                     ext_id = None

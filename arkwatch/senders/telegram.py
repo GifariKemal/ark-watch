@@ -94,7 +94,7 @@ class TelegramChannel:
             try:
                 mid = _send_message(chunk, chat_id)
             except Exception as ex:  # network error — do not abort the loop
-                from ..qa.harvest import _redact  # requests echoes /bot<token>/ URLs
+                from ..qa.redact import _redact  # requests echoes /bot<token>/ URLs
 
                 print(f"  ⚠ send failed: {_redact(str(ex))[:80]}")
                 mid = None

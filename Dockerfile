@@ -42,6 +42,7 @@ COPY --from=sqlite /opt/sqlite/lib/ /opt/sqlite/lib/
 COPY --from=builder /app/.venv /app/.venv
 WORKDIR /app
 COPY --chmod=a+rX arkwatch ./arkwatch
+RUN python -m compileall -q /app/arkwatch
 COPY --chmod=a+rX config ./config
 
 # /app/data -> /data: ~25 job modules still resolve ROOT/data/arkwatch.db

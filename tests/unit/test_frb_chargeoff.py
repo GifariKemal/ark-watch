@@ -126,19 +126,17 @@ class TestSepDotRouting:
         from arkwatch.fetchers import sep
         from arkwatch.qa.verify_sources import ROUTES
 
-        fake_rows = [
-            {"ts": "2026-06-17", "series_suffix": "2026", "value": 3.9},
-            {"ts": "2026-06-17", "series_suffix": "2027", "value": 3.6},
-            {"ts": "2026-09-16", "series_suffix": "2026", "value": 3.7},
-            {"ts": "2026-09-16", "series_suffix": "2027", "value": 3.4},
-            # oldest-first ordering ALSO covered: max-by-ts must not care
-            {"ts": "2023-09-20", "series_suffix": "2026", "value": 2.9},
-        ]
-        monkeypatch.setattr(
-            sep, "series_rows", lambda: sorted(fake_rows, key=lambda r: r["ts"], reverse=True)
-        )
+        vintages = {
+            "2026-09-16": {"2026": 3.7, "2027": 3.4},
+            "2026-06-17": {"2026": 3.9, "2027": 3.6},
+            "2023-09-20": {"2026": 2.9},
+        }
+        parsed = []
+        monkeypatch.setattr(sep, "sep_dates", lambda: list(vintages))  # newest-first
+        monkeypatch.setattr(sep, "parse_sep", lambda d: parsed.append(d) or vintages[d])
         assert sep.fetch_latest("CAL:FOMC_DOT_2026") == {"ts": "2026-09-16", "value": 3.7}
         assert sep.fetch_latest("CAL:FOMC_DOT_2027") == {"ts": "2026-09-16", "value": 3.4}
+        assert parsed == ["2026-09-16", "2026-09-16"]  # latest-only: older vintages untouched
         # routing: the longer prefix must win over CAL: → caldist
         assert ROUTES["CAL:FOMC_DOT"] is sep
         sid = "CAL:FOMC_DOT_2027"

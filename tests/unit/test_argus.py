@@ -61,7 +61,7 @@ def server(monkeypatch):
     FakeMCP.calls, FakeMCP.sse, FakeMCP.fail_first, FakeMCP.delay = [], True, 0, 0.0
     FakeMCP.result = {"query": "q", "items": [], "count": 0}
     srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeMCP)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     monkeypatch.setenv("ARGUS_URL", f"http://127.0.0.1:{srv.server_port}/mcp")
     monkeypatch.setenv("ARGUS_TOKEN", TOKEN)
     yield FakeMCP

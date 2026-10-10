@@ -64,6 +64,9 @@ def effective_n(values: Sequence[float], clusters: Sequence[Hashable]) -> float:
     return float(max(n / (1 + (n / k - 1) * icc), k))
 
 
+MIN_CLUSTERS = 10  # below this a cluster bootstrap understates the spread
+
+
 def cluster_bootstrap_ci(
     values: Sequence[float],
     clusters: Sequence[Hashable],
@@ -72,11 +75,18 @@ def cluster_bootstrap_ci(
     alpha: float = 0.05,
     seed: int = 0,
 ) -> tuple[float, float]:
-    """Percentile CI of the pooled mean, resampling whole clusters (sessions)."""
+    """Percentile CI of the pooled mean, resampling whole clusters (sessions). With fewer than
+    MIN_CLUSTERS clusters the cluster resample only reshuffles a handful of session means and
+    the interval collapses between them, so it is widened to cover the trade-level resample."""
     groups = _groups(values, clusters)
     sums = np.array([g.sum() for g in groups])
     counts = np.array([len(g) for g in groups])
     idx = np.random.default_rng(seed).integers(0, len(groups), size=(n_boot, len(groups)))
     means = sums[idx].sum(axis=1) / counts[idx].sum(axis=1)
     lo, hi = np.quantile(means, [alpha / 2, 1 - alpha / 2])
+    if 1 < len(groups) < min(MIN_CLUSTERS, len(values)):
+        ilo, ihi = cluster_bootstrap_ci(
+            values, range(len(values)), n_boot=n_boot, alpha=alpha, seed=seed
+        )
+        lo, hi = min(lo, ilo), max(hi, ihi)
     return float(lo), float(hi)

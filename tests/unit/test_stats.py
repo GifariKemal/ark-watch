@@ -44,6 +44,13 @@ def test_effective_n_design_effect():
     assert stats.effective_n([1, 0, 1], ["a", "b", "c"]) == pytest.approx(3.0)
 
 
+def test_cluster_bootstrap_ci_with_two_sessions_keeps_the_trade_spread():
+    # prod 2026-10-10: 30 trades of +-0.7R over 2 sessions gave [-0.006, -0.001]
+    vals = [0.7, -0.75] * 15
+    lo, hi = stats.cluster_bootstrap_ci(vals, ["s1"] * 15 + ["s2"] * 15)
+    assert lo < -0.15 and hi > 0.15
+
+
 def test_cluster_bootstrap_ci():
     assert stats.cluster_bootstrap_ci([2.0, 2.0, 2.0], ["a", "b", "b"]) == (2.0, 2.0)
     vals = [1.0, -1.0, 2.0, -1.0, 1.5, -1.0]

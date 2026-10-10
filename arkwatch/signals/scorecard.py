@@ -27,7 +27,13 @@ from functools import cache
 from typing import Any
 
 from ..config import _load_yaml
-from ..qa.stats import binom_pvalue_vs_base_rate, cluster_bootstrap_ci, effective_n, wilson_ci
+from ..qa.stats import (
+    MIN_CLUSTERS,
+    binom_pvalue_vs_base_rate,
+    cluster_bootstrap_ci,
+    effective_n,
+    wilson_ci,
+)
 from .playbook_tracker import _OPEN
 from .random_entry import K_MAX, K_MIN, MAX_WALKS, NO_NULL, null_summary, trade_draws
 
@@ -81,7 +87,7 @@ def group_stats(
     n_eff = round(effective_n(rs, sessions), 1) if n else 0.0
     k = len(set(sessions))
     warning = None
-    if n >= 2 and n_eff < n / 2:
+    if n >= 2 and (n_eff < n / 2 or k < MIN_CLUSTERS):  # an ICC from <10 sessions is noise
         warning = (
             f"{n} trades come from {k} session(s) (effective n ~{n_eff}); outcomes within a"
             " session move together, so the rates are less certain than n suggests"

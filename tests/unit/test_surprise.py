@@ -30,6 +30,7 @@ class TestIndicatorKey:
             norm("Michigan Consumer Sentiment Final")
         )
         assert indicator_key(norm("Chicago PMI Aug")) == "CHICAGO PMI"
+        assert indicator_key(norm("Goods Trade Balance Adv")) == "GOODS TRADE BALANCE"
 
     def test_strips_month_day_and_year(self):
         k1 = indicator_key(norm("Baker Hughes Oil Rig Count Aug 28"))

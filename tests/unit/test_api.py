@@ -149,3 +149,14 @@ def test_writer_paths_refuse_a_missing_db_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         api.scan_opportunities(["NQ1"], db_path=missing)
     assert not missing.exists()  # no parallel DB silently initialized
+
+
+def test_freshness_honors_the_per_series_ceiling():
+    from datetime import date
+
+    from arkwatch.api import _freshness
+
+    today = date(2026, 10, 10)
+    assert _freshness("2026-10-02", "D", today)["status"] == "late"  # 8 d > daily default 5
+    weekly_release = _freshness("2026-10-02", "D", today, max_age_days=12)
+    assert weekly_release["status"] == "fresh" and weekly_release["expected_lag_days"] == 12

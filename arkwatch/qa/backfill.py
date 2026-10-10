@@ -57,6 +57,7 @@ def sync_registry(conn) -> int:
                 e.get("tolerance"),
                 int(e.get("active", 1)),
                 e.get("calendar_family"),
+                e.get("max_age_days"),
             )
         )
     conn.execute("BEGIN IMMEDIATE")
@@ -68,8 +69,8 @@ def sync_registry(conn) -> int:
     conn.executemany(
         "INSERT OR REPLACE INTO series_registry(series_id,name,block,tier,unit,value_format,freq,"
         "ts_convention,release_schedule,expected_start,sanity_min,sanity_max,"
-        "primary_source,secondary_source,tolerance,active,calendar_family)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "primary_source,secondary_source,tolerance,active,calendar_family,max_age_days)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         rows,
     )
     conn.executemany(

@@ -89,6 +89,8 @@ _ALIASES = {
     # actual 0.4 == the FMP twin's — same release under a split key)
     "PPI MOM": "PRODUCER PRICE INDEX MOM",
     "PPI YOY": "PRODUCER PRICE INDEX YOY",
+    # TV/CME name the advance goods release with an ADV tail (CAL:GOODS_TRADE_BALANCE stayed empty)
+    "GOODS TRADE BALANCE ADV": "GOODS TRADE BALANCE",
 }
 
 

@@ -210,6 +210,7 @@
   primary_source: FRED:DTWEXBGS
   secondary_source: "EODHD:DXY.INDX / Yahoo:DX-Y.NYB (gray-eligible §10)"
   tolerance: null                 # DXY ≠ DTWEXBGS (different basket & basis) — direction/Δ20d cross-check only, never level
+  max_age_days: 12  # daily index published weekly (Monday) for the prior week
   active: 1
   # Trade-weighted dollar — dollar-smile STRONG/WEAK/FLAT (20d momentum) + FX-majors context.
 
@@ -270,6 +271,7 @@
                                   # ≈ DGS10−exp 10Y is usable as a direction check,
                                   # not a level comparator
   tolerance: null
+  max_age_days: 12  # daily model published weekly by the Fed Board
   active: 1
   # 10Y term premium (Kim-Wright) — the "duration for free" gauge; fiscal gold-channel companion.
 
@@ -729,7 +731,7 @@
   primary_source: EODHD:/ust/real-yield-rates (10Y)
   secondary_source: FRED:DFII10
   tolerance: 0.02                 # same-date Gate-4b: verified exact-to-the-bp 2026-09-13
-  active: 1
+  active: 0  # owner decision 2026-10-10: no paid/keyed provider for this series
   # Vendor-api audit #1: the block-B second leg. Lands daily so a FRED outage
   # leaves block B alive; Gate-4b compares same-date vs FRED:DFII10.
 
@@ -748,7 +750,7 @@
   primary_source: EODHD:/ust/real-yield-rates (5Y)
   secondary_source: FRED:DFII5
   tolerance: 0.02
-  active: 1
+  active: 0  # owner decision 2026-10-10: no paid/keyed provider for this series
 
 - series_id: FRED:DFII10
   name: Real yield 10Y (TIPS)
@@ -1190,6 +1192,7 @@
   primary_source: FRED:PWHEAMTUSDM
   secondary_source: null
   tolerance: null
+  max_age_days: 140  # IMF pink sheet reaches FRED irregularly, 1-3 months behind
   active: 1
 
 - series_id: FRED:PMAIZMTUSDM
@@ -1207,6 +1210,7 @@
   primary_source: FRED:PMAIZMTUSDM
   secondary_source: null
   tolerance: null
+  max_age_days: 140  # IMF pink sheet reaches FRED irregularly, 1-3 months behind
   active: 1
 
 - series_id: FRED:DALLAS_TRIM_1M

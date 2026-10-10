@@ -578,8 +578,10 @@ def _like_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _freshness(last_ts: str | None, freq: str | None, today: date) -> dict:
-    lag = FRESHNESS_LAG_DAYS.get((freq or "").upper(), 30)
+def _freshness(
+    last_ts: str | None, freq: str | None, today: date, max_age_days: int | None = None
+) -> dict:
+    lag = max_age_days or FRESHNESS_LAG_DAYS.get((freq or "").upper(), 30)
     if not last_ts:
         return {"expected_lag_days": lag, "age_days": None, "status": "never"}
     try:
@@ -637,7 +639,9 @@ def series_detail(c: sqlite3.Connection, series_id: str) -> dict | None:
     if not rows:
         return None
     out = rows[0]
-    out["freshness"] = _freshness(out["last_ts"], out["freq"], datetime.now(UTC).date())
+    out["freshness"] = _freshness(
+        out["last_ts"], out["freq"], datetime.now(UTC).date(), out.get("max_age_days")
+    )
     return out
 
 
@@ -924,7 +928,7 @@ def data_freshness(c: sqlite3.Connection) -> list[dict]:
     today = datetime.now(UTC).date()
     rows = _rows(
         c,
-        "SELECT r.series_id, r.freq, (SELECT MAX(o.ts) FROM raw_observations o"
+        "SELECT r.series_id, r.freq, r.max_age_days, (SELECT MAX(o.ts) FROM raw_observations o"
         " WHERE o.series_id = r.series_id) AS last_ts FROM series_registry r"
         " WHERE r.active = 1 ORDER BY r.series_id",
     )
@@ -944,7 +948,7 @@ def data_freshness(c: sqlite3.Connection) -> list[dict]:
     out = []
     for r in rows:
         sid = r["series_id"]
-        f = _freshness(r["last_ts"], r["freq"], today)
+        f = _freshness(r["last_ts"], r["freq"], today, r.pop("max_age_days"))
         none = (0, "", "")
         latest = max(last.get(sid, none), last.get(sid.split(":", 1)[0] + ":", none))
         if latest[1] == "SKIPPED":  # 402 from the provider vs. no credentials

@@ -17,7 +17,7 @@ import sqlite3
 from datetime import UTC
 from pathlib import Path
 
-SCHEMA_VERSION = 34
+SCHEMA_VERSION = 35
 
 SCHEMA_V1 = """
 CREATE TABLE series_registry (
@@ -702,6 +702,15 @@ CREATE INDEX IF NOT EXISTS idx_intraday_sym_int_ts
   ON intraday_bars(symbol, interval, bar_ts_utc DESC, source);
 DROP INDEX IF EXISTS idx_intraday_symbol_ts;
 DROP INDEX IF EXISTS idx_raw_series_ts;
+""",
+    35: """-- v35: per-series freshness ceiling for sources that publish slower than
+-- their observation frequency suggests (daily data released weekly, annual
+-- data a year late, the monthly LME file). NULL = the per-freq default.
+ALTER TABLE series_registry ADD COLUMN max_age_days INTEGER;
+-- the advance goods release arrives as '... ADV' (alias added in qa/calendar.py);
+-- upserts never rewrite indicator_key, so relabel the rows already stored
+UPDATE events SET indicator_key = 'GOODS TRADE BALANCE'
+  WHERE indicator_key = 'GOODS TRADE BALANCE ADV';
 """,
 }
 

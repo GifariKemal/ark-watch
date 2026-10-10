@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import sys
 from datetime import UTC, datetime, timedelta
@@ -115,7 +116,9 @@ def _std_time_et(name_norm: str):
     return None
 
 
-def pull(from_d: str | None = None, to_d: str | None = None) -> tuple[list[dict], dict]:
+def pull(from_d: str | None = None, to_d: str | None = None) -> tuple[list[dict], dict, dict]:
+    """(events, rows per source, why a source gave nothing: 'plan-limited: ...', 'unconfigured: ...'
+    or the redacted error), so fetch_log can tell a skipped provider from a dead one."""
     now = datetime.now(UTC)
     # trailing window 10d (2026-09-17 audit: the old 3d heal window could not
     # survive a daemon outage — a 63h PC outage + T+1/T+2 vendor actual lag
@@ -123,6 +126,9 @@ def pull(from_d: str | None = None, to_d: str | None = None) -> tuple[list[dict]
     from_d = from_d or (now - timedelta(days=10)).strftime("%Y-%m-%d")
     to_d = to_d or (now + timedelta(days=14)).strftime("%Y-%m-%d")
     fetched: dict[str, list[dict]] = {}
+    why: dict[str, str] = {}
+    if not os.environ.get("EODHD_API_TOKEN"):
+        why["EODHD"] = "unconfigured: EODHD_API_TOKEN"
     for src, fn in (
         ("FMP", cal.fetch_fmp),
         ("TV", cal.fetch_tv),
@@ -136,6 +142,7 @@ def pull(from_d: str | None = None, to_d: str | None = None) -> tuple[list[dict]
 
             print(f"  ⚠ {src} failed: {_redact(str(ex))[:110]}")
             fetched[src] = []
+            why[src] = _redact(str(ex))[:200]
     counts = {k: len(v) for k, v in fetched.items()}
 
     # Merge with precedence, tracking provenance per field: actual/consensus can
@@ -212,7 +219,7 @@ def pull(from_d: str | None = None, to_d: str | None = None) -> tuple[list[dict]
                 )
                 e["ts_utc"] = dt_et.astimezone(UTC).isoformat(timespec="seconds")
                 e["is_curated"] = 1
-    return events, counts
+    return events, counts, why
 
 
 def event_uid(normalized_name: str, ts_utc: str) -> str:
@@ -422,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
     from dotenv import load_dotenv
 
     load_dotenv()
-    events, counts = pull(a.from_d, a.to_d)
+    events, counts, why = pull(a.from_d, a.to_d)
     n_new = save(a.db, events)
     # ROUND-7: per-source fetch_log rows — a dead TV/CME-calendar endpoint
     # was invisible (the job always exits 0, failures only printed). A dead
@@ -435,7 +442,10 @@ def main(argv: list[str] | None = None) -> int:
 
         _conn = _sq.connect(a.db, isolation_level=None)
         for src, n in counts.items():
-            _lc_cal(_conn, "calendar", f"CAL:{src}", None, n)
+            reason = why.get(src, "") if not n else ""
+            skip = reason.startswith(("plan-limited", "unconfigured"))
+            _lc_cal(_conn, "calendar", f"CAL:{src}", None, n, err=reason or None,
+                    status="SKIPPED" if skip else None)  # fmt: skip
         _conn.close()
     except Exception:
         pass  # observability must never fail the calendar job

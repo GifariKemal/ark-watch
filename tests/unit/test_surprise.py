@@ -307,3 +307,31 @@ class TestEsi:
         update_surprise_z(conn)
         esi = compute_esi(conn, as_of=now)
         assert esi is not None and abs(esi) < 0.5
+
+
+def test_calendar_logs_skipped_providers_apart_from_dead_ones(tmp_path, monkeypatch):
+    from arkwatch.config import PlanLimited
+    from arkwatch.fetchers import calendar as cal
+    from arkwatch.qa import calendar as qcal
+
+    def fmp(*_a):
+        raise PlanLimited("plan-limited: FMP economic-calendar (HTTP 402)")
+
+    def cme(*_a):
+        raise TimeoutError("cme down")
+
+    monkeypatch.delenv("EODHD_API_TOKEN", raising=False)
+    monkeypatch.setattr(cal, "fetch_fmp", fmp)
+    monkeypatch.setattr(cal, "fetch_tv", lambda *_a: [])
+    monkeypatch.setattr(cal, "fetch_cme", cme)
+    path = tmp_path / "c.db"
+    db.get_conn(path, allow_init=True).close()
+    qcal.main(["--db", str(path), "--from", "2026-10-01", "--to", "2026-10-02"])
+    conn = sqlite3.connect(path)
+    got = dict(conn.execute("SELECT target, status FROM fetch_log WHERE fetcher = 'calendar'"))
+    assert got == {
+        "CAL:FMP": "SKIPPED",
+        "CAL:EODHD": "SKIPPED",
+        "CAL:CME": "ERROR",
+        "CAL:TV": "EMPTY",
+    }

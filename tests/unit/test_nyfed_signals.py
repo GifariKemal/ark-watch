@@ -17,9 +17,8 @@ NOT EXISTS, so these tests run both before and after the migration lands in
 db.py. All money in the SOMA/agency tables is raw USD, pd_positions is
 $millions; every signal/output is $B (boundary conversion).
 
-Telegram safety: _fire attempts a real send when the host env carries
-TELEGRAM_* vars — the conn fixture blanks them so fired alerts only ever
-land in alert_deliveries (pending).
+Telegram safety: _fire only queues (no fast-path send since 2026-10-10); the conn
+fixture still blanks TELEGRAM_* so fired alerts only ever land in alert_deliveries (pending).
 """
 
 from __future__ import annotations
@@ -105,9 +104,8 @@ PREV = _wednesday(1)
 
 @pytest.fixture()
 def conn(tmp_path, monkeypatch):
-    # Blank the Telegram env even on hosts that carry the production values:
-    # _fire's fast-path send must raise (caught → stays 'pending') instead of
-    # delivering test alerts to the real channel.
+    # Blank the Telegram env even on hosts that carry the production values: belt and
+    # braces now that _fire only queues 'pending' rows for the outbox.
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
     c = db.get_conn(tmp_path / "t.db", allow_init=True)

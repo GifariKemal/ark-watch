@@ -132,7 +132,8 @@ def test_signal_listing_through_api(gamma, conn):
     assert {r["signal_id"] for r in page["items"]} == set(_signals(conn))
 
 
-def test_cli_http_error_is_logged_redacted_and_exits_0(gamma, tmp_path, capsys):
+def test_cli_http_error_is_logged_redacted_and_exits_0(gamma, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(polymarket.time, "sleep", lambda _s: None)  # skip the 1-2 s retry backoff
     gamma["status"], gamma["body"] = 503, b"busy"
     path = tmp_path / "a.db"
     assert polymarket.main(["--db", str(path)]) == 0  # extra source: logged, never pages the phone

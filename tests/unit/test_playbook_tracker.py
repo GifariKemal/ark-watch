@@ -708,7 +708,7 @@ def test_performance_metrics_trades_ci_and_non_trades(tmp_path):
     assert perf["expectancy_r"] == 0.44
     assert perf["avg_r_multiple"] == 0.44
     assert perf["profit_factor"] == 2.69  # 3.5R / 1.3R
-    assert perf["avg_mfe"] == 2.0
+    assert perf["avg_mfe"] is None  # raw points never average across symbols
     assert perf["non_trades"] == {"INVALIDATED_PRE_ENTRY": 1}
     assert perf["invalidated"] == 1
     assert perf["pending"] == 1

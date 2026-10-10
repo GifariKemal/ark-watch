@@ -36,6 +36,9 @@ from .pillars import (
     compute_quadrant,
     compute_regime_score,
 )
+from .pillars import (
+    regime_label as _regime_label,
+)
 
 
 def overnight_changes(conn: sqlite3.Connection, n: int = 6) -> list[str]:
@@ -355,8 +358,7 @@ def generate_brief(conn: sqlite3.Connection, db_path: str) -> str:
     is_saturday = now_wib.weekday() == 5  # Sunday is handled in run(): skip + return
     is_monday = now_wib.weekday() == 0
 
-    risk_on = score > REGIME_RISK_ON
-    regime_label = "RISK-ON" if risk_on else ("RISK-OFF" if score < REGIME_RISK_OFF else "NEUTRAL")
+    regime_label = _regime_label(score, pillars)
 
     # header — quality from the health check (fetch_log ERRORs today + stale data)
     n_ok, n_warn, n_fail, n_total, detail = _health_detail(conn)

@@ -15,7 +15,8 @@ Tiers describe tracked outcomes only. They are not a forecast and promise no fut
 Random-entry control (random_entry.py): for groups with n >= 20 each trade is replayed from
 random entry bars of the same symbol and window with the same direction and stop / target
 geometry. null_mean_r, null_p and beats_random report whether the group's expectancy beats that
-null. A group that would be 'supported' but does not beat random is capped at 'emerging'. When
+null. A group that would be 'supported' but does not beat random, or whose trades come from fewer than
+10 sessions or an effective n under 20, is capped at 'emerging'. When
 the null was not computed (n < 20, cost cap, no bars) beats_random is None and the tier stands.
 """
 
@@ -92,8 +93,14 @@ def group_stats(
             f"{n} trades come from {k} session(s) (effective n ~{n_eff}); outcomes within a"
             " session move together, so the rates are less certain than n suggests"
         )
+    if n >= 2 and len(set(rs)) == 1:
+        warning = (
+            f"all {n} trades returned {rs[0]}R, so the bootstrap has no spread to measure and the"
+            " expectancy interval is not a confidence statement"
+        )
     tier = _tier(n, wr_ci, be, exp_ci)
-    if tier == "supported" and null["beats_random"] is False:
+    # 'supported' needs independent evidence: many sessions, not one session's correlated trades
+    if tier == "supported" and (null["beats_random"] is False or k < MIN_CLUSTERS or n_eff < MIN_N):
         tier = "emerging"
     return {
         "n": n,

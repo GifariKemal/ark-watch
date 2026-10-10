@@ -49,6 +49,8 @@ def test_cluster_bootstrap_ci_with_two_sessions_keeps_the_trade_spread():
     vals = [0.7, -0.75] * 15
     lo, hi = stats.cluster_bootstrap_ci(vals, ["s1"] * 15 + ["s2"] * 15)
     assert lo < -0.15 and hi > 0.15
+    lo, hi = stats.cluster_bootstrap_ci([1.0, -1.0] * 15, ["a"] * 30)  # one session
+    assert lo < -0.2 and hi > 0.2
 
 
 def test_cluster_bootstrap_ci():

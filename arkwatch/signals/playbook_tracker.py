@@ -584,6 +584,8 @@ def get_playbook_performance_metrics(
     non_trades = Counter(r[5] or r[0] for r in closed if r[1] is None)
 
     def _avg(i: int) -> float | None:
+        if not symbol:  # MFE/MAE are raw points: an SPX and a BTC trade do not average
+            return None
         vals = [r[i] for r in trades if r[i] is not None]
         return round(sum(vals) / len(vals), 2) if vals else None
 

@@ -84,7 +84,7 @@ def cluster_bootstrap_ci(
     idx = np.random.default_rng(seed).integers(0, len(groups), size=(n_boot, len(groups)))
     means = sums[idx].sum(axis=1) / counts[idx].sum(axis=1)
     lo, hi = np.quantile(means, [alpha / 2, 1 - alpha / 2])
-    if 1 < len(groups) < min(MIN_CLUSTERS, len(values)):
+    if len(groups) < min(MIN_CLUSTERS, len(values)):
         ilo, ihi = cluster_bootstrap_ci(
             values, range(len(values)), n_boot=n_boot, alpha=alpha, seed=seed
         )

@@ -69,12 +69,13 @@ def get_regime_snapshot(
         compute_pillars,
         compute_quadrant,
         compute_regime_score,
+        regime_label,
     )
 
     with _get_connection(conn, db_path) as c:
         pillars = compute_pillars(c)
         score = compute_regime_score(pillars)
-        label = "RISK-ON" if score > 0.3 else ("RISK-OFF" if score < -0.3 else "NEUTRAL")
+        label = regime_label(score, pillars)
         quadrant = compute_quadrant(pillars)
         dollar_smile = compute_dollar_smile(c)
 

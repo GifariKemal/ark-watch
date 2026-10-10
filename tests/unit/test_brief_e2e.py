@@ -188,7 +188,7 @@ def test_full_render_sections_and_content_coherence(brief_conn, tmp_path):
     # --- headers (structure) ---
     assert lines[0].startswith("=== US MACRO BRIEF — ")
     regime = next(ln for ln in lines if ln.startswith("REGIME :"))
-    assert any(lbl in regime for lbl in ("RISK-ON", "RISK-OFF", "NEUTRAL"))
+    assert any(lbl in regime for lbl in ("RISK-ON", "RISK-OFF", "NEUTRAL", "INSUFFICIENT DATA"))
     assert next(ln for ln in lines if ln.startswith("QUADRANT:"))
     assert next(ln for ln in lines if ln.startswith("Quality: ✓"))
 

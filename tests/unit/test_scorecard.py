@@ -124,7 +124,19 @@ def test_single_session_cluster_warning(conn):
     assert g["n_sessions"] == 1 and g["effective_n"] == 1.0
     assert "1 session" in g["sample_warning"]
     lo, hi = g["expectancy_ci95"]
-    assert lo == hi  # one cluster: the bootstrap cannot widen it, hence the warning
+    assert lo < g["expectancy_r"] < hi  # one cluster: widened to the trade-level spread
+
+
+def test_supported_needs_many_sessions(conn):
+    rs = [2.0] * 60 + [-1.0] * 40  # 'supported' when spread over 100 sessions (above)
+    _trades(conn, rs, sessions=["2026-10-01"] * len(rs))
+    assert _only(conn)["tier"] == "emerging"
+
+
+def test_identical_outcomes_are_flagged(conn):
+    _trades(conn, [1.0] * 30)
+    g = _only(conn)
+    assert g["expectancy_ci95"] == [1.0, 1.0] and "no spread" in g["sample_warning"]
 
 
 def test_spread_sessions_no_warning(conn):

@@ -340,6 +340,18 @@ def compute_regime_score(pillars: dict[str, dict]) -> float:
     return max(-2.0, min(2.0, score))
 
 
+MIN_REGIME_PILLARS = 4  # of 6: one or two surviving pillars would set the whole label
+
+
+def regime_label(score: float, pillars: dict[str, dict]) -> str:
+    """The one regime label the brief and the dashboard share."""
+    if sum(pillars.get(b, {}).get("z") is not None for b in PILLAR_WEIGHTS) < MIN_REGIME_PILLARS:
+        return "INSUFFICIENT DATA"
+    if score > REGIME_RISK_ON:
+        return "RISK-ON"
+    return "RISK-OFF" if score < REGIME_RISK_OFF else "NEUTRAL"
+
+
 def compute_quadrant(pillars: dict[str, dict]) -> str:
     growth = pillars.get("D", {}).get("state", "?")
     inflation = pillars.get("C", {}).get("state", "?")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import requests
 
@@ -58,6 +58,20 @@ def _quotes(key: str, symbols: list[str]) -> list[dict]:
         if isinstance(payload, list):
             out.extend(payload)
     return out
+
+
+# the free plan answers the constituent list with 402 every hour, two calls each time:
+# ~48 of the 250 daily FMP calls the recession, earnings and COT-gate jobs also need
+PLAN_RECHECK = timedelta(hours=24)
+
+
+def _plan_limited_recently(conn) -> bool:
+    since = (datetime.now(UTC) - PLAN_RECHECK).isoformat(timespec="seconds")
+    sql = (
+        "SELECT 1 FROM fetch_log WHERE fetcher = 'equity_breadth' AND status = 'SKIPPED'"
+        " AND error LIKE 'plan-limited%' AND ts >= ? LIMIT 1"
+    )
+    return conn.execute(sql, (since,)).fetchone() is not None
 
 
 def run(db_path: str = "data/arkwatch.db") -> dict:
@@ -118,6 +132,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="arkwatch breadth")
     parser.add_argument("--db", default="data/arkwatch.db")
     db_path = parser.parse_args(argv).db
+    conn = _db.get_conn(db_path, allow_init=True)
+    try:
+        if _plan_limited_recently(conn):
+            print("skipped: FMP plan does not include constituents (rechecked daily)")
+            return 0
+    finally:
+        conn.close()
     try:
         print(run(db_path))
     except PlanLimited as ex:

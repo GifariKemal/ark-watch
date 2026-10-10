@@ -194,6 +194,12 @@ class ScorecardStatsOut(BaseModel):
     last_updated: str | None = None
     calibration: dict[str, Num] | None = None
     calibration_reason: str | None = None
+    # random-entry null (signals/random_entry.py); computed only for groups with n >= 20
+    null_n: int = 0
+    null_draws: int = 0
+    null_mean_r: Num = None
+    null_p: Num = None
+    beats_random: bool | None = None
 
 
 class ScorecardGroupOut(ScorecardStatsOut):

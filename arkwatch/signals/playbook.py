@@ -676,7 +676,8 @@ def generate_trading_playbook(
     # 4d. Fetch Domain 4 Intermarket Microstructure & Market Breadth
     def _get_1h_chg(t_sym: str) -> float | None:
         b = conn.execute(
-            "SELECT close FROM intraday_bars WHERE symbol=? AND bar_ts_utc <= ?"
+            # 13 x 5m = 1h: without the interval filter stored 1m bars made it a 13-minute change
+            "SELECT close FROM intraday_bars WHERE symbol=? AND interval='5m' AND bar_ts_utc <= ?"
             " ORDER BY bar_ts_utc DESC LIMIT 13",
             (t_sym, as_of_iso),
         ).fetchall()

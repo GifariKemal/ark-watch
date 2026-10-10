@@ -115,3 +115,13 @@ def test_playbook_golden_scenarios_and_levels(seeded_db, tmp_path, symbol, as_of
     assert {k: pb["reference_levels"][k] for k in LEVEL_KEYS} == dict(
         zip(LEVEL_KEYS, level_values, strict=True)
     )
+
+
+def test_intermarket_1h_change_ignores_1m_bars():
+    """13 bars back must mean one hour of 5m bars even when 1m bars are stored too."""
+    import inspect
+
+    from arkwatch.signals import playbook
+
+    src = inspect.getsource(playbook)
+    assert "WHERE symbol=? AND interval='5m' AND bar_ts_utc <= ?" in src

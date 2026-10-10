@@ -89,6 +89,7 @@ SCHEDULE = [
         "Send brief to configured channels (paused when none, see _paused_jobs)",
     ),
     (7, 15, "daily", "verify", "Truth gate"),
+    (9, 30, "daily", "calibration", "Brier calibration of stored probabilities"),
     (8, 15, "daily", "cme", "CME settlements + CVOL + VOI (gray harvester)"),
     (8, 30, "daily", "f2", "COT + flows (Bybit/Farside/PBoC/LBMA/TIC/LME) + FedWatch"),
     # nightly local snapshot (VACUUM INTO + verify + rotation); offsite copies

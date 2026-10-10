@@ -34,6 +34,14 @@ def test_parse_rss_feed_sample_xml(monkeypatch):
             pass
 
     monkeypatch.setattr(rss_news.urllib.request, "urlopen", lambda _req, **_kw: FakeResponse())
+    # hermetic: the curl_cffi first attempt used to go out to the real network
+
+    def _no_curl(*_a, **_kw):
+        raise OSError("offline")
+
+    import curl_cffi.requests as creq
+
+    monkeypatch.setattr(creq.Session, "get", _no_curl)
 
     items = rss_news.fetch_rss_feed("FED", "https://example.com/rss")
     assert len(items) == 1

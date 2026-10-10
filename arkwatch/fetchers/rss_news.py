@@ -25,7 +25,9 @@ FEEDS = {
     "COINTELEGRAPH": "https://cointelegraph.com/rss",
     "MARKETWATCH": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
     "CNBC": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    "YAHOO": "https://finance.yahoo.com/news/rssindex",
+    # finance.yahoo.com/news/rssindex is gone (404 since 2026-10); the headline feed still serves
+    "YAHOO": "https://feeds.finance.yahoo.com/rss/2.0/headline"
+    "?s=%5EGSPC,%5EIXIC,%5ETNX,GC%3DF,CL%3DF,DX-Y.NYB,BTC-USD&region=US&lang=en-US",
 }
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) arkwatch/0.1"
@@ -73,6 +75,10 @@ def _tag_symbols(source_name: str) -> list[str]:
     return []
 
 
+class FeedGone(RuntimeError):
+    pass
+
+
 def fetch_rss_feed(source_name: str, url: str, timeout: int = 10) -> list[dict]:
     """Fetch and parse an RSS feed, returning standardized news dictionaries."""
     from ..net import proxies_for
@@ -86,6 +92,10 @@ def fetch_rss_feed(source_name: str, url: str, timeout: int = 10) -> list[dict]:
         r = s.get(url, timeout=timeout, proxies=proxies)
         if r.status_code == 200:
             data = r.content
+        elif r.status_code in (404, 410):  # gone for any client: a second request only adds load
+            raise FeedGone(f"{source_name} feed HTTP {r.status_code}")
+    except FeedGone:
+        raise
     except Exception:
         pass
 

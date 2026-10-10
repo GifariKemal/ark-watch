@@ -237,3 +237,24 @@ def test_sweep_retries_errored_symbol_once(tmp_path, monkeypatch):
     out = instruments.sweep(str(_fresh(tmp_path)))
     assert out == {"BTCUSD|YAHOO": 1, "DXY|YAHOO": 1}
     assert calls == ["BTC-USD", "DX-Y.NYB", "BTC-USD"]
+
+
+def test_rss_404_is_not_retried_with_a_second_client(monkeypatch):
+    """A deterministic 404/410 used to be re-requested through `requests` (one extra hit on
+    the proxy egress every hour for the dead Yahoo rssindex feed)."""
+    import curl_cffi.requests as creq
+    import requests
+
+    from arkwatch.fetchers import rss_news
+
+    class _Resp:
+        status_code = 404
+        content = b""
+
+    monkeypatch.setattr(creq.Session, "get", lambda self, *a, **k: _Resp())
+    second = []
+    monkeypatch.setattr(requests, "get", lambda *a, **k: second.append(a))
+    monkeypatch.setenv("ARKWATCH_PROXY", PROXY)
+    with pytest.raises(rss_news.FeedGone):
+        rss_news.fetch_rss_feed("YAHOO", "https://feeds.finance.yahoo.com/rss/2.0/headline?s=X")
+    assert second == []

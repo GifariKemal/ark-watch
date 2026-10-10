@@ -1,7 +1,8 @@
 """daemon.py — in-app scheduler: one process, jobs = isolated subprocesses.
 
-A 30-second loop checks the WIB clock and runs due jobs as subprocesses. Each
-job is a fresh Python process (crashes/leaks do not spread). The heartbeat
+A 30-second loop checks the WIB clock and runs due jobs as subprocesses; the
+alert watcher and the 5-minute market timeline run in two lane threads so a
+slow job never delays them. Each job is a fresh Python process (crashes/leaks do not spread). The heartbeat
 file is refreshed every loop; if it goes stale for more than 5 minutes, the
 daemon is dead or hung (`python -m arkwatch healthcheck`). An OS advisory
 lock on daemon.lock prevents a second instance (duplicate briefs); the kernel
@@ -19,6 +20,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -214,7 +216,8 @@ def _setup_logging():
 def _atomic_write(path: Path, text: str) -> None:
     """tmp + os.replace: a crash mid-write never leaves a torn file behind."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    # per-thread tmp name: the watch/market lanes and the main loop all write the heartbeat
+    tmp = path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
 
@@ -575,6 +578,42 @@ def _save_state(d: dict[str, str], path: Path | None = None) -> None:
         logger.warning(f"state persist failed: {ex}")
 
 
+MARKET_LANE_TICK_S = 5.0
+
+
+def _watch_lane(stop: threading.Event) -> None:
+    """Alert watcher every WATCH_INTERVAL_S in its own thread. In the old serial loop a slow
+    job blocked it: the LLM sentiment job runs up to 15 min, verify ~4 min (2026-10-09:
+    watcher gap max 27 min, 170 late runs)."""
+    while not stop.is_set():
+        try:
+            _run_job("watch", "Alert watcher")
+        except Exception as ex:  # the lane must outlive any single failure
+            logger.error(f"watch lane: {ex}")
+        stop.wait(WATCH_INTERVAL_S)
+
+
+def _market_lane(stop: threading.Event) -> None:
+    """5-minute market timeline + scanner in their own thread (2026-10-09: only 87% of the
+    buckets ran behind slow jobs). Fires on a NEW bucket, not on minute % 5 == 0, so a run
+    that crosses the boundary minute no longer skips the whole bucket. Jobs are
+    subprocesses; SQLite WAL takes the concurrent writers (busy_timeout 10 s)."""
+    last_bucket = ""
+    while not stop.is_set():
+        try:
+            now_wib = datetime.now(WIB)
+            bucket = (
+                now_wib.strftime("%Y%m%d%H") + f"{now_wib.minute // MARKET_INTERVAL_MINUTES:02d}"
+            )
+            if bucket != last_bucket:
+                last_bucket = bucket
+                _run_job("market", "Five-minute cross-asset timeline")
+                _run_job("scanner", "Opportunity scanner and playbook tracker")
+        except Exception as ex:
+            logger.error(f"market lane: {ex}")
+        stop.wait(MARKET_LANE_TICK_S)
+
+
 def _on_signal(signum, _frame):
     # unwind as SystemExit: _spawn's finally reaps the running job group,
     # run_loop's finally releases the lock (an inline flag would wait out
@@ -617,13 +656,21 @@ def run_loop():
         logger.info(f"state restored: {len(last_run)} job(s) already ran today — no replay")
     next_retry: dict[str, float] = {}  # cmd → monotonic retry time (non-blocking)
     log_day = datetime.now(UTC).date()
-    last_watch = 0.0
     last_ping = float("-inf")
-    last_market_bucket = ""
-    last_news_bucket = ""
+    _start = datetime.now(WIB)  # first news run at the next boundary, not at every deploy
+    last_news_bucket = _start.strftime("%Y%m%d%H") + (
+        f"{_start.minute // _market_news_interval(_start):02d}"
+    )
+    stop_lanes = threading.Event()
+    lanes = [
+        threading.Thread(target=fn, args=(stop_lanes,), name=fn.__name__, daemon=True)
+        for fn in (_watch_lane, _market_lane)
+    ]
     daemon_start = datetime.now(UTC).isoformat(timespec="seconds")
     try:
         _bootstrap(last_run)
+        for lane in lanes:
+            lane.start()
         while True:
             _heartbeat()
             last_ping = _maybe_ping(last_ping)
@@ -662,24 +709,10 @@ def run_loop():
                     next_retry[key] = time.monotonic() + RETRY_DELAY_S
                     logger.warning(f"  retry {cmd} in {RETRY_DELAY_S // 60} minutes")
 
-            # Watcher: run every ~60 seconds
-            if time.monotonic() - last_watch >= WATCH_INTERVAL_S:
-                last_watch = time.monotonic()
-                _run_job("watch", "Alert watcher")
-
-            market_bucket = (
-                now_wib.strftime("%Y%m%d%H") + f"{now_wib.minute // MARKET_INTERVAL_MINUTES:02d}"
-            )
-            if (
-                now_wib.minute % MARKET_INTERVAL_MINUTES == 0
-                and market_bucket != last_market_bucket
-            ):
-                last_market_bucket = market_bucket
-                _run_job("market", "Five-minute cross-asset timeline")
-                _run_job("scanner", "Opportunity scanner and playbook tracker")
             news_interval = _market_news_interval(now_wib)
             news_bucket = now_wib.strftime("%Y%m%d%H") + f"{now_wib.minute // news_interval:02d}"
-            if now_wib.minute % news_interval == 0 and news_bucket != last_news_bucket:
+            # a new bucket, not minute % N == 0: a busy loop at :00 used to lose the hour
+            if news_bucket != last_news_bucket:
                 last_news_bucket = news_bucket
                 _run_job("market-news", "Cross-source catalyst news")
                 _run_job("sentiment", "Multi-asset news intelligence radar")
@@ -695,6 +728,10 @@ def run_loop():
                 _setup_logging()
             time.sleep(30)
     finally:
+        stop_lanes.set()
+        for lane in lanes:
+            if lane.is_alive():
+                lane.join(timeout=25)  # a running market job may finish inside the 60 s grace
         logger.info("=== daemon stop ===")
         # closing releases the lock; the file stays (unlinking a locked path
         # races a starting successor onto a different inode)

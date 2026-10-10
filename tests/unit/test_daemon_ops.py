@@ -5,6 +5,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -165,3 +166,68 @@ def test_run_loop_drives_the_api_job_queue(tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         daemon.run_loop()
     assert len(calls) == 1
+
+
+def test_lanes_keep_running_while_the_main_loop_is_busy(monkeypatch):
+    """The watcher and the market timeline must not wait for a slow main-loop job
+    (2026-10-09: serial loop, watcher gap max 27 min, 87% market buckets)."""
+    import threading
+
+    calls = []
+    monkeypatch.setattr(daemon, "_run_job", lambda cmd, desc: calls.append(cmd) or True)
+    monkeypatch.setattr(daemon, "WATCH_INTERVAL_S", 0.01)
+    monkeypatch.setattr(daemon, "MARKET_LANE_TICK_S", 0.01)
+    stop = threading.Event()
+    lanes = [
+        threading.Thread(target=f, args=(stop,)) for f in (daemon._watch_lane, daemon._market_lane)
+    ]
+    for t in lanes:
+        t.start()
+    time.sleep(0.3)  # the main thread is "busy" all along
+    stop.set()
+    for t in lanes:
+        t.join(timeout=2)
+    assert not any(t.is_alive() for t in lanes)
+    assert calls.count("watch") >= 5
+    # same 5-minute bucket: market + scanner exactly once
+    assert calls.count("market") == 1 and calls.count("scanner") == 1
+
+
+def test_lane_survives_a_failing_job(monkeypatch):
+    import threading
+
+    stop = threading.Event()
+    n = []
+
+    def boom(cmd, desc):
+        n.append(cmd)
+        if len(n) >= 3:
+            stop.set()
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(daemon, "_run_job", boom)
+    monkeypatch.setattr(daemon, "WATCH_INTERVAL_S", 0.01)
+    daemon._watch_lane(stop)
+    assert len(n) == 3
+
+
+def test_atomic_write_from_many_threads(tmp_path):
+    import threading
+
+    target = tmp_path / "beat"
+    errors = []
+
+    def spam():
+        try:
+            for _ in range(200):
+                daemon._atomic_write(target, "x")
+        except Exception as ex:
+            errors.append(ex)
+
+    ts = [threading.Thread(target=spam) for _ in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert not errors and target.read_text() == "x"
+    assert not list(tmp_path.glob("*.tmp"))

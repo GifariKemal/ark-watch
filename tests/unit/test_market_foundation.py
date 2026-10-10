@@ -139,16 +139,17 @@ def test_equity_extended_hours_and_regular_only_breadth_window():
     assert breadth.status == "OUT_OF_SESSION"
 
 
-def test_brent_ice_hours_and_dxy_maintenance_break():
+def test_brent_globex_hours_and_dxy_maintenance_break():
     brent_active = market_timeline.assess_freshness(
         "BZ1",
         [_bar("2026-09-22T08:55:00+00:00")],
         datetime.fromisoformat("2026-09-22T09:00:00+00:00"),
     )
+    # Yahoo BZ=F is NYMEX Brent: the CME 17:00-18:00 New York break, bars like CL1
     brent_closed = market_timeline.assess_freshness(
         "BZ1",
-        [_bar("2026-09-22T21:55:00+00:00")],
-        datetime.fromisoformat("2026-09-22T22:30:00+00:00"),
+        [_bar("2026-09-22T20:55:00+00:00")],
+        datetime.fromisoformat("2026-09-22T21:30:00+00:00"),
     )
     dxy_break = market_timeline.assess_freshness(
         "DXY",
@@ -288,6 +289,7 @@ def test_eth_prefers_fmp_before_eodhd(monkeypatch):
 
 def test_stale_primary_and_fallback_are_logged_degraded_not_healthy(tmp_path, monkeypatch):
     stale = [_bar("2026-09-22T13:30:00+00:00")]
+    monkeypatch.setenv("FMP_API_KEY", "test")
     monkeypatch.setattr(market_timeline, "datetime", _FixedDateTime)
     monkeypatch.setattr(market_timeline.yahoo, "fetch_intraday", lambda _ticker: stale)
     monkeypatch.setattr(market_timeline, "_eodhd_bars", lambda _symbol: [])
@@ -313,6 +315,8 @@ def test_stale_eodhd_is_logged_and_fresher_fmp_is_selected(tmp_path, monkeypatch
 
     def fail_yahoo(_ticker):
         raise TimeoutError("synthetic outage")
+
+    monkeypatch.setenv("FMP_API_KEY", "test")
 
     monkeypatch.setattr(market_timeline.yahoo, "fetch_intraday", fail_yahoo)
     monkeypatch.setattr(market_timeline, "_eodhd_bars", lambda _symbol: stale)
@@ -671,3 +675,117 @@ def test_okx_trade_flow_backfills_legacy_events_once(tmp_path):
     assert conn.execute("SELECT trade_count FROM crypto_trade_flow_1m").fetchone()[0] == 2
     assert conn.execute("SELECT last_trade_id FROM crypto_trade_flow_state").fetchone()[0] == "101"
     conn.close()
+
+
+# --- session models fixed against prod bars (2026-10-06..09) ---------------------------
+
+
+def _fresh(symbol, bar, now):
+    return market_timeline.assess_freshness(symbol, [_bar(bar)], datetime.fromisoformat(now))
+
+
+def test_tnx_session_is_0830_1500_new_york():
+    # bars stop at 15:00 EDT; the old 09:30-16:00 model flagged every evening STALE
+    assert (
+        _fresh("TNX", "2026-10-07T18:55:00+00:00", "2026-10-07T20:00:00+00:00").status == "CLOSED"
+    )
+    assert _fresh("TNX", "2026-10-07T14:55:00+00:00", "2026-10-07T15:00:00+00:00").status == "FRESH"
+
+
+def test_spot_fx_trades_through_the_cme_break_and_closes_friday_1700():
+    in_break = _fresh("EURUSD", "2026-10-06T21:25:00+00:00", "2026-10-06T21:30:00+00:00")
+    weekend = _fresh("EURUSD", "2026-10-09T20:55:00+00:00", "2026-10-10T12:00:00+00:00")
+    stale = _fresh("GBPUSD", "2026-10-07T15:00:00+00:00", "2026-10-07T16:00:00+00:00")
+    assert (in_break.status, weekend.status, stale.status) == ("FRESH", "CLOSED", "STALE")
+
+
+def test_smh_post_market_bars_are_not_future():
+    assert (
+        _fresh("SMH", "2026-10-08T23:55:00+00:00", "2026-10-09T00:05:00+00:00").status == "CLOSED"
+    )
+
+
+def test_thin_etf_without_extended_bars_is_complete_outside_regular_hours():
+    last_regular = "2026-10-07T19:55:00+00:00"  # 15:55 EDT, no post-market prints
+    assert _fresh("XLY", last_regular, "2026-10-08T01:00:00+00:00").status == "CLOSED"
+    assert _fresh("XLRE", last_regular, "2026-10-07T22:00:00+00:00").status == "CLOSED"
+    # a gap during the regular session is still a real problem
+    assert _fresh("XLY", "2026-10-07T14:00:00+00:00", "2026-10-07T15:00:00+00:00").status == "STALE"
+
+
+def test_valid_bar_slot_evaluates_the_generic_predicate():
+    # used to return the function object (always truthy): 16:55-16:59 CT is in the CME break
+    cal = market_timeline._calendar("CMES")
+    assert (
+        market_timeline._valid_bar_slot(cal, datetime.fromisoformat("2026-10-06T21:55:00+00:00"))
+        is False
+    )
+
+
+class _Saturday(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        value = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
+        return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+
+def test_run_skips_closed_markets_that_already_have_their_final_bar(tmp_path, monkeypatch):
+    path = tmp_path / "skip.db"
+    conn = db.get_conn(path, allow_init=True)
+    market_timeline._store(conn, "SPY", "YAHOO", [_bar("2026-10-09T23:55:00+00:00")])
+    conn.commit()
+    conn.close()
+    calls = []
+    monkeypatch.setattr(market_timeline, "datetime", _Saturday)
+    monkeypatch.setattr(
+        market_timeline.yahoo, "fetch_intraday", lambda t, **k: calls.append(t) or []
+    )
+    monkeypatch.setattr(market_timeline, "collect_okx_market", lambda _path: {})
+    assert market_timeline.run(str(path), only="SPY")["SPY"] == 0
+    market_timeline.run(str(path), only="BTCUSD")  # crypto never closes
+    assert calls == ["BTC-USD"]
+
+
+def test_unkeyed_symbol_skips_the_fallback_without_noise(tmp_path, monkeypatch):
+    monkeypatch.delenv("EODHD_API_TOKEN", raising=False)
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
+    monkeypatch.setattr(market_timeline, "datetime", _FixedDateTime)
+    monkeypatch.setattr(market_timeline.yahoo, "fetch_intraday", lambda _t, **k: [])
+    monkeypatch.setattr(market_timeline, "collect_okx_market", lambda _path: {})
+    result = market_timeline.run(str(tmp_path / "tnx.db"), only="TNX")
+    conn = db.get_conn(tmp_path / "tnx.db", allow_init=True)
+    targets = [r[0] for r in conn.execute("SELECT target FROM fetch_log")]
+    conn.close()
+    assert result["TNX"] == -1
+    assert targets == ["TNX:YAHOO:5m"]  # no FALLBACK row every 5 minutes
+
+
+def test_yahoo_error_is_logged_with_its_cause(tmp_path, monkeypatch):
+    def boom(_t, **k):
+        raise TimeoutError("proxy down")
+
+    monkeypatch.setattr(market_timeline, "datetime", _FixedDateTime)
+    monkeypatch.setattr(market_timeline.yahoo, "fetch_intraday", boom)
+    monkeypatch.setattr(market_timeline, "collect_okx_market", lambda _path: {})
+    market_timeline.run(str(tmp_path / "err.db"), only="NQ1")
+    conn = db.get_conn(tmp_path / "err.db", allow_init=True)
+    status, err = conn.execute("SELECT status, error FROM fetch_log").fetchone()
+    conn.close()
+    assert (status, err) == ("ERROR", "TimeoutError")  # _safe_error: type only, never a URL
+
+
+def test_fmp_quota_hit_cools_fmp_down_across_runs(tmp_path, monkeypatch):
+    conn = db.get_conn(tmp_path / "cool.db", allow_init=True)
+    now = datetime(2026, 9, 22, 14, 0, tzinfo=UTC)
+    assert not market_timeline._fmp_cooling(conn, now)
+    market_timeline.log_collection(
+        conn, "market", "SPY:FMP:5m", None, 0, err="plan-limited: FMP x", status="SKIPPED"
+    )
+    conn.execute("UPDATE fetch_log SET ts = ?", ("2026-09-22T13:00:00+00:00",))
+    assert market_timeline._fmp_cooling(conn, now)
+    assert not market_timeline._fmp_cooling(conn, now + market_timeline.FMP_COOLDOWN)
+    conn.close()
+    monkeypatch.setenv("FMP_API_KEY", "test")
+    monkeypatch.setattr(market_timeline, "_fmp_blocked", True)
+    with pytest.raises(market_timeline.PlanLimited):
+        market_timeline._fmp_bars("SPY")

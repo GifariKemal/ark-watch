@@ -846,7 +846,15 @@ def _apply_migrations(conn: sqlite3.Connection, from_version: int = 0) -> None:
             + f"\nINSERT INTO schema_migrations(version, applied_at) VALUES ({version}, '{ts}');\n"
             "COMMIT;"
         )
-        conn.executescript(script)
+        try:
+            conn.executescript(script)
+        except sqlite3.DatabaseError:
+            # two writers (daemon, okxws, api) can start on the same old version;
+            # the loser blocks at BEGIN IMMEDIATE, then trips on the winner's work
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            if (_schema_version(conn) or 0) < version:
+                raise
 
 
 def insert_observations(conn: sqlite3.Connection, rows: list[tuple]) -> int:

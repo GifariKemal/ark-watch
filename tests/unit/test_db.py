@@ -50,6 +50,12 @@ def test_init_creates_all_tables_and_version(conn):
     )
 
 
+def test_migration_already_applied_by_a_concurrent_writer(conn):
+    # the race: this process read v33, another one applied v34 before our BEGIN IMMEDIATE
+    db._apply_migrations(conn, from_version=db.SCHEMA_VERSION - 1)
+    assert db._schema_version(conn) == db.SCHEMA_VERSION and not conn.in_transaction
+
+
 def test_pragma_pack(conn):
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 10000

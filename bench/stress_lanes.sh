@@ -37,30 +37,32 @@ PY
 # API readers: uvicorn on the same DB + 4 concurrent clients
 ARKWATCH_DB=$DB ARKWATCH_API_KEY=stress-key-0123456789abcdef0123456789 .venv/bin/uvicorn arkwatch.server.app:app --port 8011 >/tmp/api.log 2>&1 &
 API=$!
-sleep 5
+# the API applies pending migrations at startup (v34 indexes on a 100 MB copy): wait for it
+until .venv/bin/python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8011/v1/health', timeout=2)" 2>/dev/null; do sleep 1; done
 .venv/bin/python - <<PY &
 import time, urllib.request, urllib.error, statistics
 from concurrent.futures import ThreadPoolExecutor
 end = time.time() + $DUR - 10
 paths = ["/v1/regime", "/v1/freshness", "/v1/signals?limit=200", "/v1/playbooks?limit=50", "/v1/odds", "/v1/sessions/NQ1/levels", "/v1/health"]
-lat, err = [], 0
+lat, err = [], {}
 def hit(p):
     req = urllib.request.Request("http://127.0.0.1:8011" + p, headers={"x-arkwatch-key": "stress-key-0123456789abcdef0123456789"})
     t = time.perf_counter()
     try:
-        urllib.request.urlopen(req, timeout=30).read(); return (time.perf_counter() - t) * 1000, 0
-    except Exception:
-        return (time.perf_counter() - t) * 1000, 1
+        urllib.request.urlopen(req, timeout=30).read(); return (time.perf_counter() - t) * 1000, None
+    except Exception as ex:
+        return (time.perf_counter() - t) * 1000, f"{type(ex).__name__} {getattr(ex, 'code', '')}"
 i = 0
 with ThreadPoolExecutor(4) as ex:
     while time.time() < end:
         for ms, e in ex.map(hit, [paths[(i + k) % len(paths)] for k in range(8)]):
-            lat.append(ms); err += e
+            lat.append(ms)
+            if e: err[e] = err.get(e, 0) + 1
         i += 8
 lat.sort()
 print(f"api requests={len(lat)} errors={err} p50={lat[len(lat)//2]:.1f}ms p95={lat[int(.95*len(lat))]:.1f}ms p99={lat[int(.99*len(lat))]:.1f}ms max={lat[-1]:.1f}ms")
 PY
-wait %1 %2 %3 %4 %5 %6
+wait %1 %2 %3 %4 %5 %7  # not %6: uvicorn never exits on its own
 kill $API 2>/dev/null
 echo "integrity: $(.venv/bin/python -c "import sqlite3; print(sqlite3.connect('$DB').execute('PRAGMA integrity_check').fetchone()[0])")"
 for f in /tmp/*.fail.*; do [ -f "$f" ] && { echo "--- $f"; grep -iE "error|locked|Traceback" "$f" | head -5; }; done

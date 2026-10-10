@@ -211,6 +211,10 @@ def test_lane_survives_a_failing_job(monkeypatch):
     assert len(n) == 3
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="NTFS refuses concurrent os.replace onto one target; prod is Linux",
+)
 def test_atomic_write_from_many_threads(tmp_path):
     import threading
 

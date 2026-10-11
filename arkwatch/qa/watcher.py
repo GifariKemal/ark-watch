@@ -38,6 +38,10 @@ except Exception:
 VIX_BACKWARDATION_RATIO = float(_PS.get("vix_backwardation_ratio", 1.0))
 HY_EXTREME_PCT_LOW = int(_PS.get("hy_extreme_pct_low", 10))
 HY_EXTREME_PCT_HIGH = int(_PS.get("hy_extreme_pct_high", 90))
+CREDIT_DIV_WINDOW = int(_PS.get("credit_div_window_obs", 5))
+CREDIT_DIV_HY_BP = float(_PS.get("credit_div_hy_bp", 50))
+CREDIT_DIV_IG_BP = float(_PS.get("credit_div_ig_bp", 20))
+CREDIT_DIV_EQ_MIN_PCT = float(_PS.get("credit_div_equity_min_pct", 0.0))
 # funding_extreme_bps orphan load REMOVED 2026-09-17 (round-2: Bybit retired,
 # no consumer; the yaml key stays for provenance)
 COPPER_DRAIN_20D_PCT = float(_PS.get("copper_drain_20d_pct", -0.15))
@@ -303,6 +307,49 @@ def _fire(
     # The row stays 'pending'; send_pending_alerts (run right after check_all in main and
     # on every watch cycle) broadcasts it to every active channel.
     return True
+
+
+def credit_equity_divergence(conn) -> tuple[str, str, str, str] | None:
+    """(cooldown_key, condition, context, action) when an OAS widened past its threshold over the
+    window while ES1 did not fall over the same dates; None otherwise or when data is short."""
+    for sid, name, min_bp in (
+        ("FRED:BAMLH0A0HYM2", "HY", CREDIT_DIV_HY_BP),
+        ("FRED:BAMLC0A0CM", "IG", CREDIT_DIV_IG_BP),
+    ):
+        obs = conn.execute(
+            "SELECT ts, value FROM raw_observations WHERE series_id=? AND vintage_ts='realtime'"
+            " AND value IS NOT NULL ORDER BY ts DESC LIMIT ?",
+            (sid, CREDIT_DIV_WINDOW + 1),
+        ).fetchall()
+        if len(obs) <= CREDIT_DIV_WINDOW:
+            continue
+        (end_ts, end_v), (start_ts, start_v) = obs[0], obs[-1]
+        widen_bp = (end_v - start_v) * 100  # OAS is in percent
+        if widen_bp < min_bp:
+            continue
+
+        def close_on(ts: str) -> float | None:
+            r = conn.execute(
+                "SELECT close FROM instrument_prices WHERE symbol='ES1' AND ts<=?"
+                " AND close IS NOT NULL ORDER BY ts DESC, source LIMIT 1",
+                (ts[:10],),
+            ).fetchone()
+            return r[0] if r else None
+
+        es0, es1 = close_on(start_ts), close_on(end_ts)
+        if not es0 or es1 is None:
+            continue  # no equity print on or before the window start: cannot judge
+        es_pct = (es1 / es0 - 1) * 100
+        if es_pct < CREDIT_DIV_EQ_MIN_PCT:
+            continue  # equities already falling with credit: plain risk-off, not a divergence
+        return (
+            f"credit_equity_divergence@{end_ts[:10]}",
+            f"{name} OAS +{widen_bp:.0f}bp in {CREDIT_DIV_WINDOW} prints"
+            f" ({start_v:.2f}% to {end_v:.2f}%) while ES1 {es_pct:+.1f}%",
+            f"{start_ts[:10]} to {end_ts[:10]}: credit is repricing risk before equities",
+            "Treat equity strength with suspicion; tighten stops on index longs",
+        )
+    return None
 
 
 SCENARIO_EVENT_WINDOW_H = 12  # bar-time lookback: covers a late tracker run, not the backlog
@@ -983,6 +1030,12 @@ def check_all(conn) -> list[str]:
                             cooldown_key=f"ecb_conviction@{ecb_dates[0]}",
                         ):
                             fired.append("ecb_high_conviction")
+
+    # Credit vs equity divergence: spreads widen while ES holds up
+    with _trigger("credit_equity_divergence"):
+        div = credit_equity_divergence(conn)
+        if div and _fire(conn, "credit_equity_divergence", *div[1:], cooldown_key=div[0]):
+            fired.append("credit_equity_divergence")
 
     # Playbook scenarios: one push when a scenario fills, one when a filled trade closes
     with _trigger("scenario_events"):

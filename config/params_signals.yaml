@@ -61,6 +61,13 @@ hy_extreme_pct_low: 10          # HY percentile below = extreme tight
 hy_extreme_pct_high: 90         # HY percentile above = extreme wide
   # Stress kredit tinggi; zona kontrarian historis.
 
+credit_div_window_obs: 5        # observasi OAS (hari bursa) untuk delta divergensi
+credit_div_hy_bp: 50            # HY OAS melebar >= ini (bp) dalam window
+credit_div_ig_bp: 20            # IG OAS melebar >= ini (bp) dalam window
+credit_div_equity_min_pct: 0.0  # ES1 return di window yang sama >= ini = ekuitas belum ikut
+  # Kredit reprice risk sebelum ekuitas: spread melebar saat ES datar/naik ("2007-style").
+  # Ide dari SunFish98/MacroDashboard (default HY 50 bp, BBB 20 bp, 5 hari bursa).
+
 funding_extreme_bps: 5          # |funding| above = extreme
   # |rate| > 0.05%/8h = sentimen leverage ekstrem (row harus fresh ≤2 hari).
 

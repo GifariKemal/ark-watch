@@ -52,7 +52,6 @@ import csv
 import io
 import re
 from datetime import datetime
-from typing import cast
 
 import requests
 
@@ -478,8 +477,9 @@ def _lw() -> dict[str, list[tuple[str, float]]]:
     # (row above the header) says 'Natural Rate' — the group label sits directly
     # above the US column (live-caught: grp_col+1 landed on CANADA's 1.76)
     rows = _estimates("hlw", "HLW Estimates")
-    # unchecked: header drift here surfaces as a TypeError, not a NyFedResearchError
-    hi = cast(int, _header_idx(rows))
+    hi = _header_idx(rows)
+    if hi is None:
+        raise NyFedResearchError("hlw: 'Date' header not found")
     groups = rows[hi - 1] if hi >= 1 else []
     rstar_col = next(
         (

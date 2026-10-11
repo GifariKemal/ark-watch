@@ -289,6 +289,20 @@ class TestLw:
         assert out["HLW_RSTAR"][-1] == ("2026-04-01", 1.0086)  # US, NOT Canada 1.7592
         assert out["LW_RSTAR"][0] == ("1961-01-01", 5.1057)
 
+    def test_hlw_header_drift_is_a_clear_error_not_a_typeerror(self, tmp_path, monkeypatch):
+        import io
+
+        files = _lw_wb(tmp_path)
+        wb = openpyxl.Workbook()
+        wb.active.title = "HLW Estimates"
+        wb.active.append(["Quarter", "US"])  # the 'Date' header renamed upstream
+        buf = io.BytesIO()
+        wb.save(buf)
+        files["hlw"] = buf.getvalue()
+        monkeypatch.setattr(nr, "_download", lambda key: files[key])
+        with pytest.raises(nr.NyFedResearchError, match="hlw: 'Date' header not found"):
+            nr._lw()
+
 
 # --- routing + windows ----------------------------------------------------------------
 

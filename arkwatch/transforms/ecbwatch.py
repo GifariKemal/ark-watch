@@ -150,11 +150,11 @@ def _solve_minnorm(A: list[list[float]], b: list[float]) -> tuple[list[float], i
     return [float(x) for x in sol], int(rank)
 
 
-def _carry_fixings(fixings: dict[date, float], s: date, a: date) -> dict[date, float]:
+def _carry_fixings(fixings: dict[date, float], s: date, a: date) -> dict[date, float | None]:
     """Weekend-carry: Sat/Sun take the Friday fixing (settlement averages
     over calendar days). TARGET holidays are NOT carried in v1 (<0.5bp per
     quarter — documented limitation L5)."""
-    out: dict[date, float] = {}
+    out: dict[date, float | None] = {}
     for d in _daterange(s, a + timedelta(days=1)):
         if d in fixings:
             out[d] = fixings[d]

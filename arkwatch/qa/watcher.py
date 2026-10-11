@@ -999,7 +999,7 @@ def check_all(conn) -> list[str]:
 
                 def _dominant(r):
                     vals = {"cut": r[1], "hold": r[2], "hike": r[3]}
-                    return max(vals, key=vals.get)
+                    return max(vals, key=lambda k: vals[k])
 
                 act, prob = _dominant(cur), max(cur[1], cur[2], cur[3])
                 # (a) flip: dominant action changed vs the previous snapshot

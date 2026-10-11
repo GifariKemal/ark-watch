@@ -61,7 +61,7 @@ def compute_book_risk(conn: sqlite3.Connection, *, now: datetime | None = None) 
                 "ref_price": ref,
                 "stop": stop,
                 "target": target,
-                "risk_pct": round(100 * risk / ref, 4) if ref else None,
+                "risk_pct": round(100 * risk / ref, 4) if ref and risk is not None else None,
                 "reward_to_risk": round(abs(target - ref) / risk, 2) if risk else None,
                 "age_hours": round((now - parse_as_of(created)).total_seconds() / 3600, 2),
                 "expired": expiry is not None and now >= expiry,

@@ -83,7 +83,7 @@ def _identity_checks(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
     dffii = _latest(conn, "FRED:DFII10")
     dgs10 = _latest(conn, "FRED:DGS10")
     t10yie = _latest(conn, "FRED:T10YIE")
-    if all([dffii, dgs10, t10yie]):
+    if dffii and dgs10 and t10yie:
         implied_ry = dgs10[1] - t10yie[1]
         diff = abs(dffii[1] - implied_ry)
         ok = "✓" if diff <= 0.25 else f"✗ Δ={diff:.3f}"
@@ -98,7 +98,7 @@ def _identity_checks(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
     # 3. Net-liq identity: WALCL ≈ WRESBAL + RRP + TGA + other
     walcl = _latest(conn, "FRED:WALCL")
     wresbal = _latest(conn, "FRED:WRESBAL")
-    if all([walcl, wresbal]):
+    if walcl and wresbal:
         diff = walcl[1] - wresbal[1]
         results.append(
             (

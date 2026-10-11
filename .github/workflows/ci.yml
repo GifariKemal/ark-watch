@@ -31,6 +31,8 @@ jobs:
         run: |
           uv run ruff check arkwatch tests
           uv run ruff format --check arkwatch tests
+      - name: Type check
+        run: uv run --with pyright==1.1.408 pyright
       - name: Tests
         run: uv run pytest -q -p no:cacheprovider
 

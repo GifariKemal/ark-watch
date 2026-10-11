@@ -588,9 +588,9 @@ def compute_fedwatch(conn) -> list[dict]:
                     "official",
                     # Official parser reports percent 0-100; the table
                     # convention is a 0-1 fraction (matching DIY)
-                    o.get("ease") / 100 if o.get("ease") is not None else None,
-                    o.get("hold") / 100 if o.get("hold") is not None else None,
-                    o.get("hike") / 100 if o.get("hike") is not None else None,
+                    o["ease"] / 100 if o.get("ease") is not None else None,
+                    o["hold"] / 100 if o.get("hold") is not None else None,
+                    o["hike"] / 100 if o.get("hike") is not None else None,
                     implied,
                 ),
             )

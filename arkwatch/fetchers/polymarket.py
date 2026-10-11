@@ -134,7 +134,9 @@ def select(raw: list, cfg: dict) -> list[dict]:
     picked: dict[str, list[dict]] = {}
     for m in raw:
         row = parse_market(m) if isinstance(m, dict) else None
-        topic = row and match_topic(row["question"], cfg)
+        if not row:
+            continue
+        topic = match_topic(row["question"], cfg)
         if topic and row["volume"] >= min_vol[topic]:
             picked.setdefault(topic, []).append({**row, "topic": topic})
     top_n = int(cfg.get("top_n", 3))

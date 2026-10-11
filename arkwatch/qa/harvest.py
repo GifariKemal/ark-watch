@@ -12,6 +12,7 @@ import argparse
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from .. import db
 from ..config import PROVIDER_ENV, PlanLimited, load_registry, missing_env
@@ -47,7 +48,7 @@ def _window_or_latest(
     window_err = None
     if callable(fw):
         try:
-            pts = fw(sid_full, days=10)
+            pts = cast(list[dict] | None, fw(sid_full, days=10))
         except Exception as ex:
             # review ronde-2 (P2): the fallback itself is correct, but a
             # PERSISTENTLY dead window path would silently re-freeze holes
@@ -58,7 +59,7 @@ def _window_or_latest(
     src = getattr(mod, "SOURCE", None) or prefix.rstrip(":")
     if pts:
         rows = [(sid_full, p["ts"], p["value"], src) for p in pts if p.get("value") is not None]
-        first_obj = rows and {"ts": rows[-1][1], "value": rows[-1][2]} or None
+        first_obj = {"ts": rows[-1][1], "value": rows[-1][2]} if rows else None
         return rows, first_obj, None
     cur = mod.fetch_latest(sid_full)
     rows = [(sid_full, cur["ts"], cur["value"], src)]

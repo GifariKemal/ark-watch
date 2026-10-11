@@ -117,7 +117,9 @@ def _snapshot_fresh(as_of: str) -> bool:
     return age <= SOMA_ALERT_MAX_AGE_DAYS
 
 
-def _obs_at_or_before(conn: sqlite3.Connection, sid: str, anchor: str) -> tuple[str, float] | None:
+def _obs_at_or_before(
+    conn: sqlite3.Connection, sid: str, anchor: str | None
+) -> tuple[str, float] | None:
     """(ts, value) of the latest realtime row at or before `anchor` date.
 
     Anchoring on the SOMA Wednesday keeps weekly Δs on one grid and survives

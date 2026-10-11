@@ -52,6 +52,7 @@ import csv
 import io
 import re
 from datetime import datetime
+from typing import cast
 
 import requests
 
@@ -112,7 +113,7 @@ def _month_start(month_end_iso: str) -> str:
 def _is_quarter_label(v) -> bool:
     """True for '26:Q2' text / datetime cells — False for footnote prose
     ('* 2026Q2 report includes a revision…' rides below the data, live 2026-09)."""
-    return isinstance(v, datetime) or (
+    return isinstance(v, datetime) or (  # pyright: ignore[reportReturnType] -- callers test truthiness
         isinstance(v, str) and re.match(r"^\s*\d{2,4}\s*[:\-]?\s*Q\s*\d\s*$", v, re.IGNORECASE)
     )
 
@@ -477,7 +478,8 @@ def _lw() -> dict[str, list[tuple[str, float]]]:
     # (row above the header) says 'Natural Rate' — the group label sits directly
     # above the US column (live-caught: grp_col+1 landed on CANADA's 1.76)
     rows = _estimates("hlw", "HLW Estimates")
-    hi = _header_idx(rows)
+    # unchecked: header drift here surfaces as a TypeError, not a NyFedResearchError
+    hi = cast(int, _header_idx(rows))
     groups = rows[hi - 1] if hi >= 1 else []
     rstar_col = next(
         (
@@ -521,7 +523,7 @@ def _mct() -> dict[str, list[tuple[str, float]]]:
             continue
         ts = _m_dy(parts[1])
         lo, pt, hi = _f(parts[2]), _f(parts[3]), _f(parts[4])
-        if None in (lo, pt, hi):
+        if lo is None or pt is None or hi is None:
             continue
         if not (lo <= pt <= hi):
             raise NyFedResearchError(

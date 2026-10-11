@@ -616,7 +616,7 @@ def classify_value_migration(
     prior_poc: float | None,
 ) -> dict[str, str]:
     """Classify the 6 classic day-to-day Value Area migration relationships."""
-    if None in (curr_vah, curr_val, prior_vah, prior_val):
+    if curr_vah is None or curr_val is None or prior_vah is None or prior_val is None:
         return {
             "relationship": "INSUFFICIENT_VALUE_DATA",
             "bias": "NEUTRAL",

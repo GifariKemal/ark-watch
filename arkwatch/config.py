@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -43,7 +44,7 @@ class PlanLimited(RuntimeError):
     """HTTP 402/429 from a plan-limited provider -> SKIPPED, not ERROR."""
 
 
-def _load_yaml(name: str) -> dict | list:
+def _load_yaml(name: str) -> Any:  # dict or list; each caller knows its file's shape
     # An empty or comment-only file safe_loads to None → an opaque
     # AttributeError in the caller; fail loudly with the file name instead
     with open(CONFIG_DIR / name, encoding="utf-8") as f:

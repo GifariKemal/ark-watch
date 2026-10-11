@@ -129,7 +129,9 @@ async def lifespan(app: FastAPI):
         app.state.probe.close()
 
 
-_ERR = {s: {"model": ErrorOut} for s in (400, 401, 404, 409, 422, 503)}
+_ERR: dict[int | str, dict[str, Any]] = {
+    s: {"model": ErrorOut} for s in (400, 401, 404, 409, 422, 503)
+}
 app = FastAPI(
     title="ark-watch API",
     version="1.0.0",

@@ -9,6 +9,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
+from typing import cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
@@ -213,7 +214,7 @@ def _cluster(conn, title: str) -> tuple[str, float]:
         if score > best_score:
             best, best_score = cluster_id, score
     cluster_id = (
-        best
+        cast(str, best)  # set whenever best_score > 0
         if best_score >= 0.70
         else hashlib.sha256(" ".join(sorted(tokens)).encode()).hexdigest()[:20]
     )
@@ -353,7 +354,7 @@ def _collect_gdelt_feed(conn, archive, transform, sql: str) -> tuple[int, int]:
 
 
 def _gdelt_fields(row: list[str], names: tuple[str, ...]) -> dict:
-    result = dict(zip(names, row[: len(names)], strict=False))
+    result: dict = dict(zip(names, row[: len(names)], strict=False))
     if len(row) > len(names):
         result["_extra_columns"] = row[len(names) :]
     return result

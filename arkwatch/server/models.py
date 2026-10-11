@@ -465,7 +465,7 @@ class SeriesPatchIn(_In):
 
 
 class JobIn(_In):
-    kind: JobKind
+    kind: JobKind  # pyright: ignore[reportInvalidTypeForm] -- Literal built from JOB_KINDS
 
 
 class CancelOut(BaseModel):

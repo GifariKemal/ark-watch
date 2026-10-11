@@ -89,7 +89,7 @@ def fetch_rss_feed(source_name: str, url: str, timeout: int = 10) -> list[dict]:
         from curl_cffi import requests as creq
 
         s = creq.Session(impersonate="chrome")
-        r = s.get(url, timeout=timeout, proxies=proxies)
+        r = s.get(url, timeout=timeout, proxies=proxies)  # pyright: ignore[reportArgumentType] -- {http, https} dict is a ProxySpec
         if r.status_code == 200:
             data = r.content
         elif r.status_code in (404, 410):  # gone for any client: a second request only adds load

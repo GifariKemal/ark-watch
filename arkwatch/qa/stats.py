@@ -18,7 +18,7 @@ def wilson_ci(wins: int, n: int, alpha: float = 0.05) -> tuple[float, float]:
     from statsmodels.stats.proportion import proportion_confint
 
     lo, hi = proportion_confint(wins, n, alpha=alpha, method="wilson")
-    return float(lo), float(hi)
+    return float(lo), float(hi)  # pyright: ignore[reportArgumentType] -- scalars for scalar input
 
 
 def binom_pvalue_vs_base_rate(wins: int, n: int, base_rate: float) -> float:

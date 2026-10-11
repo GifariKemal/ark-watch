@@ -136,7 +136,7 @@ def _growth_rows() -> list[tuple[str, dict[str, float]]]:
             if not isinstance(y, (int, float)) or not isinstance(q, (int, float)):
                 continue
             rec = {
-                header[i]: float(row[i])
+                header[i]: float(row[i])  # pyright: ignore[reportArgumentType] -- isinstance-filtered below
                 for i in range(2, len(header))
                 if header[i] and isinstance(row[i], (int, float))
             }

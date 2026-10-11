@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import UTC, date, datetime, timedelta
+from typing import cast
 
 from .brief import _STALE_DAYS
 
@@ -81,7 +82,8 @@ def recession_snapshot(conn: sqlite3.Connection) -> dict:
         if a is None
         else (date.fromisoformat(a[0]) - timedelta(days=ANXIOUS_FORECAST_LEAD_DAYS)).isoformat()
     )
-    out["anxious_pct"] = None if a is None or _age(a_eff) > ANXIOUS_STALE_DAYS else a[1]
+    # a_eff is set whenever a is
+    out["anxious_pct"] = None if a is None or _age(cast(str, a_eff)) > ANXIOUS_STALE_DAYS else a[1]
     out["anxious_ts"] = None if a is None else a[0]
     s = _latest(conn, SAHM)
     out["sahm"] = None if s is None or _age(s[0]) > SAHM_STALE_DAYS else s[1]

@@ -120,8 +120,8 @@ def _parse_fed_funds_median(text: str) -> dict[str, float]:
         if v is not None:
             out[yr] = v
     # legacy longer-run inference — see the note above (inert on live format)
-    if len(vals) > len(years) and vals[len(years)] is not None:
-        out["longer"] = vals[len(years)]
+    if len(vals) > len(years) and (longer := vals[len(years)]) is not None:
+        out["longer"] = longer
     return out
 
 

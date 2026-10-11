@@ -131,6 +131,7 @@ def run_horizon_backtest(
         n_eff = stats.effective_n([float(t["win"]) for t in cell], sessions)
         # the binomial test uses the session-deflated sample, not raw n
         k_eff = round(wins * n_eff / len(cell))
+        assert base_rate is not None  # the grid is empty when there are no trades
         rec.update(
             status="tested",
             n_sessions=len(set(sessions)),

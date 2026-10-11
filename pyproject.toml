@@ -69,3 +69,8 @@ ignore = [
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.pyright]
+include = ["arkwatch"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"

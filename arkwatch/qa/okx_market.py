@@ -134,7 +134,8 @@ def _snapshot(
     saved = 0
     for row in rows:
         raw_ts = row.get("ts")
-        stamp = _stamp(raw_ts or row.get("fundingTime") or row.get("nextFundingTime"))
+        # a row with no stamp at all raises; the caller logs that endpoint as failed
+        stamp = _stamp(raw_ts or row.get("fundingTime") or row.get("nextFundingTime"))  # pyright: ignore[reportArgumentType]
         if raw_ts:
             age = datetime.now(UTC) - datetime.fromtimestamp(int(raw_ts) / 1000, UTC)
             if age > timedelta(minutes=10) or age < -timedelta(minutes=1):
@@ -275,15 +276,12 @@ def collect(db_path: str) -> dict[str, int]:
                     log_collection(
                         conn, "okx_market", f"OKX:{instrument}:{name}", None, 0, err=str(ex)
                     )
-            for name, fetch in (
-                ("orderbook-rest", _book_snapshot),
-                ("trades-rest-recovery", _trade_recovery),
-            ):
+            for name in ("orderbook-rest", "trades-rest-recovery"):
                 try:
                     count = (
-                        fetch(conn, instrument, trade_buffer)
+                        _trade_recovery(conn, instrument, trade_buffer)
                         if name == "trades-rest-recovery"
-                        else fetch(conn, instrument)
+                        else _book_snapshot(conn, instrument)
                     )
                     if count is None:
                         out[f"{instrument}:{name}"] = 0
@@ -291,8 +289,8 @@ def collect(db_path: str) -> dict[str, int]:
                             conn, "okx_market", f"OKX:{instrument}:{name}", None, 0, status="OK"
                         )
                         continue
-                    degraded = isinstance(count, tuple)
-                    if degraded:
+                    degraded = False
+                    if isinstance(count, tuple):
                         count, capped = count
                         degraded = bool(capped)
                     out[f"{instrument}:{name}"] = count

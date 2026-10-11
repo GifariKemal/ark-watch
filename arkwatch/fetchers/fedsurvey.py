@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import html as _html
 import re
+from typing import cast
 
 import requests
 
@@ -59,7 +60,8 @@ def fetch_sloos(yyyymm: str | None = None) -> dict:
         if not urls:
             raise FedSurveyError("SLOOS: no surveys found")
         url = urls[0]
-        yyyymm = re.search(r"sloos-(\d{6})", url).group(1)
+        # url came from the listing regex, so this always matches
+        yyyymm = cast(str, re.search(r"sloos-(\d{6})", url).group(1))  # pyright: ignore[reportOptionalMemberAccess]
     else:
         url = f"{BASE}/data/sloos/sloos-{yyyymm}.htm"
 
@@ -115,7 +117,8 @@ def fetch_beige_book(yyyymm: str | None = None) -> dict:
         if not urls:
             raise FedSurveyError("Beige Book: no reports found")
         url = urls[0]
-        yyyymm = re.search(r"beigebook(\d{6})", url).group(1)
+        # url came from the listing regex, so this always matches
+        yyyymm = cast(str, re.search(r"beigebook(\d{6})", url).group(1))  # pyright: ignore[reportOptionalMemberAccess]
     else:
         url = f"{BASE}/monetarypolicy/beigebook{yyyymm}-summary.htm"
 
@@ -155,7 +158,8 @@ def fetch_scoos(yyyymm: str | None = None) -> dict:
         if not urls:
             raise FedSurveyError("SCOOS: no surveys found")
         url = urls[0]
-        yyyymm = re.search(r"scoos-(\d{6})", url).group(1)
+        # url came from the listing regex, so this always matches
+        yyyymm = cast(str, re.search(r"scoos-(\d{6})", url).group(1))  # pyright: ignore[reportOptionalMemberAccess]
     else:
         url = f"{BASE}/data/scoos/scoos-{yyyymm}.htm"
     text = _clean(_fetch(url))
@@ -183,7 +187,7 @@ def fetch_fsr() -> dict:
     import pymupdf
 
     doc = pymupdf.open(stream=r.content, filetype="pdf")
-    text = " ".join(page.get_text() for page in doc)
+    text = " ".join(page.get_text() for page in doc)  # pyright: ignore[reportArgumentType, reportCallIssue] -- no-arg get_text() is str
     doc.close()
     text = re.sub(r"\s+", " ", text).strip()
 
@@ -288,7 +292,7 @@ FRB_CHGDEL_SERIES = {
     "DEL_ALL": "chgoff_del_all_loans",
 }
 
-_chgdel_cache: list[dict] | None = None
+_chgdel_cache: list[tuple[str, str, float]] | None = None
 
 
 def _chgdel_rows() -> list[tuple[str, str, float]]:

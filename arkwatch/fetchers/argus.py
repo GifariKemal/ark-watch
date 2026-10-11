@@ -87,7 +87,8 @@ class Client:
                 self._ready = False
                 if attempt:
                     raise
-        msg = msgs[-1] if msgs else {}
+        # bound: the loop either breaks after the call or re-raises on the last attempt
+        msg = msgs[-1] if msgs else {}  # pyright: ignore[reportPossiblyUnboundVariable]
         res = msg.get("result")
         if not isinstance(res, dict) or res.get("isError"):
             raise RuntimeError(f"argus {tool}: {str(msg.get('error') or res)[:200]}")

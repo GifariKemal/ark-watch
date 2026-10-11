@@ -291,7 +291,7 @@ def generate_trading_playbook(
 
     # Systemic Net Liquidity: SOMA Fed Balance Sheet (WALCL) - TGA (WTREGEN) - RRP (RRPONTSYD)
     liq = [latest_before(conn, f"FRED:{s}", as_of_iso) for s in ("WALCL", "WTREGEN", "RRPONTSYD")]
-    net_liq_b = round((liq[0] - liq[1] - liq[2]) / 1000.0, 2) if None not in liq else None
+    net_liq_b = round((liq[0] - liq[1] - liq[2]) / 1000.0, 2) if None not in liq else None  # pyright: ignore[reportOperatorIssue] -- None-guarded
     friction_warnings = []
     tailwinds = []
 
@@ -314,7 +314,9 @@ def generate_trading_playbook(
     if yield_curve_spread is None:
         dgs10 = latest_before(conn, "FRED:DGS10", as_of_iso)
         dgs2 = latest_before(conn, "FRED:DGS2", as_of_iso)
-        yield_curve_spread = round(dgs10 - dgs2, 2) if None not in (dgs10, dgs2) else None
+        yield_curve_spread = (
+            round(dgs10 - dgs2, 2) if dgs10 is not None and dgs2 is not None else None
+        )
     # Sahm Rule Recession Indicator
     sahm_val = latest_before(conn, "FRED:SAHMREALTIME", as_of_iso)
     if sahm_val is not None and sahm_val >= 0.50:
@@ -685,7 +687,11 @@ def generate_trading_playbook(
     dxy_1h_chg = _get_1h_chg("DXY")
     smh_1h_chg = _get_1h_chg("SMH")
     spy_1h_chg = _get_1h_chg("SPY")
-    semi_alpha = round(smh_1h_chg - spy_1h_chg, 2) if None not in (smh_1h_chg, spy_1h_chg) else None
+    semi_alpha = (
+        round(smh_1h_chg - spy_1h_chg, 2)
+        if smh_1h_chg is not None and spy_1h_chg is not None
+        else None
+    )
 
     # TPO VPOC vs TPOC Alignment
     if vpoc_tpoc_align.get("relationship") == "VPOC_ABOVE_TPOC":

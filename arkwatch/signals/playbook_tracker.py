@@ -347,7 +347,7 @@ def evaluate_active_playbooks(
     """Advance the state machine for all open scenarios using bars up to `as_of`."""
     target_dt = parse_as_of(as_of)
     target_ts = target_dt.isoformat(timespec="seconds")
-    stats = dict.fromkeys(
+    stats: dict[str, int] = dict.fromkeys(
         (
             "evaluated",
             "activated",
@@ -385,7 +385,9 @@ def evaluate_active_playbooks(
             continue  # evaluating an earlier instant must not rewrite a later live state
         expiry = _expiry(horizon, sess_id)
         expired = expiry is not None and target_dt >= expiry
-        end_ts = expiry.isoformat(timespec="seconds") if expired else target_ts
+        end_ts = (
+            expiry.isoformat(timespec="seconds") if expiry is not None and expired else target_ts
+        )
         sign = 1.0 if direction == "LONG" else -1.0
 
         if state == "PENDING_TRIGGER":

@@ -465,7 +465,7 @@ def compute_session_reference_levels(
         }
 
     # IPDA Data Ranges + Composite Value Area on the last N completed days
-    empty_range = dict.fromkeys(
+    empty_range: dict[str, Any] = dict.fromkeys(
         (
             "high",
             "low",

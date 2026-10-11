@@ -36,7 +36,7 @@ def fetch_transcript_text(date_iso: str) -> str:
     import pymupdf
 
     doc = pymupdf.open(stream=r.content, filetype="pdf")
-    text = " ".join(page.get_text() for page in doc)
+    text = " ".join(page.get_text() for page in doc)  # pyright: ignore[reportArgumentType, reportCallIssue] -- no-arg get_text() is str
     doc.close()
 
     # normalize: collapse whitespace, strip page markers

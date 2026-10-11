@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from .. import db
 
@@ -117,7 +118,7 @@ def _curve_legs(front: str, second: str) -> dict[str, dict]:
             continue
         dates = {leg["ts"] for leg in legs.values() if leg is not None}
         if len(dates) == 1:
-            return legs
+            return cast(dict[str, dict], legs)  # no None leg past the any() check
     raise EnergyError("no complete same-date curve from EODHD or Yahoo")
 
 

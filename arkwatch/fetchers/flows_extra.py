@@ -345,7 +345,7 @@ def fetch_lme_stocks(year: int, month: int, session=None) -> list[dict]:
                 ca_col = cells.index("CA")
                 break
             hdr_i = None  # header row without a CA column -> keep looking
-    if hdr_i is None or ca_col is None:
+    if hdr_i is None or ca_col is None or date_col is None:  # date_col is set with hdr_i
         raise RuntimeError(
             f"LME format drift: stocks-{_LME_MONTHS[month - 1]}-{year}.xlsx"
             f" has no BusinessDate/Stock Date + CA header"
@@ -357,9 +357,9 @@ def fetch_lme_stocks(year: int, month: int, session=None) -> list[dict]:
         d, v = row[date_col], row[ca_col]
         if d is None or v is None:
             continue
-        ts = d.date().isoformat() if hasattr(d, "date") else str(d)[:10]
+        ts = d.date().isoformat() if hasattr(d, "date") else str(d)[:10]  # pyright: ignore[reportAttributeAccessIssue] -- hasattr-guarded
         try:
-            out.append({"ts": ts, "copper_tonnes": float(v)})
+            out.append({"ts": ts, "copper_tonnes": float(v)})  # pyright: ignore[reportArgumentType] -- non-numeric cells hit the except
         except (TypeError, ValueError):
             continue
     return out
@@ -438,7 +438,7 @@ def fetch_lme_offwarrant(session=None) -> list[dict]:
     for href in links:
         m = re.search(r"-([a-z]+)-(\d{4})\.xlsx$", href, re.I)
         mm = _LME_OW_MONTHS.get(m.group(1).lower()) if m else None
-        if not mm:
+        if m is None or not mm:
             continue
         ts = f"{m.group(2)}-{mm}"
         r2 = s.get(f"https://www.lme.com{href}", timeout=(10, 60))
@@ -454,7 +454,7 @@ def fetch_lme_offwarrant(session=None) -> list[dict]:
             if "LOCATION" in cells and "CU" in cells:
                 hdr_i, cu_col = i, cells.index("CU")
                 break
-        if hdr_i is None:
+        if hdr_i is None or cu_col is None:  # cu_col is set with hdr_i
             continue
         regions: dict[str, float] = {}
         total = 0.0
@@ -555,7 +555,7 @@ def fetch_lme_owsr_daily(session=None) -> list[dict]:
             if "CU" in cells and "REGION" in cells:
                 hdr_i, cu_col = i, cells.index("CU")
                 break
-        if hdr_i is None:
+        if hdr_i is None or cu_col is None:  # cu_col is set with hdr_i
             continue
         regions: dict[str, float] = {}
         total = None
@@ -619,7 +619,7 @@ def fetch_lbma_vault() -> dict:
         if "gold" in cells and "silver" in cells:
             gold_col, silver_col = cells.index("gold"), cells.index("silver")
             break
-    if gold_col is None:
+    if gold_col is None or silver_col is None:  # set together
         raise RuntimeError("LBMA: Gold/Silver columns not found in header")
 
     months: list[dict] = []
@@ -635,7 +635,7 @@ def fetch_lbma_vault() -> dict:
         ts = ""
         if row[0] is not None:
             if hasattr(row[0], "strftime"):
-                ts = row[0].strftime("%Y-%m")
+                ts = row[0].strftime("%Y-%m")  # pyright: ignore[reportAttributeAccessIssue] -- hasattr-guarded
             else:
                 m = re.match(r"(\d{4}-\d{2})", str(row[0]).strip())
                 ts = m.group(1) if m else ""

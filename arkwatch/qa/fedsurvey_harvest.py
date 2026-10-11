@@ -93,7 +93,7 @@ def _nlp_tone(text: str, source_type: str) -> dict:
     # LLM output: a "high" / null / 250 score must not land in computed_signals as-is
     raw = tone.get("score") if isinstance(tone, dict) else None
     try:
-        score = float(raw) if not isinstance(raw, bool) else math.nan
+        score = float(raw) if not isinstance(raw, bool) else math.nan  # pyright: ignore[reportArgumentType] -- None hits the except
     except (TypeError, ValueError):
         score = math.nan
     if not math.isfinite(score):

@@ -113,9 +113,9 @@ class ProviderAttempt:
 
 @dataclass(frozen=True)
 class ProviderSelection:
-    source: str | None
+    source: str
     rows: list[dict]
-    freshness: Freshness | None
+    freshness: Freshness
     attempts: tuple[ProviderAttempt, ...]
 
 

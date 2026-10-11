@@ -82,7 +82,7 @@ def group_stats(
     losses = [r for r in rs if r < 0]
     avg_win = sum(wins) / len(wins) if wins else None
     avg_loss = sum(losses) / len(losses) if losses else None
-    be = -avg_loss / (avg_win - avg_loss) if wins and losses else None
+    be = -avg_loss / (avg_win - avg_loss) if avg_win is not None and avg_loss is not None else None
     wr_ci = list(wilson_ci(len(wins), n)) if n else None
     exp_ci = list(cluster_bootstrap_ci(rs, sessions, seed=0)) if n else None
     n_eff = round(effective_n(rs, sessions), 1) if n else 0.0

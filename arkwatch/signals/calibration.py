@@ -111,7 +111,7 @@ def summarize(p: list[float], o: list[int], *, bins: bool = True) -> dict:
     return out
 
 
-def at_horizon(snaps: list[tuple[datetime, float]], t_end: datetime, days: int) -> float | None:
+def at_horizon[T](snaps: list[tuple[datetime, T]], t_end: datetime, days: int) -> T | None:
     """Latest snapshot at or before t_end - days (snaps sorted ascending), None if absent."""
     cut = t_end - timedelta(days=days)
     best = None
@@ -294,7 +294,9 @@ def history_markets(n_max: int, now: datetime, stats: dict) -> list[dict]:
             break  # score what was collected so far
         for g in rows if isinstance(rows, list) else []:
             row = polymarket.parse_market(g) if isinstance(g, dict) else None
-            topic = row and polymarket.match_topic(row["question"], cfg)
+            if not row:
+                continue
+            topic = polymarket.match_topic(row["question"], cfg)
             won, t = _resolution(g) if topic else (None, None)
             if topic and row["volume"] >= min_vol[topic] and won is not None and t and t < now:
                 picked.append(

@@ -48,7 +48,8 @@ def _norm(row: dict) -> tuple[str, float]:
     ts = str(row.get("date") or "")[:10]
     if len(ts) == 10 and ts.isdigit():
         ts = datetime.fromtimestamp(int(ts), tz=UTC).date().isoformat()
-    return ts, float(raw)
+    # a row with no total raises TypeError here and fails the fetch loudly, by design
+    return ts, float(raw)  # pyright: ignore[reportArgumentType]
 
 
 def fetch_stablecoin_total() -> dict:

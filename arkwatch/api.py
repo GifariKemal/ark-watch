@@ -28,6 +28,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "arkwatch.db"
 
@@ -1399,11 +1400,15 @@ def enqueue_job(c: sqlite3.Connection, kind: str, *, actor: str) -> dict:
         if existing:
             job_id, changed = existing[0], False
         else:
-            job_id = c.execute(
-                "INSERT INTO jobs(kind, params_json, status, requested_by, created_at)"
-                " VALUES (?, '{}', 'queued', ?, ?)",
-                (kind, actor, _now()),
-            ).lastrowid
+            # lastrowid is only None before any INSERT on this cursor
+            job_id = cast(
+                int,
+                c.execute(
+                    "INSERT INTO jobs(kind, params_json, status, requested_by, created_at)"
+                    " VALUES (?, '{}', 'queued', ?, ?)",
+                    (kind, actor, _now()),
+                ).lastrowid,
+            )
             _audit(c, actor, "job.enqueue", str(job_id), {"kind": kind})
             changed = True
     return {"changed": changed, "job": job_detail(c, job_id)}

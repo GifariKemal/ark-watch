@@ -825,7 +825,7 @@ def generate_brief(conn: sqlite3.Connection, db_path: str) -> str:
             f"Policy: FedWatch {
                 fmt_fedwatch(
                     [
-                        type(
+                        type(  # pyright: ignore[reportArgumentType] -- duck-typed MeetingProb
                             'P',
                             (),
                             {

@@ -17,6 +17,7 @@ import argparse
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from .. import db
 from ..fetchers import fred
@@ -379,9 +380,9 @@ def episode_blok_c(
     if cpi and isinstance(cpi[0], tuple):
         from datetime import date
 
-        pts: list[tuple[int, float]] = []
+        pts: list[tuple[int, float] | None] = []
         prev_m: date | None = None
-        for ts, v in cpi:
+        for ts, v in cast(list[tuple[str, float]], cpi):
             try:
                 d = date.fromisoformat(str(ts)[:10])
             except ValueError:
@@ -411,7 +412,7 @@ def episode_blok_c(
         # semantics), not the longest (a pre-gap segment would be stale forever)
         cpi_vals = segs[-1] if segs else []
     else:
-        cpi_vals = list(cpi)  # type: ignore[assignment]
+        cpi_vals = list(cast(list[float], cpi))
 
     if len(cpi_vals) < 4:
         return "INSUFFICIENT", "none"

@@ -9,7 +9,7 @@ gaps longer than ~3 trading days mean permanently lost data.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:  # lazy at runtime: watcher imports this every 60 s, only sessions need it
     from curl_cffi import requests as creq
@@ -253,7 +253,7 @@ def fetch_voi(
     s = _session()
     if td_raw is None:
         latest = fetch_voi_dates()[0]
-        td_raw = latest["td_raw"]
+        td_raw = cast(str, latest["td_raw"])  # fetch_voi_dates skips empty dates
         report_type = latest["report_type"]
     if report_type is None:
         report_type = "Preliminary"
@@ -382,7 +382,7 @@ def futures_month_from_contract(contract_id: str) -> str | None:
 
 
 def parse_option_row(
-    row: dict, trade_date: str, product_id: int, product_code: str, contract_id: str
+    row: dict, trade_date: str | None, product_id: int, product_code: str, contract_id: str
 ) -> dict | None:
     """Normalize one OOF settlement row → option dict.
 

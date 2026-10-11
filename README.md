@@ -6,7 +6,7 @@ A personal US macro monitoring engine: automated daily data pipeline over 20+ fr
 
 - **Collects** 100+ economic series daily (FRED, NY Fed Markets API incl. SOMA per-CUSIP holdings, CME settlements & per-strike options, Treasury/fiscaldata auctions, regional Fed models, Bybit crypto positioning)
 - **Computes** signals: Fed net-liquidity decomposition, SOMA maturity walls, options put/call ratios & OI walls, primary-dealer positioning, auction demand percentiles (45 years of history), inflation risk premium, recession triangulation (curve model / SPF survey / Sahm rule)
-- **Delivers** a morning brief via Telegram, with a 16-trigger alert watcher running every 60 seconds
+- **Delivers** a morning brief and an alert watcher running every 60 seconds (macro and positioning triggers, credit vs equity divergence, playbook scenario fills and closes) to the phone via ntfy, Telegram or Discord
 
 ## Quickstart
 
@@ -29,14 +29,14 @@ python -m arkwatch verify    # data truth gate
 ```
 arkwatch/    fetchers (data sources) · signals (computation) · qa (jobs) · senders · daemon
 config/      series registry + signal thresholds (all YAML, provenance-commented)
-tests/       801 offline tests, zero warnings policy — no network needed
+tests/       1010 offline tests, zero warnings policy, no network needed
 fixtures/    captured API responses for parser tests
 ```
 
 ## Notes
 
-- Keys go in `.env` only (see `.env.example`) — never commit them.
-- Some sources are unofficial CDN endpoints; every source is degradable — one going down never breaks the brief.
+- Keys go in `.env` only (see `.env.example`); never commit them.
+- Some sources are unofficial CDN endpoints; every source is degradable, so one going down never breaks the brief.
 - Optional news source: set `ARGUS_TOKEN` (and `ARGUS_URL` if not the default) to add headlines from the self-hosted Argus MCP server; unset = SKIPPED.
 - This is a personal research tool, **not** investment advice.
 
@@ -44,10 +44,16 @@ fixtures/    captured API responses for parser tests
 
 `python -m arkwatch polymarket` (daemon: every hour at minute 20) reads the free Polymarket Gamma API (no key) and keeps the highest-volume active markets for the curated topics in `config/polymarket_queries.yaml` (Fed, recession, inflation, shutdown/debt ceiling, oil, gold, Bitcoin, S&P 500, Iran, Israel, Russia, China-Taiwan). Each market is a `computed_signals` row `polymarket:<slug>` whose value is the probability of the first outcome (usually "Yes", 0..1); question, outcomes, volume, end date and source URL sit in `inputs_json`. List them with `GET /v1/signals?prefix=polymarket:`. Markets below a topic's `min_volume` (default 50000 USD) are ignored.
 
+### Kalshi market probabilities
+
+`python -m arkwatch kalshi` (daemon: every hour at minute 25) reads Kalshi's public market data (no key) for `KXFEDDECISION`, `KXRECSSNBER` and `KXCPIYOY`: the nearest open event of each, its most-traded markets, stored as `kalshi:<ticker>` with the same topics as Polymarket. The price is the mid of a Yes quote no wider than 5 cents, else the last trade. Volume is in contracts (each pays $1), not USD. `GET /v1/odds` returns both venues with `venue` and `volume_unit`. Brier calibration stays Polymarket-only until Kalshi markets resolve after a stored snapshot.
+
 ### Phone push and dead-man switch
 
 - Push: set `NTFY_URL` to a long random ntfy topic URL (for example `https://ntfy.sh/arkwatch-<random>`) and subscribe to the same topic in the ntfy app. Alerts arrive as they fire (urgent ones at high priority), the morning brief as a short summary linking to the dashboard. `NTFY_TOKEN` is only for protected or self-hosted topics.
 - Delivery: the daemon `send` job stays paused until at least one channel (ntfy, Discord or Telegram) is configured; an unconfigured channel row ends as `skipped`, not `failed`.
+- Playbook scenarios: one push when a scenario fills (entry, stop, target, R:R) and one when a filled trade closes (outcome, exit, R). Keys are per scenario, so each event is sent once; only events within the last 12 hours of bar time are sent, so a first deploy does not replay the backlog.
+- Credit vs equity divergence: HY OAS widening 50bp or more (IG 20bp) over five prints while ES1 did not fall over the same dates. Thresholds live in `config/params_signals.yaml` (`credit_div_*`).
 - Dead-man switch: create a free healthchecks.io check (period 5 min, grace 10 min) and set `HEALTHCHECK_PING_URL` to its ping URL. The daemon pings it every 5 minutes while healthy and hits `<url>/fail` when a job fails, so a dead or hung daemon pages you by email.
 - The topic URL, token and ping URL are secrets: keep them in the Easypanel environment, they never appear in logs.
 
@@ -115,6 +121,8 @@ Dashboard reads (the Zonelab web dashboard replaces Telegram delivery):
 | `GET /v1/alerts/summary` | counts by status and priority for the last 24h and 7d, plus `newest_triggered_at` |
 | `GET /v1/briefs?limit=` | brief index: date, regime score, generated_at, chars |
 | `GET /v1/briefs/latest`, `GET /v1/briefs/{YYYY-MM-DD}` | one brief with its raw markdown (404 when missing) |
+| `GET /v1/odds` | Polymarket and Kalshi probabilities: question, probability, `venue`, `volume` with `volume_unit` (`usd` or `contracts`), end date, `url` |
+| `GET /v1/health/fetchers` | per fetcher: latest `fetch_log` row (status, target, redacted error) and run/failure counts over 8 days. Needs the key, unlike `/v1/health` |
 | `GET /v1/graph` | macro system graph: regime, 6 pillars, registry series, instruments, open playbooks, next-7d high/medium events |
 
 The graph uses stored data only. Series are the pillar inputs plus the active registry series of the same block letter (block H has no pillar and is left out). Instruments link to the regime core because no asset to pillar mapping exists in config. Caps: 300 series, 60 scenarios, 50 events, so at most 446 nodes. Cached like `/v1/regime`.

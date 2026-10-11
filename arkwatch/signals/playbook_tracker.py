@@ -23,6 +23,7 @@ reference column (CFD price = stored level + offset).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import sqlite3
@@ -228,19 +229,45 @@ def record_playbook_scenarios(
 
         scenario_uid = f"{symbol}-{session_id}-{horizon}-{sc_id}"
 
+        log = [
+            {
+                "ts_utc": now_utc,
+                "event": "CREATED_PENDING",
+                "details": f"Scenario created with trigger {trigger_price}, TP {target_p}, SL {inval_p}",
+            }
+        ]
+        prev = conn.execute(
+            "SELECT state, trigger_price, target_profit, invalidation_level, payload_json"
+            " FROM playbook_scenarios WHERE scenario_uid = ?",
+            (scenario_uid,),
+        ).fetchone()
+        if prev:
+            if prev[0] != "PENDING_TRIGGER":
+                continue  # left PENDING: its levels are what the trade was judged on
+            # a refresh keeps the original creation event; each level change is audited
+            with contextlib.suppress(TypeError, ValueError):
+                log = json.loads(prev[4]).get("decision_log") or log
+            changes = [
+                f"{name} {old} -> {new}"
+                for name, old, new in (
+                    ("trigger", prev[1], trigger_price),
+                    ("TP", prev[2], target_p),
+                    ("SL", prev[3], inval_p),
+                )
+                if old != new
+            ]
+            if changes:
+                log.append(
+                    {"ts_utc": now_utc, "event": "LEVELS_REVISED", "details": ", ".join(changes)}
+                )
+
         payload_json = json.dumps(
             {
                 "scenario": sc,
                 "catalysts": playbook_payload.get("catalysts", {}),
                 "multi_domain": playbook_payload.get("multi_domain", {}),
                 "amt_context": playbook_payload.get("amt_context", {}),
-                "decision_log": [
-                    {
-                        "ts_utc": now_utc,
-                        "event": "CREATED_PENDING",
-                        "details": f"Scenario created with trigger {trigger_price}, TP {target_p}, SL {inval_p}",
-                    }
-                ],
+                "decision_log": log,
             }
         )
 

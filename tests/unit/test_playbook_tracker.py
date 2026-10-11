@@ -914,3 +914,20 @@ def test_track_judges_a_pending_trigger_before_this_run_refreshes_its_levels(tmp
         "SELECT trigger_price FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
     ).fetchone()
     assert trig == (100.0,)
+
+
+def test_refresh_keeps_the_creation_event_and_logs_each_level_revision(tmp_path):
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    (uid,) = _record(conn, ("L", "LONG", 100.0, 95.0, 110.0))
+    _record(conn, ("L", "LONG", 100.0, 95.0, 110.0), as_of=_ts(5))  # unchanged: nothing logged
+    _record(conn, ("L", "LONG", 101.0, 95.0, 112.0), as_of=_ts(10))
+    log = json.loads(
+        conn.execute(
+            "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+        ).fetchone()[0]
+    )["decision_log"]
+    assert [(e["event"], e["ts_utc"]) for e in log] == [
+        ("CREATED_PENDING", _ts(0)),
+        ("LEVELS_REVISED", _ts(10)),
+    ]
+    assert log[1]["details"] == "trigger 100.0 -> 101.0, TP 110.0 -> 112.0"

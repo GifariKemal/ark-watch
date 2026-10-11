@@ -105,6 +105,7 @@ series:
   secondary_source: null
   tolerance: null
   calendar_family: "CONTINUING JOBLESS CLAIMS"
+  max_age_days: 21  # continuing claims refer to the week about 12 days before the Thursday release
   active: 1
 
 - series_id: FRED:IC4WSA
@@ -2773,6 +2774,7 @@ series:
   primary_source: "GEO:matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls (GPRD col)"
   secondary_source: null
   tolerance: null
+  max_age_days: 14  # weekly Monday file with up to 7 days of tail lag by design
   active: 1
   # live 2026-09-14 = 189.5 (ACT 246) vs monthly 117.9 — daily is the early-warning leg
 

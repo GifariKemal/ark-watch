@@ -74,6 +74,16 @@ class SeriesFreshnessOut(Freshness):
     last_ts: str | None = None
 
 
+class FetcherHealthOut(BaseModel):
+    fetcher: str
+    last_ts: str
+    last_status: str
+    last_target: str | None = None
+    last_error: str | None = None
+    runs: int
+    failed: int
+
+
 class FreshnessReport(BaseModel):
     summary: dict[str, int]
     items: list[SeriesFreshnessOut]

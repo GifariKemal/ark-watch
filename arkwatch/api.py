@@ -924,6 +924,39 @@ def list_news(
     return page
 
 
+FETCHER_FAIL_STATUSES = ("ERROR", "DEGRADED")
+
+
+def fetcher_health(c: sqlite3.Connection, *, days: int = 8) -> list[dict]:
+    """Per fetcher: its latest fetch_log row plus OK/failed counts over `days` (8 = weekly
+    sources still show). fetch_log errors are redacted at write time."""
+    since = (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
+    fail = ",".join("?" * len(FETCHER_FAIL_STATUSES))
+    rows = c.execute(
+        f"""
+        SELECT f.fetcher, f.ts, f.status, f.target, f.error, s.n, s.failed
+        FROM fetch_log f JOIN (
+            SELECT fetcher, MAX(id) AS mid, COUNT(*) AS n, SUM(status IN ({fail})) AS failed
+            FROM fetch_log WHERE ts >= ? GROUP BY fetcher
+        ) s ON f.id = s.mid
+        ORDER BY f.fetcher
+        """,
+        (*FETCHER_FAIL_STATUSES, since),
+    ).fetchall()
+    return [
+        {
+            "fetcher": r[0],
+            "last_ts": r[1],
+            "last_status": r[2],
+            "last_target": r[3],
+            "last_error": (r[4] or "")[:200] or None,
+            "runs": r[5],
+            "failed": r[6] or 0,
+        }
+        for r in rows
+    ]
+
+
 def data_freshness(c: sqlite3.Connection) -> list[dict]:
     """Freshness SLA per ACTIVE series: newest ts vs the registry-freq lag."""
     today = datetime.now(UTC).date()

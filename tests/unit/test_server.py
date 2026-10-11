@@ -125,6 +125,7 @@ AUTH_PATHS = (
     "/v1/graph",
     "/v1/playbook/scorecard",
     "/v1/risk/book",
+    "/v1/health/fetchers",
 )
 
 
@@ -789,3 +790,33 @@ def test_odds_serves_question_volume_and_end_date(client, seeded):
     ]  # volume desc; a market not refreshed for days is dropped
     assert body["items"][0]["outcomes"] == ["Yes", "No"]
     assert client.get("/v1/odds", headers={"x-arkwatch-key": ""}).status_code == 401
+
+
+def test_health_fetchers_latest_row_and_failure_count(seeded):
+    now = datetime.now(UTC)
+    c = db.get_conn(seeded)
+    c.executemany(
+        "INSERT INTO fetch_log(ts, fetcher, target, status, error) VALUES (?,?,?,?,?)",
+        [
+            ((now - timedelta(days=20)).isoformat(), "fred", "DGS10", "ERROR", "ancient"),
+            ((now - timedelta(hours=3)).isoformat(), "fred", "DGS10", "ERROR", "HTTP 500"),
+            ((now - timedelta(hours=1)).isoformat(), "fred", "DGS2", "OK", None),
+            ((now - timedelta(hours=2)).isoformat(), "cme", "GC", "DEGRADED", "x" * 300),
+        ],
+    )
+    c.commit()
+    c.close()
+    with TestClient(app) as cl:
+        r = cl.get("/v1/health/fetchers", headers={"x-arkwatch-key": KEY})
+    assert r.status_code == 200
+    by = {f["fetcher"]: f for f in r.json()}
+    assert by["fred"] == {
+        "fetcher": "fred",
+        "last_ts": by["fred"]["last_ts"],
+        "last_status": "OK",
+        "last_target": "DGS2",
+        "last_error": None,
+        "runs": 2,  # the 20-day-old row is outside the 8-day window
+        "failed": 1,
+    }
+    assert by["cme"]["last_status"] == "DEGRADED" and len(by["cme"]["last_error"]) == 200

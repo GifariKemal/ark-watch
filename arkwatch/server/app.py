@@ -50,6 +50,7 @@ from .models import (
     CancelOut,
     CotRowOut,
     ErrorOut,
+    FetcherHealthOut,
     FreshnessReport,
     GraphOut,
     HealthOut,
@@ -541,6 +542,12 @@ def outbox(
 def freshness(request: Request, c: Conn):
     items = cached(request, "freshness", (), lambda: api.data_freshness(c))
     return {"summary": dict(Counter(r["status"] for r in items)), "items": items}
+
+
+@v1.get("/health/fetchers", response_model=list[FetcherHealthOut], tags=["ops"])
+def health_fetchers(request: Request, c: Conn):
+    """Per-fetcher last run, status and redacted error. Authenticated, unlike /v1/health."""
+    return cached(request, "fetchers", (), lambda: api.fetcher_health(c))
 
 
 @v1.get("/jobs", response_model=Page[JobOut], tags=["ops"])

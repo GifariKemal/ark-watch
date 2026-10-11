@@ -690,16 +690,17 @@ def list_signals(
 
 
 def list_odds(c: sqlite3.Connection, *, max_age_days: int = 3) -> dict:
-    """Latest Polymarket market-implied probabilities with the fields a dashboard needs.
+    """Latest prediction-market probabilities (Polymarket and Kalshi) for a dashboard.
 
-    They are stored as computed_signals rows `polymarket:<slug>` (value = probability of the first
-    outcome, inputs_json = question/outcomes/volume/end_date). Markets not refreshed for
-    `max_age_days` have left the top list and are dropped; sorted by volume, biggest first."""
+    Stored as computed_signals rows `polymarket:<slug>` / `kalshi:<ticker>` (value = probability
+    of the first outcome, inputs_json = question/outcomes/volume/end_date/venue). Markets not
+    refreshed for `max_age_days` have left the top list and are dropped; sorted by volume."""
     floor = (datetime.now(UTC).date() - timedelta(days=max_age_days)).isoformat()
     rows = c.execute(
         "SELECT signal_id, MAX(ts), value, state, inputs_json, computed_at FROM computed_signals"
-        # range, not LIKE 'polymarket:%': the PK is searched (';' follows ':')
-        " WHERE signal_id >= 'polymarket:' AND signal_id < 'polymarket;'"
+        # ranges, not LIKE 'x:%': the PK is searched (';' follows ':')
+        " WHERE (signal_id >= 'polymarket:' AND signal_id < 'polymarket;')"
+        " OR (signal_id >= 'kalshi:' AND signal_id < 'kalshi;')"
         " GROUP BY signal_id HAVING MAX(ts) >= ?",
         (floor,),
     ).fetchall()
@@ -718,6 +719,9 @@ def list_odds(c: sqlite3.Connection, *, max_age_days: int = 3) -> dict:
                 "probability": value,
                 "outcomes": d.get("outcomes") or [],
                 "volume": d.get("volume"),
+                "volume_unit": d.get("volume_unit") or "usd",
+                "venue": d.get("venue") or "polymarket",
+                "url": d.get("url"),
                 "end_date": d.get("end_date"),
                 "as_of": ts,
                 "computed_at": computed_at,

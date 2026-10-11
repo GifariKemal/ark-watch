@@ -113,6 +113,9 @@ class OddsItemOut(BaseModel):
     probability: Num = None
     outcomes: list[str] = []
     volume: Num = None
+    volume_unit: Literal["usd", "contracts"] = "usd"
+    venue: Literal["polymarket", "kalshi"] = "polymarket"
+    url: str | None = None
     end_date: str | None = None
     as_of: str
     computed_at: str | None = None

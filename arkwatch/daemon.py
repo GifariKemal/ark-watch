@@ -136,6 +136,7 @@ SCHEDULE = [
         "Fed surveys + FOMC comms (SLOOS/BeigeBook/Minutes/PressConf NLP)",
     ),
     (0, 20, "hourly", "polymarket", "Polymarket crowd probabilities (macro/geo topics)"),
+    (0, 25, "hourly", "kalshi", "Kalshi market probabilities (Fed, recession, CPI)"),
 ]
 # The watcher is a recurring 60-second task, not part of SCHEDULE — the daemon
 # runs it as its own subprocess each cycle

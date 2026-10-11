@@ -35,6 +35,7 @@ PENGGUNAAN:
   breadth                        S&P 500 Constituent Breadth (504 saham)
   crypto                         Sinyal derivatif & likuidasi kripto (OKX/Bybit)
   polymarket                     Probabilitas crowd Polymarket untuk topik makro/geo
+  kalshi                         Probabilitas market Kalshi (Fed, resesi, CPI)
   calibration [--history N]      Brier score probabilitas Polymarket & FedWatch (1d/7d/30d)
 
 [3. INSPEKSI SISTEM & RISET DATA]
@@ -94,6 +95,10 @@ def main() -> int:
         from .fetchers import polymarket
 
         return polymarket.main(sys.argv[2:])
+    if cmd == "kalshi":
+        from .fetchers import kalshi
+
+        return kalshi.main(sys.argv[2:])
     if cmd == "calibration":
         from .signals import calibration
 

@@ -789,7 +789,40 @@ def test_odds_serves_question_volume_and_end_date(client, seeded):
         ),
     ]  # volume desc; a market not refreshed for days is dropped
     assert body["items"][0]["outcomes"] == ["Yes", "No"]
+    assert (body["items"][0]["venue"], body["items"][0]["volume_unit"]) == ("polymarket", "usd")
     assert client.get("/v1/odds", headers={"x-arkwatch-key": ""}).status_code == 401
+
+
+def test_odds_includes_kalshi_with_its_venue_and_unit(client, seeded):
+    import json as _json
+
+    c = db.get_conn(seeded, allow_init=True)
+    c.execute(
+        "INSERT INTO computed_signals(signal_id,ts,run_id,computed_at,value,state,inputs_json)"
+        " VALUES ('kalshi:kxfeddecision-26oct-h0',?,'r','x',0.84,'fed',?)",
+        (
+            _days_ago(0),
+            _json.dumps(
+                {
+                    "question": "Fed decision in Oct 2026?: Hold",
+                    "volume": 500.0,
+                    "volume_unit": "contracts",
+                    "venue": "kalshi",
+                    "url": "https://kalshi.com/markets/kxfeddecision",
+                }
+            ),
+        ),
+    )
+    c.commit()
+    c.close()
+    (m,) = client.get("/v1/odds").json()["items"]
+    assert (m["venue"], m["volume_unit"], m["topic"], m["probability"]) == (
+        "kalshi",
+        "contracts",
+        "fed",
+        0.84,
+    )
+    assert m["url"] == "https://kalshi.com/markets/kxfeddecision"
 
 
 def test_health_fetchers_latest_row_and_failure_count(seeded):

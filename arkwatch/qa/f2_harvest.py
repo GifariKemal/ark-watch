@@ -541,6 +541,19 @@ def compute_fedwatch(conn) -> list[dict]:
 
     probs = fw.compute(settlements, effr, anchor_date=anchor_date)
 
+    # Official cross-check (gray-zone → degradable: a fetch failure is silent,
+    # DIY remains primary). Flow: GET TreasuryWatch + a menu POST to the form
+    # action carrying insid/qsid; the view shows the nearest meeting plus the
+    # target-rate distribution. Fetched BEFORE the write transaction: the GET+POST
+    # can take ~80s and BEGIN IMMEDIATE would stall every other writer meanwhile.
+    official, qs_err = None, None
+    try:
+        from ..fetchers.quikstrike import fetch_fedwatch_official
+
+        official = fetch_fedwatch_official()
+    except Exception as ex:
+        qs_err = str(ex)[:140]
+
     conn.execute("BEGIN IMMEDIATE")
     for p in probs:
         conn.execute(
@@ -558,16 +571,8 @@ def compute_fedwatch(conn) -> list[dict]:
             ),
         )
 
-    # Official cross-check (gray-zone → degradable: a fetch failure is silent,
-    # DIY remains primary). Flow: GET TreasuryWatch + a menu POST to the form
-    # action carrying insid/qsid; the view shows the nearest meeting plus the
-    # target-rate distribution.
     official_rows = []
-    qs_err = None
     try:
-        from ..fetchers.quikstrike import fetch_fedwatch_official
-
-        official = fetch_fedwatch_official()
         for o in official or []:
             md = datetime.strptime(o["meeting_date"], "%d %b %Y").date().isoformat()
             implied = None

@@ -127,3 +127,16 @@ def test_gate_breach_writes_fetch_log_row(tmp_path, frozen, monkeypatch):
     assert n_ok == 0, "an in-tolerance gate must not write a row"
     assert len(rows) == 1 and rows[0][0] == "ERROR"
     assert "Δ48.0pp" in rows[0][1] and "official 10%" in rows[0][1]
+
+
+def test_official_fetch_runs_outside_the_write_transaction(tmp_path, frozen, monkeypatch):
+    """The QuikStrike GET+POST can take ~80s; holding BEGIN IMMEDIATE across it stalls every
+    other writer (watcher alerts, the market lane) for that long."""
+    import arkwatch.fetchers.quikstrike as qs
+
+    conn = _build_db(tmp_path)
+    seen = []
+    monkeypatch.setattr(qs, "fetch_fedwatch_official", lambda: seen.append(conn.in_transaction))
+    f2.compute_fedwatch(conn)
+    conn.close()
+    assert seen == [False]

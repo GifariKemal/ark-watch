@@ -312,13 +312,16 @@ def extract_news_intelligence(
             f"  · NLP: {len(failures)} failed calls, {invalid} invalid impact items skipped,"
             f" {ungrounded} ungrounded quotes downgraded to INFERRED"
         )
+    from ..qa.fetch_log import log_collection
+
     if failures and not processed_count:
         # the endpoint is down / every call failed: say so instead of a silent rc 0
-        from ..qa.fetch_log import log_collection
-
         msg = f"all {len(failures)} NLP calls failed; last: {failures[-1]}"
         print(f"  ! NLP: {msg}")
         log_collection(conn, "sentiment", "NLP", None, 0, err=msg, status="DEGRADED")
+    elif processed_count:
+        # a recovery must show too, or the last DEGRADED row reads as the current state forever
+        log_collection(conn, "sentiment", "NLP", None, processed_count)
     return processed_count
 
 

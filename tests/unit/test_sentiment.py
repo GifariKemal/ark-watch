@@ -364,3 +364,16 @@ def test_grounded_normalisation():
     assert sentiment._grounded("fed holds", "Fed Holds Rates", None)
     assert not sentiment._grounded("...", "t", "s")
     assert not sentiment._grounded("yields rise", "t", "Treasury yields decline")
+
+
+def test_a_successful_run_records_ok_so_a_recovery_clears_degraded(tmp_path, monkeypatch):
+    """Only total failure used to write fetch_log, so the last DEGRADED row read as current forever."""
+    conn = _one_article(tmp_path)
+    monkeypatch.setattr(
+        sentiment, "_call", lambda _cfg, **_kw: json.dumps({"asset_impacts": [_impact("NQ1")]})
+    )
+    assert sentiment.extract_news_intelligence(conn, limit=5, cfg={}) == 1
+    row = conn.execute(
+        "SELECT status, rows FROM fetch_log WHERE fetcher='sentiment' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row == ("OK", 1)

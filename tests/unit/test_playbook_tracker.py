@@ -880,3 +880,37 @@ def test_format_report_tables_and_small_n_warning():
     nq = next(line for line in out.splitlines() if line.startswith("NQ1"))
     assert "|     2 |    2 |   1 |    1 |  0 |     50% |  +1.0 | 2.00 | +0.50R" in nq
     assert "02:20" in out and "running" in out  # 06:20Z -> 02:20 ET (UTC-4)
+
+
+def test_track_judges_a_pending_trigger_before_this_run_refreshes_its_levels(tmp_path):
+    # run 1 records L at 100; price trades through 100; run 2 re-derives L at 104. The fill
+    # happened at the level that was live then, so run 2 must not move it out of reach first.
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    (uid,) = _record(conn, ("L", "LONG", 100.0, 95.0, 110.0))
+    _bars(conn, (5, 99.5, 100.5, 99.5, 100.2), (10, 100.2, 103.0, 99.0, 102.5))
+    run2 = {
+        "symbol": "NQ1",
+        "as_of": _ts(10),
+        "last_price": 102.5,
+        "session_id": "2026-10-05",
+        "scenarios": [
+            {
+                "id": "L",
+                "horizon": "INTRADAY",
+                "title": "L",
+                "direction": "LONG",
+                "trigger_condition": "test",
+                "trigger_price": 104.0,
+                "target_profit": 114.0,
+                "invalidation_level": 99.0,
+                "risk_reward_ratio": 2.0,
+            }
+        ],
+    }
+    playbook_tracker.track_scenarios(conn, run2, as_of=_ts(10))
+    r = _row(conn, uid)
+    assert (r["state"], r["entry"]) == ("ACTIVE", 100.0)
+    trig = conn.execute(
+        "SELECT trigger_price FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+    ).fetchone()
+    assert trig == (100.0,)

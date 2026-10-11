@@ -25,11 +25,7 @@ from .intraday import session_intraday_intelligence
 from .levels import compute_session_reference_levels
 from .news import news_velocity
 from .pillars import compute_dollar_smile, compute_pillars, compute_quadrant, compute_regime_score
-from .playbook_tracker import (
-    evaluate_active_playbooks,
-    get_playbook_performance_metrics,
-    record_playbook_scenarios,
-)
+from .playbook_tracker import get_playbook_performance_metrics, track_scenarios
 from .recession import recession_snapshot
 from .sentiment import (
     STANCE_THRESHOLD,
@@ -1478,12 +1474,10 @@ def generate_trading_playbook(
         },
     }
 
-    # Record scenarios into playbook_scenarios tracker table
-    record_playbook_scenarios(conn, out_dict, cfd_basis_offset=cfd_basis_offset)
+    track_scenarios(conn, out_dict, as_of=target_dt, cfd_basis_offset=cfd_basis_offset)
     for sc in all_scenarios:  # the single place the CFD basis is applied (display only)
         for k in ("trigger_price", "target_profit", "invalidation_level"):
             sc[k] = round(sc[k] + cfd_basis_offset, 2)
-    evaluate_active_playbooks(conn, as_of=target_dt)
     out_dict["performance_tracker"] = get_playbook_performance_metrics(conn, symbol=sym)
 
     return out_dict

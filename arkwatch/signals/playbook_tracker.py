@@ -288,6 +288,24 @@ def record_playbook_scenarios(
     return recorded_uids
 
 
+def track_scenarios(
+    conn: sqlite3.Connection,
+    playbook_payload: dict,
+    *,
+    as_of: datetime | str | None = None,
+    cfd_basis_offset: float = 0.0,
+) -> list[str]:
+    """Judge open scenarios first, then record this run's set, then judge again.
+
+    The record upsert refreshes a PENDING row's levels, so recording first would re-derive a
+    trigger that price already crossed and the fill would be missed (upstream 97e1443). The
+    second pass lets a newly recorded scenario see the bars after its creation."""
+    evaluate_active_playbooks(conn, as_of=as_of)
+    uids = record_playbook_scenarios(conn, playbook_payload, cfd_basis_offset=cfd_basis_offset)
+    evaluate_active_playbooks(conn, as_of=as_of)
+    return uids
+
+
 def evaluate_active_playbooks(
     conn: sqlite3.Connection,
     *,

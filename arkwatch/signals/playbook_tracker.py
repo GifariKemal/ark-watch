@@ -245,7 +245,7 @@ def record_playbook_scenarios(
             if prev[0] != "PENDING_TRIGGER":
                 continue  # left PENDING: its levels are what the trade was judged on
             # a refresh keeps the original creation event; each level change is audited
-            with contextlib.suppress(TypeError, ValueError):
+            with contextlib.suppress(TypeError, ValueError, AttributeError):
                 log = json.loads(prev[4]).get("decision_log") or log
             changes = [
                 f"{name} {old} -> {new}"
@@ -281,6 +281,12 @@ def record_playbook_scenarios(
                     cfd_basis_offset, payload_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_TRIGGER', ?, ?)
                 ON CONFLICT(scenario_uid) DO UPDATE SET
+                    -- revised levels exist from the revision on: bars before it must never fill,
+                    -- stop or gap-miss them (the decision log keeps the original creation)
+                    created_at_utc=CASE WHEN trigger_price IS NOT excluded.trigger_price
+                        OR target_profit IS NOT excluded.target_profit
+                        OR invalidation_level IS NOT excluded.invalidation_level
+                        THEN excluded.created_at_utc ELSE created_at_utc END,
                     target_profit=excluded.target_profit,
                     invalidation_level=excluded.invalidation_level,
                     trigger_price=excluded.trigger_price,

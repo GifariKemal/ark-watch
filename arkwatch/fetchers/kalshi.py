@@ -52,12 +52,17 @@ def probability(m: dict) -> float | None:
 
 def nearest_markets(events: list[dict], keep: int) -> list[dict]:
     """The open event closing first, its `keep` most-traded priced markets."""
-    live = [e for e in events if any(m.get("status") == "active" for m in e.get("markets") or [])]
+
+    def markets(e) -> list[dict]:
+        ms = e.get("markets") if isinstance(e, dict) else None
+        return [m for m in ms if isinstance(m, dict)] if isinstance(ms, list) else []
+
+    live = [e for e in events if any(m.get("status") == "active" for m in markets(e))]
     if not live:
         return []
-    ev = min(live, key=lambda e: min(m.get("close_time") or "9" for m in e["markets"]))
+    ev = min(live, key=lambda e: min(str(m.get("close_time") or "9") for m in markets(e)))
     rows = []
-    for m in ev["markets"]:
+    for m in markets(ev):
         p = probability(m)
         if m.get("status") != "active" or p is None or not m.get("ticker"):
             continue
@@ -146,6 +151,13 @@ def run(conn: sqlite3.Connection) -> int:
             rows += [{**r, "topic": topic} for r in nearest_markets(fetch_series(series), keep)]
         except KalshiError as ex:
             errors.append(str(ex))
+        except (
+            TypeError,
+            ValueError,
+            KeyError,
+            AttributeError,
+        ) as ex:  # a payload shape we do not know
+            errors.append(f"kalshi {series}: {type(ex).__name__}")
     n = store(conn, rows) if rows else 0
     err = "; ".join(errors) or None
     # some series failed but others stored: DEGRADED, not a dead source

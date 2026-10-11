@@ -908,19 +908,8 @@ def generate_brief(conn: sqlite3.Connection, db_path: str) -> str:
             _xv = xccy_rows[0]
             _stale = " ⚠stale" if getattr(_xv, "stale_days", 0) > 7 else ""
             lines.append(f"XCCY: {_xv.contract} {_xv.basis_bps:+.1f}bp{_stale}")
-    except Exception:
-        pass
-
-    # ECB implied path — the FedWatch counterpart; degradable
-    try:
-        from ..transforms.ecb_path import compute_ecb_path
-        from ..transforms.ecb_path import format_brief as fmt_ecb
-
-        ecb_rows = compute_ecb_path(conn)
-        if ecb_rows:
-            lines.append(fmt_ecb(ecb_rows))
-    except Exception:
-        pass
+    except Exception as ex:  # degradable, but never silent: a dead section must show in the log
+        print(f"⚠ xccy brief line failed: {str(ex)[:100]}")
 
     # CVOL — CME implied vol; consumed here so the daily harvest is not a
     # dead write. ROUND-2 fix: symbols publish on different trade dates —
@@ -1193,12 +1182,14 @@ def generate_brief(conn: sqlite3.Connection, db_path: str) -> str:
         from ..transforms.synthetic import compute_all_synthetic
 
         synth = compute_all_synthetic(conn)
-        if synth.get("XAGGBP"):
-            lines.append(f"  XAGGBP  : {synth['XAGGBP']['value']:.2f} (synthetic)")
-        if synth.get("XAUGBP"):
-            lines.append(f"  XAUGBP  : {synth['XAUGBP']['value']:.0f} (synthetic)")
-    except Exception:
-        pass
+        for cross, fmt in (("XAGGBP", ".2f"), ("XAUGBP", ".0f")):
+            x = synth.get(cross)
+            if x:
+                leg = x.get("metal_leg", "")
+                how = "synthetic" if leg.endswith("USD") else f"synthetic, COMEX {leg} / GBPUSD"
+                lines.append(f"  {cross}  : {format(x['value'], fmt)} ({how})")
+    except Exception as ex:
+        print(f"⚠ synthetic crosses brief line failed: {str(ex)[:100]}")
 
     # XAUUSD
     gold_biases = []

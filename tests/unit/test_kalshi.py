@@ -71,3 +71,28 @@ def test_run_stores_odds_rows_and_marks_a_partial_outage_degraded(tmp_path, monk
         "SELECT status, error FROM fetch_log WHERE fetcher='kalshi'"
     ).fetchone()
     assert status == "DEGRADED" and "KXCPIYOY: HTTP 503" in err
+
+
+def test_malformed_payloads_are_skipped_or_logged_never_fatal(tmp_path, monkeypatch):
+    good = {"series_ticker": "KXRECSSNBER", "title": "Recession?",
+            "markets": ["junk", _m("KXRECSSNBER-26", "Yes", "0.05", "0.07", "0.06", "9")]}  # fmt: skip
+    assert [r["ticker"] for r in kalshi.nearest_markets([None, {"markets": None}, good], 1)] == [
+        "KXRECSSNBER-26"
+    ]
+    conn = db.get_conn(tmp_path / "k.db", allow_init=True)
+
+    def fake(series):
+        if series == "KXFEDDECISION":
+            return [
+                {"markets": [{"status": "active", "close_time": 5}]}
+            ]  # ticker missing, int time
+        if series == "KXCPIYOY":
+            raise KeyError("events")
+        return [good]
+
+    monkeypatch.setattr(kalshi, "fetch_series", fake)
+    assert kalshi.run(conn) == 1
+    status, err = conn.execute(
+        "SELECT status, error FROM fetch_log WHERE fetcher='kalshi'"
+    ).fetchone()
+    assert status == "DEGRADED" and "kalshi KXCPIYOY: KeyError" in err

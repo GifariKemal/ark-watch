@@ -72,3 +72,15 @@ def test_backlog_outside_the_window_stays_quiet(tmp_path):
     conn, _ = _trade(tmp_path, (5, 99.5, 100.5, 99.5, 100.2), (10, 100.2, 111.0, 100.0, 110.5))
     late = T0 + timedelta(hours=watcher.SCENARIO_EVENT_WINDOW_H + 1)
     assert watcher.scenario_events(conn, now=late) == []
+
+
+def test_null_r_and_odd_payload_never_break_the_batch(tmp_path):
+    conn, uid = _trade(tmp_path, (5, 99.5, 100.5, 99.5, 100.2), (10, 100.2, 111.0, 100.0, 110.5))
+    conn.execute(
+        "UPDATE playbook_scenarios SET r_multiple = NULL, payload_json = '[1, 2]'"
+        " WHERE scenario_uid = ?",
+        (uid,),
+    )
+    ev = watcher.scenario_events(conn, now=T0 + timedelta(hours=1))
+    assert [e[0] for e in ev] == ["scenario_active", "scenario_closed"]
+    assert "n/aR" in ev[1][2] and "HIT_TARGET_WIN" in ev[1][2]  # outcome falls back to state

@@ -719,15 +719,16 @@ def list_odds(c: sqlite3.Connection, *, max_age_days: int = 3) -> dict:
                 "probability": value,
                 "outcomes": d.get("outcomes") or [],
                 "volume": d.get("volume"),
-                "volume_unit": d.get("volume_unit") or "usd",
-                "venue": d.get("venue") or "polymarket",
+                "volume_unit": "contracts" if d.get("volume_unit") == "contracts" else "usd",
+                "venue": "kalshi" if d.get("venue") == "kalshi" else "polymarket",
                 "url": d.get("url"),
                 "end_date": d.get("end_date"),
                 "as_of": ts,
                 "computed_at": computed_at,
             }
         )
-    items.sort(key=lambda m: -(m["volume"] or 0))
+    # Polymarket first, then Kalshi: USD volume and contract counts are not one ranking
+    items.sort(key=lambda m: (m["venue"] != "polymarket", -(m["volume"] or 0)))
     return {"generated_at": datetime.now(UTC).isoformat(timespec="seconds"), "items": items}
 
 
@@ -932,20 +933,21 @@ FETCHER_FAIL_STATUSES = ("ERROR", "DEGRADED")
 
 
 def fetcher_health(c: sqlite3.Connection, *, days: int = 8) -> list[dict]:
-    """Per fetcher: its latest fetch_log row plus OK/failed counts over `days` (8 = weekly
-    sources still show). fetch_log errors are redacted at write time."""
+    """Per fetcher: its latest fetch_log row ever (a fetcher dead for weeks still shows, with
+    runs 0), plus run and failure counts over the last `days`. Errors are redacted at write."""
     since = (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
     fail = ",".join("?" * len(FETCHER_FAIL_STATUSES))
     rows = c.execute(
         f"""
         SELECT f.fetcher, f.ts, f.status, f.target, f.error, s.n, s.failed
         FROM fetch_log f JOIN (
-            SELECT fetcher, MAX(id) AS mid, COUNT(*) AS n, SUM(status IN ({fail})) AS failed
-            FROM fetch_log WHERE ts >= ? GROUP BY fetcher
+            SELECT fetcher, MAX(id) AS mid, SUM(ts >= ?) AS n,
+                   SUM(ts >= ? AND status IN ({fail})) AS failed
+            FROM fetch_log GROUP BY fetcher
         ) s ON f.id = s.mid
         ORDER BY f.fetcher
         """,
-        (*FETCHER_FAIL_STATUSES, since),
+        (since, since, *FETCHER_FAIL_STATUSES),
     ).fetchall()
     return [
         {
@@ -954,7 +956,7 @@ def fetcher_health(c: sqlite3.Connection, *, days: int = 8) -> list[dict]:
             "last_status": r[2],
             "last_target": r[3],
             "last_error": (r[4] or "")[:200] or None,
-            "runs": r[5],
+            "runs": r[5] or 0,
             "failed": r[6] or 0,
         }
         for r in rows

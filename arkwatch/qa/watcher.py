@@ -366,7 +366,15 @@ def scenario_events(conn, now: datetime | None = None) -> list[tuple[str, str, s
         return f"{v:,.2f}" if isinstance(v, int | float) else "n/a"
 
     def at(ts):
-        return datetime.fromisoformat(ts).astimezone(wib).strftime("%d %b %H:%M WIB")
+        try:
+            dt = datetime.fromisoformat(ts)
+        except (TypeError, ValueError):
+            return str(ts)  # an unreadable stamp is shown as stored, never fatal for the batch
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=UTC)  # bar stamps are UTC; never host-local
+        return dt.astimezone(wib).strftime("%d %b %H:%M WIB")
+
+    def num(v, fmt):
+        return format(v, fmt) if isinstance(v, int | float) else "n/a"
 
     out = []
     rows = conn.execute(
@@ -394,27 +402,27 @@ def scenario_events(conn, now: datetime | None = None) -> list[tuple[str, str, s
         cfd,
         pj,
     ) in rows:
-        cfd_txt = f" (CFD {px(entry + cfd)})" if cfd else ""
+        cfd_txt = f" (CFD {px(entry + cfd)})" if cfd and isinstance(entry, int | float) else ""
         if trig_at and trig_at >= since:
             out.append(
                 (
                     "scenario_active",
                     f"scenario_active@{uid}",
                     f"{sym} {d} filled at {px(entry)}{cfd_txt}, {hz.lower()}: {title}",
-                    f"Stop {px(stop)}, target {px(tgt)}, R:R {rr:.1f}, bar {at(trig_at)}",
+                    f"Stop {px(stop)}, target {px(tgt)}, R:R {num(rr, '.1f')}, bar {at(trig_at)}",
                     "Advisory only: ark-watch never places trades. Track it in the Tracker tab",
                 )
             )
         if res_at and res_at >= since and state not in ("PENDING_TRIGGER", "ACTIVE"):
             try:
                 outcome = json.loads(pj).get("outcome") or state
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, AttributeError):
                 outcome = state
             out.append(
                 (
                     "scenario_closed",
                     f"scenario_closed@{uid}",
-                    f"{sym} {d} closed {outcome} at {px(exit_p)}, {r:+.2f}R",
+                    f"{sym} {d} closed {outcome} at {px(exit_p)}, {num(r, '+.2f')}R",
                     f"Entry {px(entry)}, {hz.lower()}: {title}, bar {at(res_at)}",
                     "Logged in the scorecard; one trade is not evidence of edge",
                 )
@@ -1040,8 +1048,9 @@ def check_all(conn) -> list[str]:
     # Playbook scenarios: one push when a scenario fills, one when a filled trade closes
     with _trigger("scenario_events"):
         for alert_type, key, condition, context, action in scenario_events(conn):
-            if _fire(conn, alert_type, condition, context, action, cooldown_key=key):
-                fired.append(alert_type)
+            with _trigger(key):  # one event failing to enqueue must not drop the rest
+                if _fire(conn, alert_type, condition, context, action, cooldown_key=key):
+                    fired.append(alert_type)
 
     # Alert-spam tripwire (round-2): the Telegram channel is the only active
     # delivery path — a dedup regression here spam-burned the user for 17

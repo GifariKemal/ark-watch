@@ -835,6 +835,7 @@ def test_health_fetchers_latest_row_and_failure_count(seeded):
             ((now - timedelta(hours=3)).isoformat(), "fred", "DGS10", "ERROR", "HTTP 500"),
             ((now - timedelta(hours=1)).isoformat(), "fred", "DGS2", "OK", None),
             ((now - timedelta(hours=2)).isoformat(), "cme", "GC", "DEGRADED", "x" * 300),
+            ((now - timedelta(days=30)).isoformat(), "lme", "CU", "ERROR", "dead for a month"),
         ],
     )
     c.commit()
@@ -853,3 +854,31 @@ def test_health_fetchers_latest_row_and_failure_count(seeded):
         "failed": 1,
     }
     assert by["cme"]["last_status"] == "DEGRADED" and len(by["cme"]["last_error"]) == 200
+    # a fetcher silent for longer than the window is shown, not dropped
+    assert (by["lme"]["last_status"], by["lme"]["runs"], by["lme"]["failed"]) == ("ERROR", 0, 0)
+
+
+def test_odds_sorts_polymarket_before_kalshi_and_coerces_unknown_venue(client, seeded):
+    import json as _json
+
+    c = db.get_conn(seeded, allow_init=True)
+    for sid, vol, extra in (
+        ("kalshi:k-big", 9e9, {"venue": "kalshi", "volume_unit": "contracts"}),
+        ("polymarket:p-small", 10.0, {}),
+        ("polymarket:p-odd", 5.0, {"venue": "<script>", "volume_unit": "gold"}),
+    ):
+        c.execute(
+            "INSERT INTO computed_signals(signal_id,ts,run_id,computed_at,value,state,inputs_json)"
+            " VALUES (?,?,'r','x',0.5,'fed',?)",
+            (sid, _days_ago(0), _json.dumps({"question": sid, "volume": vol, **extra})),
+        )
+    c.commit()
+    c.close()
+    r = client.get("/v1/odds")
+    assert r.status_code == 200
+    got = [(m["signal_id"], m["venue"], m["volume_unit"]) for m in r.json()["items"]]
+    assert got == [
+        ("polymarket:p-small", "polymarket", "usd"),
+        ("polymarket:p-odd", "polymarket", "usd"),
+        ("kalshi:k-big", "kalshi", "contracts"),
+    ]

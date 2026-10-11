@@ -931,3 +931,36 @@ def test_refresh_keeps_the_creation_event_and_logs_each_level_revision(tmp_path)
         ("LEVELS_REVISED", _ts(10)),
     ]
     assert log[1]["details"] == "trigger 100.0 -> 101.0, TP 110.0 -> 112.0"
+
+
+def test_a_revised_trigger_is_never_filled_by_a_bar_from_before_the_revision(tmp_path):
+    # created at 100; price reached 98.5 at minute 5 only; at minute 10 the playbook moves the
+    # trigger to 98 and price stays below it. The minute-5 bar predates the 98 level.
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    (uid,) = _record(conn, ("L", "LONG", 100.0, 95.0, 110.0))
+    _bars(conn, (5, 97.0, 98.5, 96.8, 97.2), (10, 97.2, 97.9, 97.0, 97.5))
+    run2 = {
+        "symbol": "NQ1",
+        "as_of": _ts(10),
+        "last_price": 97.5,
+        "session_id": "2026-10-05",
+        "scenarios": [
+            {
+                "id": "L",
+                "horizon": "INTRADAY",
+                "title": "L",
+                "direction": "LONG",
+                "trigger_condition": "test",
+                "trigger_price": 98.0,
+                "target_profit": 110.0,
+                "invalidation_level": 95.0,
+                "risk_reward_ratio": 2.0,
+            }
+        ],
+    }
+    playbook_tracker.track_scenarios(conn, run2, as_of=_ts(10))
+    assert _row(conn, uid)["state"] == "PENDING_TRIGGER"
+    created = conn.execute(
+        "SELECT created_at_utc FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
+    ).fetchone()[0]
+    assert created == _ts(10)  # the revised scenario exists from its revision on

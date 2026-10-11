@@ -320,8 +320,10 @@ def extract_news_intelligence(
         print(f"  ! NLP: {msg}")
         log_collection(conn, "sentiment", "NLP", None, 0, err=msg, status="DEGRADED")
     elif processed_count:
-        # a recovery must show too, or the last DEGRADED row reads as the current state forever
-        log_collection(conn, "sentiment", "NLP", None, processed_count)
+        # a recovery must show too, or the last DEGRADED row reads as the current state forever;
+        # partial failures ride along as a note on the OK row
+        note = f"{len(failures)} NLP calls failed; last: {failures[-1]}" if failures else None
+        log_collection(conn, "sentiment", "NLP", None, processed_count, err=note, status="OK")
     return processed_count
 
 

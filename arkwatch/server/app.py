@@ -95,6 +95,15 @@ def _err(status: int, code: str, error: str, detail: Any = None) -> JSONResponse
     return JSONResponse(status_code=status, content=body)
 
 
+def _warm_stats_imports() -> None:
+    import contextlib
+    import importlib
+
+    for mod in ("scipy.stats", "statsmodels.stats.proportion", "statsmodels.stats.multitest"):
+        with contextlib.suppress(ImportError):
+            importlib.import_module(mod)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     key = os.environ.get("ARKWATCH_API_KEY", "").strip()
@@ -111,6 +120,10 @@ async def lifespan(app: FastAPI):
     app.state.db_path = db.default_db_path()
     app.state.cache, app.state.cache_lock = {}, threading.Lock()
     app.state.probe, app.state.probe_lock = None, threading.Lock()
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        # qa/stats imports scipy/statsmodels lazily (CLI speed); loading them here, off the request
+        # path, saves the first scorecard or playbook request after a deploy about one second
+        threading.Thread(target=_warm_stats_imports, name="warm-stats", daemon=True).start()
     yield
     if app.state.probe is not None:
         app.state.probe.close()

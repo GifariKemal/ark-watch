@@ -13,6 +13,7 @@ hours default).
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -302,6 +303,76 @@ def _fire(
     # The row stays 'pending'; send_pending_alerts (run right after check_all in main and
     # on every watch cycle) broadcasts it to every active channel.
     return True
+
+
+SCENARIO_EVENT_WINDOW_H = 12  # bar-time lookback: covers a late tracker run, not the backlog
+
+
+def scenario_events(conn, now: datetime | None = None) -> list[tuple[str, str, str, str, str]]:
+    """(alert_type, cooldown_key, condition, context, action) for scenarios that filled or whose
+    filled trade closed within the window. Keys are per scenario, so each event pushes once."""
+    now = now or datetime.now(UTC)
+    since = (now - timedelta(hours=SCENARIO_EVENT_WINDOW_H)).isoformat(timespec="seconds")
+    wib = ZoneInfo("Asia/Jakarta")
+
+    def px(v):
+        return f"{v:,.2f}" if isinstance(v, int | float) else "n/a"
+
+    def at(ts):
+        return datetime.fromisoformat(ts).astimezone(wib).strftime("%d %b %H:%M WIB")
+
+    out = []
+    rows = conn.execute(
+        "SELECT scenario_uid, symbol, horizon, direction, title, entry_price, invalidation_level,"
+        " target_profit, risk_reward_ratio, triggered_at_utc, resolved_at_utc, state, exit_price,"
+        " r_multiple, cfd_basis_offset, payload_json FROM playbook_scenarios"
+        " WHERE entry_price IS NOT NULL AND (triggered_at_utc >= ? OR resolved_at_utc >= ?)",
+        (since, since),
+    ).fetchall()
+    for (
+        uid,
+        sym,
+        hz,
+        d,
+        title,
+        entry,
+        stop,
+        tgt,
+        rr,
+        trig_at,
+        res_at,
+        state,
+        exit_p,
+        r,
+        cfd,
+        pj,
+    ) in rows:
+        cfd_txt = f" (CFD {px(entry + cfd)})" if cfd else ""
+        if trig_at and trig_at >= since:
+            out.append(
+                (
+                    "scenario_active",
+                    f"scenario_active@{uid}",
+                    f"{sym} {d} filled at {px(entry)}{cfd_txt}, {hz.lower()}: {title}",
+                    f"Stop {px(stop)}, target {px(tgt)}, R:R {rr:.1f}, bar {at(trig_at)}",
+                    "Advisory only: ark-watch never places trades. Track it in the Tracker tab",
+                )
+            )
+        if res_at and res_at >= since and state not in ("PENDING_TRIGGER", "ACTIVE"):
+            try:
+                outcome = json.loads(pj).get("outcome") or state
+            except (TypeError, ValueError):
+                outcome = state
+            out.append(
+                (
+                    "scenario_closed",
+                    f"scenario_closed@{uid}",
+                    f"{sym} {d} closed {outcome} at {px(exit_p)}, {r:+.2f}R",
+                    f"Entry {px(entry)}, {hz.lower()}: {title}, bar {at(res_at)}",
+                    "Logged in the scorecard; one trade is not evidence of edge",
+                )
+            )
+    return out
 
 
 def check_all(conn) -> list[str]:
@@ -912,6 +983,12 @@ def check_all(conn) -> list[str]:
                             cooldown_key=f"ecb_conviction@{ecb_dates[0]}",
                         ):
                             fired.append("ecb_high_conviction")
+
+    # Playbook scenarios: one push when a scenario fills, one when a filled trade closes
+    with _trigger("scenario_events"):
+        for alert_type, key, condition, context, action in scenario_events(conn):
+            if _fire(conn, alert_type, condition, context, action, cooldown_key=key):
+                fired.append(alert_type)
 
     # Alert-spam tripwire (round-2): the Telegram channel is the only active
     # delivery path — a dedup regression here spam-burned the user for 17

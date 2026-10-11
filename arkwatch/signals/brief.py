@@ -387,7 +387,7 @@ def generate_brief(conn: sqlite3.Connection, db_path: str) -> str:
         datetime.fromisoformat(freshest).strftime("%d-%b") if freshest else now_et.strftime("%d-%b")
     )
     lines = [
-        f"=== US MACRO BRIEF — {now_wib.strftime('%a, %d %b %Y')} ===",
+        f"=== US MACRO BRIEF: {now_wib.strftime('%a, %d %b %Y')} ===",
         f"WIB {now_wib.strftime('%H:%M')} · data as of {data_per} ET",
         f"REGIME : {regime_label} (score {score:+.1f})",
         f"QUADRANT: {quadrant}",
@@ -395,9 +395,9 @@ def generate_brief(conn: sqlite3.Connection, db_path: str) -> str:
         f"Quality: {k_icon} {n_ok}/{n_total} healthy · {n_warn} watch · {n_fail} issues",
     ]
     if pct_bad > 25:
-        lines.append(f"⚠ {n_fail} series with issues — attachment data/health.csv")
+        lines.append(f"⚠ {n_fail} series with issues, attachment data/health.csv")
     if pct_bad > 40:
-        lines.append("✗ BRIEF DEGRADED — see health section")
+        lines.append("✗ BRIEF DEGRADED, see health section")
     lines.append("")
 
     # SOMA granularity — decomposes the Fed BS (WALCL) row: buckets, TIPS,
@@ -533,11 +533,11 @@ def generate_brief(conn: sqlite3.Connection, db_path: str) -> str:
                     # labeled 'risk context', not a direction predictor
                     if net > 20000:
                         lines.append(
-                            f"  {name:<10} Retl  net {net:+8,}  (retail long — risk context)"
+                            f"  {name:<10} Retl  net {net:+8,}  (retail long, risk context)"
                         )
                     elif net < -20000:
                         lines.append(
-                            f"  {name:<10} Retl  net {net:+8,}  (retail short — risk context)"
+                            f"  {name:<10} Retl  net {net:+8,}  (retail short, risk context)"
                         )
             # squeeze risk from concentration (mm row — see note above)
             if mm_row:
@@ -1182,7 +1182,7 @@ def generate_brief(conn: sqlite3.Connection, db_path: str) -> str:
     # Spread-share conviction (Gold — spread dominance = downweight)
     gold_ss = _spread_share_filter(conn, "088691")
     if gold_ss is not None and gold_ss > 0.25:
-        lines.append(f"  Gold     ⚠ spread share {gold_ss:.0%} — positioning quality reduced")
+        lines.append(f"  Gold     ⚠ spread share {gold_ss:.0%}, positioning quality reduced")
 
     # Silver 52wk gate
     if _silver_52wk_gate(conn):
@@ -1360,11 +1360,11 @@ def run(db_path: str) -> str:
         prev = conn.execute("SELECT markdown FROM brief_log ORDER BY date DESC LIMIT 1").fetchone()
         conn.close()
         if prev:
-            print("Sunday — brief not generated")
+            print("Sunday, brief not generated")
             return prev[0]
     elif now_wib.weekday() == 5 and today_row:  # Saturday — keep the 04:15 brief
         conn.close()
-        print("Saturday — positioning brief already published (04:15), not overwritten")
+        print("Saturday, positioning brief already published (04:15), not overwritten")
         return today_row[0]
     markdown = generate_brief(conn, db_path)
     pillars = compute_pillars(conn)

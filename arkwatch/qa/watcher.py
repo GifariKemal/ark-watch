@@ -456,7 +456,7 @@ def check_all(conn) -> list[str]:
                 "soma_roll_off",
                 f"SOMA roll-off 7d: ${soma_alert['rolling_off_7d_b']:.0f}B "
                 f"(as of {soma_alert['as_of_date']})",
-                "Treasury supply pressure — issues maturing this week",
+                "Treasury supply pressure, issues maturing this week",
                 "Watch curve steepening; consider reducing duration",
                 cooldown_key=f"soma_roll_off@{soma_alert['as_of_date']}",
             ):
@@ -473,7 +473,7 @@ def check_all(conn) -> list[str]:
                 conn,
                 "soma_specials_new",
                 f"{sp['n']} NEW issue(s) at the Fed 70% cap, ${sp['par_b']:.0f}B par ({cusips})",
-                "Fed owns nearly all free float of these issues — repo-special candidates",
+                "Fed owns nearly all free float of these issues, repo-special candidates",
                 "Watch specialness in repo; these issues can trade rich vs the curve",
                 cooldown_key=f"soma_specials_new@{sp['as_of_date']}",
             ):
@@ -487,9 +487,9 @@ def check_all(conn) -> list[str]:
             if _fire(
                 conn,
                 "soma_walcl_divergence",
-                f"WALCL Δ {wg['dwalcl_b']:+.0f}B vs SOMA Δ {wg['dsoma_b']:+.0f}B "
-                f"— gap {wg['gap_b']:+.0f}B (as of {wg['as_of_date']})",
-                "Beyond the historical ±$75B envelope — data integrity suspect (broken harvest?)",
+                f"WALCL Δ {wg['dwalcl_b']:+.0f}B vs SOMA Δ {wg['dsoma_b']:+.0f}B, "
+                f"gap {wg['gap_b']:+.0f}B (as of {wg['as_of_date']})",
+                "Beyond the historical ±$75B envelope, data integrity suspect (broken harvest?)",
                 "Verify soma harvest + WALCL fetch before trusting liquidity reads",
                 cooldown_key=f"soma_walcl_divergence@{wg['as_of_date']}",
             ):
@@ -514,19 +514,19 @@ def check_all(conn) -> list[str]:
         )
         if opt_alert:
             dir_txt = (
-                "put-side dominates — hedging demand up"
+                "put-side dominates, hedging demand up"
                 if opt_alert["direction"] == "PUT_HEAVY"
-                else "call-side dominates — one-sided complacency"
+                else "call-side dominates, one-sided complacency"
             )
             if _fire(
                 conn,
                 "options_pcr_extreme",
                 f"Gold options PCR {opt_alert['pcr']:.2f} vs {opt_alert['n_obs']}d range "
-                f"[{opt_alert['hist_min']:.2f}, {opt_alert['hist_max']:.2f}] "
-                f"— {opt_alert['direction']}",
+                f"[{opt_alert['hist_min']:.2f}, {opt_alert['hist_max']:.2f}], "
+                f"{opt_alert['direction']}",
                 f"Front-contract put/call OI ratio, {dir_txt} (daily positioning read "
                 "complementing the weekly COT)",
-                "Context, not a trade signal — cross-check COT gold MM z + price action",
+                "Context, not a trade signal, cross-check COT gold MM z + price action",
                 cooldown_key=f"options_pcr_extreme@{opt_alert['trade_date']}",
             ):
                 fired.append("options_pcr_extreme")
@@ -549,7 +549,7 @@ def check_all(conn) -> list[str]:
             if _fire(
                 conn,
                 "fx_swap_draw",
-                f"FX swap line draw{amt_txt} on {op_date} — {len(fxs_ops)} op(s) in 7d",
+                f"FX swap line draw{amt_txt} on {op_date}, {len(fxs_ops)} op(s) in 7d",
                 "Central banks drawing USD swap lines = global dollar-funding stress "
                 "(normally zero usage)",
                 "Urgent: check XCCY basis + repo/OIS spreads; de-risk USD-negative carry",
@@ -580,7 +580,7 @@ def check_all(conn) -> list[str]:
                     f"UST dealer inventory ${ust['value_musd'] * 1e-3:.0f}B, Δ4w "
                     f"{ust['delta_4w_musd'] * 1e-3:+.0f}B ({ust['delta_4w_pct']:+.1f}%) "
                     f"(as of {ust['asofdate']})",
-                    "Primary dealers shedding Treasury inventory fast — balance-sheet "
+                    "Primary dealers shedding Treasury inventory fast, balance-sheet "
                     "capacity tightening",
                     "Watch dealer-capacity proxies: repo specials, auction tails, new-issue concessions",
                     cooldown_key=f"dealer_stress@{ust['asofdate']}",
@@ -603,7 +603,7 @@ def check_all(conn) -> list[str]:
                 conn,
                 "fed_ops_resume",
                 f"Fed {family} desk resumes {side} ({op_date})",
-                f"An operation mix absent the prior {FED_OPS_RESUME_QUIET_DAYS}d is back — "
+                f"An operation mix absent the prior {FED_OPS_RESUME_QUIET_DAYS}d is back, "
                 "QT pace/direction signal",
                 "Cross-check the SOMA weekly_change trajectory + upcoming announcements",
                 cooldown_key=f"fed_ops_resume@{op_date}",
@@ -631,9 +631,9 @@ def check_all(conn) -> list[str]:
                 f"{fd_alert['term']} auction b/c {fd_alert['bid_to_cover']:.2f} = "
                 f"p{fd_alert['percentile']:.0f} of {fd_alert['n_history']} auctions "
                 f"({fd_alert['auction_date']})",
-                "Weak auction demand = absorption stress — the marginal buyer needed a "
+                "Weak auction demand = absorption stress, the marginal buyer needed a "
                 "concession; connects to the dealer-capacity story (see DLR line)",
-                "Context, not a trade signal — watch the next auctions' tails + dealer inventory",
+                "Context, not a trade signal, watch the next auctions' tails + dealer inventory",
                 # term in the key: 10Y and a fallback 5Y weak on the SAME
                 # auction date must not silence each other
                 cooldown_key=(f"auction_demand_weak@{fd_alert['term']}@{fd_alert['auction_date']}"),
@@ -704,7 +704,7 @@ def check_all(conn) -> list[str]:
                     conn,
                     "cot_broad_divergence",
                     f"{diverge_count}/4 financials: Lev vs AM in opposite directions",
-                    "A broad fast-money vs real-money split — resolution = volatility",
+                    "A broad fast-money vs real-money split, resolution = volatility",
                     "Watch for the breaking direction; reduce leverage until it is clear",
                     cooldown_key=f"cot_broad_divergence@{latest_cot}",
                 ):
@@ -734,7 +734,7 @@ def check_all(conn) -> list[str]:
                         f"cot_covering_{name.lower()}",
                         f"{name} {cat.upper()} net={net:+,} Δ{chg:+,}/w (COVERING)",
                         f"Large {cat.upper()} position being unwound rapidly",
-                        "Momentum fade — watch for a reversal",
+                        "Momentum fade, watch for a reversal",
                         cooldown_key=f"cot_covering_{name.lower()}@{latest_cot}",
                     ):
                         fired.append(f"cot_covering_{name.lower()}")
@@ -930,7 +930,7 @@ def check_all(conn) -> list[str]:
                 conn,
                 "alert_spam_tripwire",
                 f"Suppression regression suspected: {txt}",
-                "A cooldown_key delivered >2x in 7d — the dedup machinery itself is failing",
+                "A cooldown_key delivered >2x in 7d, the dedup machinery itself is failing",
                 "Check watcher cooldown keys + alert_deliveries before trusting any alert cadence",
                 # PERMANENT per offender: the historical rows stay in the 7d
                 # window for days — a windowed cooldown would re-announce the

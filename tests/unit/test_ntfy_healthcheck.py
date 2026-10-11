@@ -159,7 +159,7 @@ def test_ntfy_registered_and_unset_is_skipped(tmp_path, monkeypatch, no_channels
 
 
 BRIEF = (
-    "=== US MACRO BRIEF — Fri, 09 Oct 2026 ===\n"
+    "=== US MACRO BRIEF: Fri, 09 Oct 2026 ===\n"
     "WIB 07:00 · data as of 08-Oct ET\n"
     "REGIME : RISK-ON (score +1.4)\n"
     "QUADRANT: Goldilocks\n\n"

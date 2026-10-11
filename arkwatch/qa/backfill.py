@@ -256,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         conn = db.get_conn(args.db, allow_init=True)
         sync_registry(conn)
         if args.dry:
-            print("  (dry run — full parse, no writes)")
+            print("  (dry run, full parse, no writes)")
             by_label: dict[str, list] = {}
             for lb, ts, v in fedsurvey._chgdel_rows():
                 by_label.setdefault(lb, []).append((ts, v))
@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         conn = db.get_conn(args.db, allow_init=True)
         sync_registry(conn)
         if args.dry:
-            print("  (dry run — full parse, no writes)")
+            print("  (dry run, full parse, no writes)")
             for fam in nyfedresearch.FAMILY_PARSERS:
                 rows = nyfedresearch._family_rows(fam)
                 for k, v in sorted(rows.items()):

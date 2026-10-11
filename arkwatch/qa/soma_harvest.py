@@ -112,7 +112,7 @@ def harvest_soma(conn, holdings: list[dict] | None = None) -> dict:
         "rolling_off_90d": summary["rolling_off_90d"],
     }
     print(
-        f"  SOMA {out['as_of']}: {out['n_holdings']} CUSIPs ({out['n_new']} new) — "
+        f"  SOMA {out['as_of']}: {out['n_holdings']} CUSIPs ({out['n_new']} new), "
         f"total ${out['total_par'] / 1e9:,.1f}B · buy ${out['weekly_change'] / 1e9:+,.1f}B · "
         f"roll-off 7/30/90d ${out['rolling_off_7d'] / 1e9:,.1f}B/"
         f"${out['rolling_off_30d'] / 1e9:,.1f}B/${out['rolling_off_90d'] / 1e9:,.1f}B"
@@ -177,7 +177,7 @@ def harvest_agency(conn, holdings: list[dict]) -> dict:
     same pattern as harvest_soma."""
     summary = store_agency_week(conn, holdings)
     print(
-        f"  SOMA agency {summary['as_of_date']}: {summary['n_cusips']} CUSIPs — "
+        f"  SOMA agency {summary['as_of_date']}: {summary['n_cusips']} CUSIPs, "
         f"MBS ${summary['mbs'] / 1e9:,.1f}B · CMBS ${summary['cmbs'] / 1e9:,.2f}B · "
         f"agency debts ${summary['agency_debts'] / 1e9:,.2f}B"
     )
@@ -223,7 +223,7 @@ def backfill_soma(conn, weeks: int = DEFAULT_BACKFILL_WEEKS) -> tuple[int, int]:
             n_new, summary = store_soma_week(conn, holdings)
             if (i + 1) % 10 == 0 or i == len(todo) - 1:
                 print(
-                    f"  {i + 1}/{len(todo)}: {d} — {len(holdings)} CUSIPs, "
+                    f"  {i + 1}/{len(todo)}: {d}, {len(holdings)} CUSIPs, "
                     f"total ${summary['total_par'] / 1e9:,.1f}B ({n_new} new)"
                 )
         except Exception as ex:

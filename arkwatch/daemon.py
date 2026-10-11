@@ -419,10 +419,10 @@ def _alert_job_failed(cmd: str, detail: str) -> None:
 
 def _run_job(cmd: str, desc: str) -> bool:
     if cmd in _paused_jobs():
-        logger.info(f"⏸ {cmd} paused (no delivery channel configured) — {desc}")
+        logger.info(f"⏸ {cmd} paused (no delivery channel configured), {desc}")
         return True
     t0 = time.monotonic()
-    logger.info(f"▶ {cmd} — {desc}")
+    logger.info(f"▶ {cmd}, {desc}")
     # heartbeat inside the wrapper too: a job >5 min (verify measured
     # 221-269s, harvest 368s) would leave the loop-top heartbeat stale (D-018c);
     # _spawn keeps refreshing it while the job runs
@@ -444,7 +444,7 @@ def _run_job(cmd: str, desc: str) -> bool:
             # ⚠ warnings mid-run (a 3-week Farside freeze was invisible
             # because the summary only kept f2's final LME line — D-021)
             summary = " | ".join(tail[-3:]) if tail else "OK"
-            logger.info(f"✓ {cmd} ({dt:.0f}s) — {summary[:240]}")
+            logger.info(f"✓ {cmd} ({dt:.0f}s), {summary[:240]}")
             return True
         err = (stderr or stdout or "").strip().splitlines()
         # ROUND-9: pages must quote the FAILING line, not the last — a
@@ -456,15 +456,15 @@ def _run_job(cmd: str, desc: str) -> bool:
         tail = (" | ".join(fail_lines[-2:]) if fail_lines else (err[-1] if err else "no output"))[
             :200
         ]
-        logger.error(f"✗ {cmd} ({dt:.0f}s) exit={code} — {tail}")
+        logger.error(f"✗ {cmd} ({dt:.0f}s) exit={code}, {tail}")
         _alert_job_failed(cmd, tail)
         return False
     except subprocess.TimeoutExpired:
-        logger.error(f"✗ {cmd} TIMEOUT 30min — hard-kill")
+        logger.error(f"✗ {cmd} TIMEOUT 30min, hard-kill")
         _alert_job_failed(cmd, "TIMEOUT 30min")
         return False
     except Exception as ex:
-        logger.error(f"✗ {cmd} — daemon exception: {ex}")
+        logger.error(f"✗ {cmd}, daemon exception: {ex}")
         _alert_job_failed(cmd, str(ex))
         return False
 
@@ -625,7 +625,7 @@ def _on_signal(signum, _frame):
 def run_loop():
     lock = _acquire_lock()
     if lock is None:
-        print(f"another daemon holds {LOCKFILE} — exit")
+        print(f"another daemon holds {LOCKFILE}, exit")
         return
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
@@ -654,7 +654,7 @@ def run_loop():
     # _load_state).
     last_run = _load_state()
     if last_run:
-        logger.info(f"state restored: {len(last_run)} job(s) already ran today — no replay")
+        logger.info(f"state restored: {len(last_run)} job(s) already ran today, no replay")
     next_retry: dict[str, float] = {}  # cmd → monotonic retry time (non-blocking)
     log_day = datetime.now(UTC).date()
     last_ping = float("-inf")
@@ -693,7 +693,7 @@ def run_loop():
                         _save_state(last_run)
                     else:
                         logger.error(
-                            f"{cmd}: retry failed — manual attention needed "
+                            f"{cmd}: retry failed, manual attention needed "
                             f"(the next SCHEDULED run of this job is the natural "
                             f"fallback: daily jobs tomorrow, weekly jobs next week)"
                         )

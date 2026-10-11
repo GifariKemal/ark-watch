@@ -186,7 +186,7 @@ def test_full_render_sections_and_content_coherence(brief_conn, tmp_path):
     lines = text.split("\n")
 
     # --- headers (structure) ---
-    assert lines[0].startswith("=== US MACRO BRIEF — ")
+    assert lines[0].startswith("=== US MACRO BRIEF: ")
     regime = next(ln for ln in lines if ln.startswith("REGIME :"))
     assert any(lbl in regime for lbl in ("RISK-ON", "RISK-OFF", "NEUTRAL", "INSUFFICIENT DATA"))
     assert next(ln for ln in lines if ln.startswith("QUADRANT:"))
@@ -259,7 +259,7 @@ def test_empty_db_renders_without_raising(tmp_path, monkeypatch):
         _PinnedDatetime.pin = None
         conn.close()
     lines = text.split("\n")
-    assert lines[0].startswith("=== US MACRO BRIEF — ")
+    assert lines[0].startswith("=== US MACRO BRIEF: ")
     assert next(ln for ln in lines if ln.startswith("REGIME :"))
     assert next(ln for ln in lines if ln.startswith("Pillars:"))
     assert next(ln for ln in lines if ln.startswith("Sources: 0/0 fetch OK"))

@@ -95,7 +95,7 @@ def fetch_daily(symbol: str, *, start_ts: int = 0, end_ts: int = 9999999999) -> 
         proxies=_proxies(),
     )
     if r.status_code != 200:
-        raise YahooError(f"yahoo {symbol}: HTTP {r.status_code} — {r.text[:120]}")
+        raise YahooError(f"yahoo {symbol}: HTTP {r.status_code}, {r.text[:120]}")
     res = r.json().get("chart", {}).get("result")
     if not res:
         err = r.json().get("chart", {}).get("error", {})
@@ -134,7 +134,7 @@ def fetch_intraday(symbol: str, *, interval: str = "5m", range_: str = "1d") -> 
         proxies=_proxies(),
     )
     if r.status_code != 200:
-        raise YahooError(f"yahoo {symbol}: HTTP {r.status_code} — {r.text[:120]}")
+        raise YahooError(f"yahoo {symbol}: HTTP {r.status_code}, {r.text[:120]}")
     result = r.json().get("chart", {}).get("result")
     if not result:
         raise YahooError(f"yahoo {symbol}: empty response")

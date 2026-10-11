@@ -225,7 +225,7 @@ def save_dot_series(conn) -> int:
         ).fetchall()
     }
     if not registered:
-        print("  ⚠ dot plot: no CAL:FOMC_DOT_* series registered — run registry sync first")
+        print("  ⚠ dot plot: no CAL:FOMC_DOT_* series registered, run registry sync first")
         return 0
     rows = series_rows()
     payload = []

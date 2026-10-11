@@ -186,7 +186,7 @@ def _call_one(cfg: dict, system: str, user: str) -> str:
             timeout=(10, _read_timeout()),
         )
         if r.status_code != 200:
-            raise NlpError(f"NLP: HTTP {r.status_code} — {r.text[:100]}")
+            raise NlpError(f"NLP: HTTP {r.status_code}, {r.text[:100]}")
         body = r.json()
         if body.get("stop_reason") == "max_tokens":
             # half a JSON object: fail the call so the breaker / next model take over
@@ -212,7 +212,7 @@ def _call_one(cfg: dict, system: str, user: str) -> str:
         timeout=(10, _read_timeout()),
     )
     if r.status_code != 200:
-        raise NlpError(f"NLP: HTTP {r.status_code} — {r.text[:100]}")
+        raise NlpError(f"NLP: HTTP {r.status_code}, {r.text[:100]}")
     return _openai_content(r)
 
 
@@ -220,12 +220,12 @@ def _extract_json(content: str) -> dict:
     """Extract JSON from LLM response (may be wrapped in markdown)."""
     jm = re.search(r"\{.*\}", content, re.DOTALL)
     if not jm:
-        raise NlpError(f"no JSON in response — {content[:100]}")
+        raise NlpError(f"no JSON in response, {content[:100]}")
     try:
         return json.loads(jm.group())
     except json.JSONDecodeError as ex:
         # raise, not {"error": ...}: a dict here read as a successful (empty) analysis
-        raise NlpError(f"unparseable JSON in response ({ex.msg}) — {content[:100]}") from None
+        raise NlpError(f"unparseable JSON in response ({ex.msg}), {content[:100]}") from None
 
 
 # --- Analysis functions -------------------------------------------------------

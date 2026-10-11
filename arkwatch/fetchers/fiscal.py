@@ -87,7 +87,7 @@ def _rows(account_type: str, sort: str, limit: int) -> list[dict]:
     }
     r = requests.get(BASE, params=params, timeout=(10, 30))
     if r.status_code != 200:
-        raise FiscalError(f"fiscaldata: HTTP {r.status_code} — {r.text[:200]}")
+        raise FiscalError(f"fiscaldata: HTTP {r.status_code}, {r.text[:200]}")
     return r.json().get("data", [])
 
 
@@ -126,7 +126,7 @@ def _get(path: str, params: dict, session=None) -> dict:
     sess = session or requests
     r = sess.get(path, params=params, timeout=(10, 60))
     if r.status_code != 200:
-        raise FiscalError(f"fiscaldata: HTTP {r.status_code} — {r.text[:200]}")
+        raise FiscalError(f"fiscaldata: HTTP {r.status_code}, {r.text[:200]}")
     return r.json()
 
 

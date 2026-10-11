@@ -61,7 +61,7 @@ def _iso(date_str: str) -> str:
 def fetch_fmp(from_d: str, to_d: str) -> list[dict]:
     key = os.environ.get("FMP_API_KEY", "")
     if not key:
-        raise RuntimeError("FMP_API_KEY empty — set env (see API.md)")
+        raise RuntimeError("FMP_API_KEY empty, set env (see API.md)")
     r = requests.get(
         "https://financialmodelingprep.com/stable/economic-calendar",
         params={"country": "US", "from": from_d, "to": to_d, "apikey": key},

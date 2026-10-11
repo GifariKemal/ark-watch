@@ -197,7 +197,7 @@ def format_brief(probs: list[MeetingProb], asof: str | None = None) -> str:
         has_future = any(d >= datetime.now(UTC).date() for d in FOMC_SCHEDULE)
         if has_future:
             return "FedWatch: ZQ data unavailable"
-        return "FedWatch: vendored FOMC schedule exhausted — UPDATE FOMC_SCHEDULE"
+        return "FedWatch: vendored FOMC schedule exhausted, UPDATE FOMC_SCHEDULE"
     p = probs[0]
     if p.prob_ease > 0.5:
         action = f"cut {p.prob_ease:.0%}"

@@ -755,7 +755,7 @@ def _open_read_only(path: Path) -> sqlite3.Connection:
     if current != SCHEMA_VERSION:
         conn.close()
         raise RuntimeError(
-            f"{path}: schema v{current} != code v{SCHEMA_VERSION} — a read-only "
+            f"{path}: schema v{current} != code v{SCHEMA_VERSION}, a read-only "
             "connection never migrates; run any CLI job (writer) first."
         )
     return conn
@@ -807,7 +807,7 @@ def get_conn(
         # loudly when initializing over an existing file
         if not fresh:
             print(
-                f"⚠⚠ WARNING: initializing a NEW file at {path} — make sure the path is correct (not a typo?)."
+                f"⚠⚠ WARNING: initializing a NEW file at {path}, make sure the path is correct (not a typo?)."
             )
         _apply_migrations(conn)
     elif current < SCHEMA_VERSION:
@@ -816,14 +816,14 @@ def get_conn(
         else:
             conn.close()
             raise RuntimeError(
-                f"DB schema v{current} < code v{SCHEMA_VERSION} — run any CLI "
+                f"DB schema v{current} < code v{SCHEMA_VERSION}, run any CLI "
                 "job once (e.g. `python -m arkwatch harvest`) to auto-apply "
                 "pending migrations before continuing."
             )
     elif current > SCHEMA_VERSION:
         conn.close()
         raise RuntimeError(
-            f"DB schema v{current} > code v{SCHEMA_VERSION} — code downgrade is not supported."
+            f"DB schema v{current} > code v{SCHEMA_VERSION}, code downgrade is not supported."
         )
     return conn
 

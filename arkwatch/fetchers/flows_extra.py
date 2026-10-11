@@ -326,7 +326,7 @@ def fetch_lme_stocks(year: int, month: int, session=None) -> list[dict]:
         if (year, month) < (now.year, now.month):
             raise RuntimeError(
                 f"LME soft-404: stocks-{_LME_MONTHS[month - 1]}-{year}.xlsx"
-                f" serves HTTP {r.status_code} non-XLSX — path moved/blocked"
+                f" serves HTTP {r.status_code} non-XLSX, path moved/blocked"
             )
         return []
     wb = load_workbook(io.BytesIO(r.content), read_only=True, data_only=True)
@@ -528,7 +528,7 @@ def fetch_lme_owsr_daily(session=None) -> list[dict]:
     except ValueError as exc:
         # JSON body -> HTML means the auth cookie died and the server
         # answered with a login page: name the fix, don't bury it
-        raise LmeOwsrError("LME cookie expired — re-export from the browser") from exc
+        raise LmeOwsrError("LME cookie expired, re-export from the browser") from exc
     out = []
     for item in results:
         m = re.search(r"(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})", item.get("Name", ""))

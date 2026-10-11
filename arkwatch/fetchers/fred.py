@@ -92,7 +92,7 @@ def fetch_observations(
         timeout=(10, 30),
     )
     if resp.status_code != 200:
-        raise FredError(f"FRED {series_id}: HTTP {resp.status_code} — {resp.text[:200]}")
+        raise FredError(f"FRED {series_id}: HTTP {resp.status_code}, {resp.text[:200]}")
     data = resp.json()
     if data.get("error_message"):
         raise FredError(f"FRED {series_id}: {data['error_message']}")

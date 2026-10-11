@@ -109,7 +109,7 @@ def run_cot_gate(conn) -> tuple[int, int]:
         if rows_by_date is None and sym and sym in by_sym:
             rows_by_date = by_sym[sym]
         if rows_by_date is None:
-            print(f"  cot-gate: {code} ({sym}) not in FMP dump — skipped")
+            print(f"  cot-gate: {code} ({sym}) not in FMP dump, skipped")
             continue
         fmp = rows_by_date.get(report_date)
         if fmp is None:
@@ -144,7 +144,7 @@ def run_cot_gate(conn) -> tuple[int, int]:
                 # contract's OI, not a parse error). Skip the fallback only;
                 # the disagg path above (when rows exist) is unaffected.
                 print(
-                    f"  cot-gate: {code} consolidated handle — TFF OI fallback skipped (FMP maps single contracts)"
+                    f"  cot-gate: {code} consolidated handle, TFF OI fallback skipped (FMP maps single contracts)"
                 )
                 continue
             oi_ours = conn.execute(

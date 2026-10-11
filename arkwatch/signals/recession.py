@@ -111,7 +111,7 @@ def store_recession_signals(conn: sqlite3.Connection) -> int:
         return 0
     ts = snap["effective_ts"]
     if not ts or ts > datetime.now(UTC).date().isoformat():
-        print(f"  ⚠ recession_triangulation: effective_ts {ts} is None or in the future — skipped")
+        print(f"  ⚠ recession_triangulation: effective_ts {ts} is None or in the future, skipped")
         return 0
     # state: how many of the three independent gauges are elevated
     elevated = 0

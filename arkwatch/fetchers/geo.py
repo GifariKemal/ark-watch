@@ -50,7 +50,7 @@ class GeoError(RuntimeError):
 def _get(url: str) -> bytes:
     r = requests.get(url, headers=UA, timeout=(10, 60))
     if r.status_code != 200 or not r.content:
-        raise GeoError(f"geo: HTTP {r.status_code} — {url[-60:]}")
+        raise GeoError(f"geo: HTTP {r.status_code}, {url[-60:]}")
     return r.content
 
 

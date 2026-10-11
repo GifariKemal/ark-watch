@@ -710,7 +710,7 @@ def compute_ecbwatch(conn) -> list[dict]:
         # fresh DB before the 06:00 registry harvest has no ECB:ESTR row
         # yet (review P2) — name the fix instead of a bare FK error
         print(
-            f"  ⚠ ECB:ESTR not in series_registry yet — run harvest/backfill"
+            f"  ⚠ ECB:ESTR not in series_registry yet, run harvest/backfill"
             f" sync first ({str(ex)[:50]})"
         )
     except Exception as ex:
@@ -721,7 +721,7 @@ def compute_ecbwatch(conn) -> list[dict]:
         " AND vintage_ts='realtime' ORDER BY ts DESC LIMIT 1"
     ).fetchone()
     if a is None:
-        print("  ⚠ ECBWatch: no ECB:ESTR anchor — snapshot skipped")
+        print("  ⚠ ECBWatch: no ECB:ESTR anchor, snapshot skipped")
         return []
     estr, estr_asof = a[1], date.fromisoformat(a[0])
 
@@ -1023,7 +1023,7 @@ def main(argv: list[str] | None = None) -> int:
                 n_new = _db.insert_observations(conn, payload)
                 total_new += n_new
                 print(
-                    f"  {y}-{m:02d}: {len(rows)} rows ({n_new} new) — "
+                    f"  {y}-{m:02d}: {len(rows)} rows ({n_new} new), "
                     f"latest {rows[-1]['ts']} = {rows[-1]['copper_tonnes']:,.0f}t"
                 )
             else:

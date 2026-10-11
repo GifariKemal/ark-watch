@@ -343,7 +343,7 @@ def main() -> int:
         print(
             "\n=== brief saved + outbox pending ==="
             if gen
-            else "\n=== Sunday skip — stored brief served (no new generation) ==="
+            else "\n=== Sunday skip, stored brief served (no new generation) ==="
         )
         return 0
     if cmd == "send":

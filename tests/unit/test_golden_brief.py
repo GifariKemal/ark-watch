@@ -25,7 +25,7 @@ LIVE_DB = Path(__file__).resolve().parents[2] / "data" / "arkwatch.db"
 VOLATILE = [
     (r"WIB \d{2}:\d{2}", "WIB HH:MM"),
     (r"data as of \d{2}-\w{3} ET", "data as of DD-Mon ET"),
-    (r"=== US MACRO BRIEF — \w+, \d{2} \w+ \d{4} ===", "=== HEADER ==="),
+    (r"=== US MACRO BRIEF(?: —|:) \w+, \d{2} \w+ \d{4} ===", "=== HEADER ==="),
     (r"\d{4}-\d{2}-\d{2}", "DATE"),  # series timestamp stamps
 ]
 

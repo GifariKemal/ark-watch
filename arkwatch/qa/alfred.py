@@ -74,7 +74,7 @@ def harvest_alfred_vintages(
         sid = raw_sid[5:] if raw_sid.startswith("FRED:") else raw_sid
         full_sid = f"FRED:{sid}"
         if full_sid not in registered:
-            print(f"  ⚠ {full_sid}: not found in series_registry — skipped")
+            print(f"  ⚠ {full_sid}: not found in series_registry, skipped")
             continue
         t0 = time.time()
         try:

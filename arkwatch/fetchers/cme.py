@@ -146,8 +146,8 @@ def fetch_settlements(product_code: str, trade_date: datetime | None = None) -> 
         # walk back only on other non-200s (404 = non-trading day).
         if r.status_code in (403, 429) or r.status_code >= 500:
             raise CmeError(
-                f"CME {product_code}: HTTP {r.status_code} (blocked?) "
-                f"— a stale settlement is better than no data on the wrong date"
+                f"CME {product_code}: HTTP {r.status_code} (blocked?), "
+                f"a stale settlement is better than no data on the wrong date"
             )
         if r.status_code != 200:
             td -= timedelta(days=1)
@@ -187,7 +187,7 @@ def fetch_settlements(product_code: str, trade_date: datetime | None = None) -> 
                 return out
         td -= timedelta(days=1)
     raise CmeError(
-        f"CME {product_code}: empty for the last 6 days (5-day retention — possibly lost)"
+        f"CME {product_code}: empty for the last 6 days (5-day retention, possibly lost)"
     )
 
 

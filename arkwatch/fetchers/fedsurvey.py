@@ -364,9 +364,7 @@ def frb_save_history(conn, *, verbose: bool = True) -> int:
         total += n_new + n_rev
         if verbose:
             latest = max(by_label[label])
-            print(
-                f"  {sid:16s} {len(rows):4d} obs (new {n_new}, revised {n_rev}) — latest {latest}"
-            )
+            print(f"  {sid:16s} {len(rows):4d} obs (new {n_new}, revised {n_rev}), latest {latest}")
     conn.commit()
     return total
 

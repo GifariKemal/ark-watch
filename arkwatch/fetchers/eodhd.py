@@ -43,7 +43,7 @@ def _get(path: str, params: dict | None = None) -> dict:
     p.update(params or {})
     r = requests.get(f"{BASE}{path}", params=p, headers=UA, timeout=(10, 30))
     if r.status_code != 200:
-        raise EodhdError(f"EODHD {path}: HTTP {r.status_code} — {r.text[:200]}")
+        raise EodhdError(f"EODHD {path}: HTTP {r.status_code}, {r.text[:200]}")
     j = r.json()
     if not isinstance(j, dict) or "data" not in j:
         raise EodhdError(f"EODHD {path}: unrecognized response shape")
@@ -149,7 +149,7 @@ def fetch_cmdi_all() -> list[dict]:
             break
         offset += 100
         if offset > 5000:  # runaway backstop (full history is ~12 pages)
-            raise EodhdError("cmdi: pagination exceeded 5,000 rows — refusing")
+            raise EodhdError("cmdi: pagination exceeded 5,000 rows, refusing")
     if len(rows) < 500:
         raise EodhdError(f"cmdi: suspiciously short history ({len(rows)} rows)")
     rows.sort(key=lambda r: r["as_of_date"])

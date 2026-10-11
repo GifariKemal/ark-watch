@@ -422,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
     conn.close()
     # ROUND-7: propagate total vendor death to the daemon (job_failed alert)
     if all_dead:
-        print("✗ CME: ALL settlement products failed — vendor kill-switch")
+        print("✗ CME: ALL settlement products failed, vendor kill-switch")
         return 1
     return 0
 

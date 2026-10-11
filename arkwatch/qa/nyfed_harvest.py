@@ -120,7 +120,7 @@ def harvest_ops(conn) -> int:
         ]
         if fxs_rows:
             n_fxs_ops = store_fed_operations(conn, fxs_rows)
-            print(f"  ⚠ fxs operations NON-EMPTY ({n_fxs_ops}) — dollar-funding event")
+            print(f"  ⚠ fxs operations NON-EMPTY ({n_fxs_ops}), dollar-funding event")
         n_cp = len(fxs["counterparties"])
     except Exception as ex:
         cp_err = str(ex)[:140]

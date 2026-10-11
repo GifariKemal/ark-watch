@@ -505,7 +505,7 @@ def generate_trading_playbook(
     cot_hedge = cot_signals._hedging_pressure(conn, cot_code) if cot_code else None
     if cot_hedge is None:
         cot_hedge = (
-            "N/A (Financial Asset — Non-Commercial Categories Active)"
+            "N/A (Financial Asset, Non-Commercial Categories Active)"
             if (
                 cot_code
                 and sym in ("NQ1", "ES1", "YM1", "BTCUSD", "ETHUSD", "EURUSD", "GBPUSD", "USDJPY")

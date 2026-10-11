@@ -155,7 +155,7 @@ def harvest_auctions(conn, full: bool = False) -> int:
         ten = _latest_10y(conn)
         ten_s = f" · latest 10Y {ten[0]} btc {ten[1]:.2f}" if ten else ""
         print(
-            f"  auctions ({mode}): {n} rows upserted — table {span[2]:,} rows"
+            f"  auctions ({mode}): {n} rows upserted, table {span[2]:,} rows"
             f" {span[0]} → {span[1]}{ten_s}"
         )
     except Exception as ex:
@@ -204,7 +204,7 @@ def harvest_interest_expense(conn) -> int:
         if parsed:
             latest, total = fytd_public_issues(parsed)
             print(
-                f"  interest expense (6m): {n} rows upserted — FYTD public issues"
+                f"  interest expense (6m): {n} rows upserted, FYTD public issues"
                 f" ${total / 1e12:.3f}T @ {latest}"
             )
         else:

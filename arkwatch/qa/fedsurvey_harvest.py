@@ -107,7 +107,7 @@ def _nlp_failed(ts: str, tone: dict, stored: str = "") -> str:
     why = tone.get("summary", "")
     if why.startswith("unconfigured"):
         return f"skipped @ {ts} ({why}{stored})"
-    return f"nlp-failed @ {ts} ({why[:60]}{stored}) — retry next run"
+    return f"nlp-failed @ {ts} ({why[:60]}{stored}), retry next run"
 
 
 def _harvest_text_source(conn, kind: str, fetch_fn, source_type: str) -> tuple[str, bool]:

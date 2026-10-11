@@ -274,7 +274,7 @@ def run_replay(conn, start: str = "2005-01", verbose: bool = True) -> list[dict]
     except Exception as ex:
         # A silent NBER failure would leave every recession label wrong with
         # no trace — warn and mark the state instead
-        print(f"  ⚠ NBER fetch failed — recession labels all NA: {str(ex)[:80]}")
+        print(f"  ⚠ NBER fetch failed, recession labels all NA: {str(ex)[:80]}")
         cycles = []
         nber_na = True
     recess = nber_recession_months(cycles)

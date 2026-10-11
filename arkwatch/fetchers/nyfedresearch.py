@@ -658,7 +658,7 @@ def save_history(conn, *, verbose: bool = True) -> int:
         total += n_new + n_rev
         if verbose and rows:
             print(
-                f"  {sid:28s} {len(rows):4d} obs (new {n_new}, revised {n_rev}) — latest {rows[-1]}"
+                f"  {sid:28s} {len(rows):4d} obs (new {n_new}, revised {n_rev}), latest {rows[-1]}"
             )
     conn.commit()
     return total

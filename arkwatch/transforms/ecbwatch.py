@@ -411,5 +411,5 @@ def format_brief(
     if diag and "degraded" in diag.get("flags", []):
         tail += f" ⚠ fit {diag.get('rms_bp', '?')}bp"
     if ECB_GC_DECISIONS and max(ECB_GC_DECISIONS) < datetime.now(UTC).date() + timedelta(days=90):
-        tail += " ⚠ vendored schedule <90d — UPDATE ecbwatch.ECB_GC_DECISIONS"
+        tail += " ⚠ vendored schedule <90d, UPDATE ecbwatch.ECB_GC_DECISIONS"
     return f"ECBWatch {act} {approx}{p:.0%} ({r.meeting_date.strftime('%b-%d')}, {delta}{implied}{tail})"

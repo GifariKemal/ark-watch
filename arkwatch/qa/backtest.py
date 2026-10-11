@@ -248,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"p={f['p_raw']:.4f} → q={f['p_fdr']:.4f}"
             )
         if n_sig == 0:
-            print("\n  ⚠ NO signals pass FDR — all findings are likely noise.")
+            print("\n  ⚠ NO signals pass FDR, all findings are likely noise.")
     return 0
 
 

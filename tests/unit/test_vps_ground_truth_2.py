@@ -94,6 +94,7 @@ def test_slv_402_is_plan_limited(monkeypatch):
         status_code = 402
 
     monkeypatch.setattr(spdr.requests, "get", lambda *a, **k: R())
+    monkeypatch.setenv("FMP_API_KEY", "k")  # configured key, plan refuses the endpoint
     with pytest.raises(PlanLimited, match="plan-limited: FMP shares-float"):
         spdr.fetch_slv_shares()
 
@@ -258,3 +259,13 @@ def test_rss_404_is_not_retried_with_a_second_client(monkeypatch):
     with pytest.raises(rss_news.FeedGone):
         rss_news.fetch_rss_feed("YAHOO", "https://feeds.finance.yahoo.com/rss/2.0/headline?s=X")
     assert second == []
+
+
+def test_slv_without_a_key_is_skipped_not_a_401(monkeypatch):
+    from arkwatch.fetchers import spdr
+
+    monkeypatch.setattr(
+        spdr.requests, "get", lambda *a, **k: pytest.fail("no request without a key")
+    )
+    with pytest.raises(PlanLimited, match="unconfigured: FMP_API_KEY"):
+        spdr.fetch_slv_shares()

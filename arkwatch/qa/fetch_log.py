@@ -14,6 +14,14 @@ from datetime import UTC, datetime
 from .redact import _redact
 
 
+def exit_code(ok: int, fail: int) -> int:
+    """A multi-source job's exit code. 1 pages the owner (daemon job_failed), so it means a
+    broad outage: no success at all, or at least as many failures as successes. A partial
+    degradation stays 0 - every failed target already has its ERROR row in fetch_log, shown
+    by /v1/health/fetchers and the brief's data-quality line."""
+    return 1 if fail and (ok == 0 or fail >= ok) else 0
+
+
 def schema_fp(first_obj: dict | None) -> str | None:
     if not isinstance(first_obj, dict) or not first_obj:
         return None

@@ -14,6 +14,7 @@ def test_verify_plan_limited_series_is_skipped_not_a_violation(monkeypatch):
             raise PlanLimited("plan-limited: FMP economic-indicators")
 
     monkeypatch.setitem(verify_sources.ROUTES, "FMP:", Mod)
+    monkeypatch.setenv("FMP_API_KEY", "k")  # configured: the plan, not the key, refuses
     rep = verify_sources.verify(
         registry=[{"series_id": "FMP:RECESSION_PROB", "block": "A"}], anchors=[]
     )
@@ -95,3 +96,11 @@ def test_verify_source_timeout_is_not_a_violation(monkeypatch):
     rep = verify_sources.verify(registry=[{"series_id": "ECB:ESTR", "block": "A"}], anchors=[])
     assert rep.violations == []
     assert "timeout" in rep.rows[0].note.lower() or "unreachable" in rep.rows[0].note.lower()
+
+
+def test_multi_source_exit_code_pages_only_on_broad_outage():
+    from arkwatch.qa.fetch_log import exit_code
+
+    assert exit_code(227, 1) == 0  # one series of the harvest: degradation, logged
+    assert exit_code(3, 3) == 1  # half or more failed: an outage
+    assert exit_code(0, 1) == 1 and exit_code(5, 0) == 0

@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 from .. import db
 from ..config import load_curated_calendar
 from ..fetchers import calendar as cal
+from .redact import _redact
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
 ET = ZoneInfo("America/New_York")
@@ -138,8 +139,6 @@ def pull(from_d: str | None = None, to_d: str | None = None) -> tuple[list[dict]
         try:
             fetched[src] = fn(from_d, to_d)
         except Exception as ex:
-            from .harvest import _redact  # HTTPError text carries the URL incl. apikey=
-
             print(f"  ⚠ {src} failed: {_redact(str(ex))[:110]}")
             fetched[src] = []
             why[src] = _redact(str(ex))[:200]

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import requests
 from curl_cffi import requests as creq
 
-from ..config import PLAN_LIMIT_STATUSES, PlanLimited
+from ..config import PLAN_LIMIT_STATUSES, PlanLimited, missing_env
 
 GLD_URL = "https://api.spdrgoldshares.com/api/v1/historical-archive"
 FMP_URL = "https://financialmodelingprep.com/stable"
@@ -113,7 +113,9 @@ def fetch_gld_tonnes(arch: list[dict] | None = None) -> dict:
 
 def fetch_slv_shares() -> dict:
     """SLV outstanding shares via FMP (weekly cadence is enough — sourced from SEC 10-Q filings)."""
-    key = os.environ.get("FMP_API_KEY", "")
+    if reason := missing_env("FMP_API_KEY"):
+        raise PlanLimited(reason)  # unconfigured optional provider: SKIPPED, not a 401 ERROR
+    key = os.environ["FMP_API_KEY"]
     r = requests.get(
         f"{FMP_URL}/shares-float", params={"symbol": "SLV", "apikey": key}, timeout=(10, 30)
     )

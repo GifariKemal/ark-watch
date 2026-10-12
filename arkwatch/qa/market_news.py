@@ -194,6 +194,8 @@ def _canonical_url(url: str | None) -> str | None:
     if not url:
         return None
     parts = urlsplit(url)
+    if parts.scheme.lower() not in ("http", "https"):
+        return None  # third-party feeds: a javascript:/data: link must never reach a dashboard
     query = urlencode(
         [(k, v) for k, v in parse_qsl(parts.query) if not k.lower().startswith("utm_")]
     )
@@ -234,7 +236,9 @@ def _fmp() -> list[dict]:
             params={"apikey": key},
             timeout=(10, 45),
         )
-    except requests.exceptions.RetryError as ex:  # the shared adapter retried 429 until it gave up
+    except requests.exceptions.RetryError as ex:  # the shared adapter retried until it gave up
+        if "429" not in str(ex):
+            raise  # an exhausted 5xx is an outage (ERROR), not the plan's quota
         raise PlanLimited("plan-limited: FMP quota (HTTP 429)") from ex
     if r.status_code in PLAN_LIMIT_STATUSES:
         raise PlanLimited("plan-limited: FMP news/general-latest")

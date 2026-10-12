@@ -6,7 +6,8 @@ The contract now under test:
   - NLP outage must NOT lose the data point: structural rows (SLOOS bias,
     minutes dissent) still land; the tone row does NOT — so the next run
     re-detects the source as pending and retries the analysis.
-  - any failing source (fetch or NLP) → main() exits 1 → the daemon pages.
+  - a broad failure (half the sources or more) → main() exits 1 → the daemon pages; one
+    sick source is a degradation logged in fetch_log (exit 0).
 
 No network: all fetchers + the NLP call are monkeypatched.
 """
@@ -119,18 +120,19 @@ class TestNlpOutageResilience:
 
 
 class TestExitCodeContract:
-    def test_any_failure_exits_nonzero(self, monkeypatch, tmp_path, capsys):
-        """A sick source must fail the job (daemon alert) — exit 0 on 6/6
-        errors was the silent-rot bug."""
+    def test_one_sick_source_is_a_degradation(self, monkeypatch, tmp_path, capsys):
         conn_path = tmp_path / "t.db"
-        _seed(monkeypatch, [])
+        _seed(monkeypatch, [dict(TONE_OK)] * 6)
         monkeypatch.setattr(
             fedsurvey, "fetch_fsr", lambda: (_ for _ in ()).throw(RuntimeError("HTTP 404"))
         )
+        assert fh.main(["--db", str(conn_path)]) == 0
+        assert "error" in capsys.readouterr().out  # still reported
 
-        rc = fh.main(["--db", str(conn_path)])
-        assert rc == 1
-        assert "error" in capsys.readouterr().out
+    def test_broad_failure_exits_nonzero(self, monkeypatch, tmp_path):
+        """exit 0 on 6/6 errors was the silent-rot bug (missing NLP key)."""
+        _seed(monkeypatch, [RuntimeError("NLP down")] * 6)
+        assert fh.main(["--db", str(tmp_path / "t.db")]) == 1
 
     def test_all_unchanged_exits_zero(self, monkeypatch, tmp_path):
         """The normal no-news day must stay exit 0 (no page)."""

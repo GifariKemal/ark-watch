@@ -17,6 +17,7 @@ import requests
 
 from .. import db as _db
 from ..config import _load_yaml, missing_env
+from . import fetch_log
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
 RETRY_PAUSE_S = 5.0  # pause before the single retry pass of errored symbols
@@ -303,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {k:<22} {v:>7,}")
     for k in fail:
         print(f"  ✗ {k}")
-    return 1 if fail else 0
+    return fetch_log.exit_code(ok, len(fail))
 
 
 if __name__ == "__main__":

@@ -183,8 +183,10 @@ def fetch_tic_slt5() -> dict:
                 break
     if "china" not in values:
         raise RuntimeError("TIC: China, Mainland row not found")
+    if not periods:  # a literal "latest" period passed the monthly stale gate as a string
+        raise RuntimeError("TIC: no YYYY-mm period on the page")
     return {
-        "ts": periods[0] if periods else "latest",
+        "ts": max(periods),  # the month picker's order is not guaranteed
         "values": values,  # {key: $B}, china guaranteed
     }
 

@@ -7,6 +7,7 @@ via Tree News REST API and WebSocket interfaces.
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from datetime import UTC, datetime
 
@@ -118,7 +119,9 @@ def _is_high_signal(source_upper: str, title: str, symbols: list[str]) -> bool:
         return False
 
     # Always accept Tier-1 institutional wire agencies
-    if any(tier1 in source_upper for tier1 in TIER1_SOURCES):
+    # whole words: a substring test let "SEC" admit "SECURITY WEEKLY" and "FT" any "SOFTWARE ..."
+    words = set(re.findall(r"[A-Z0-9]+", source_upper))
+    if any(set(t.split()) <= words for t in TIER1_SOURCES):
         return True
 
     # If symbols are explicitly tagged with assets we track
@@ -134,14 +137,13 @@ def fetch_tree_news(limit: int = 50, timeout: int = 10) -> list[dict]:
     url = f"{API_URL}?limit={limit}"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except Exception:
-        return []
+    # errors propagate: the market_news caller logs ERROR and degrades (a swallowed outage was
+    # logged OK with 0 rows, so a dead feed looked healthy)
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
 
     if not isinstance(payload, list):
-        return []
+        raise ValueError(f"Tree News payload is {type(payload).__name__}, expected a list")
 
     out = []
     for item in payload:

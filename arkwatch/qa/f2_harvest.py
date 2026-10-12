@@ -551,6 +551,8 @@ def compute_fedwatch(conn) -> list[dict]:
         from ..fetchers.quikstrike import fetch_fedwatch_official
 
         official = fetch_fedwatch_official()
+        if not official:  # non-200, layout change or no rows: None, no exception
+            qs_err = "official FedWatch view returned no rows (blocked page or layout change)"
     except Exception as ex:
         qs_err = str(ex)[:140]
 

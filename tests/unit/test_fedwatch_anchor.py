@@ -140,3 +140,28 @@ def test_official_fetch_runs_outside_the_write_transaction(tmp_path, frozen, mon
     f2.compute_fedwatch(conn)
     conn.close()
     assert seen == [False]
+
+
+def test_silent_quikstrike_failure_leaves_an_error_row(tmp_path, frozen, monkeypatch):
+    """fetch_fedwatch_official returns None (blocked page, layout change): that used to leave
+    no fetch_log row at all, so the DIY-vs-official gate died unseen."""
+    import arkwatch.fetchers.quikstrike as qs
+
+    monkeypatch.setattr(qs, "fetch_fedwatch_official", lambda: None)
+    conn = _build_db(tmp_path)
+    f2.compute_fedwatch(conn)
+    row = conn.execute("SELECT status, error FROM fetch_log WHERE target='QS:FEDWATCH'").fetchone()
+    conn.close()
+    assert row[0] == "ERROR" and "no rows" in row[1]
+
+
+def test_tic_without_a_period_is_an_error(monkeypatch):
+    from arkwatch.fetchers import flows_extra
+
+    class R:
+        status_code = 200
+        text = "<td>China, Mainland</td><td>760.1</td>"
+
+    monkeypatch.setattr(flows_extra.creq.Session, "get", lambda *a, **k: R())
+    with pytest.raises(RuntimeError, match="no YYYY-mm period"):
+        flows_extra.fetch_tic_slt5()

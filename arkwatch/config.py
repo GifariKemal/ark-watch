@@ -16,7 +16,7 @@ REGISTRY_FILES = ["series_registry.yaml", "series_registry_blocks_d-f.yaml"]
 
 # Optional paid/credentialed providers by registry prefix: unset env = SKIPPED
 # (unconfigured), never ERROR. Set-but-failing stays ERROR.
-PROVIDER_ENV = {"EODHD:": ("EODHD_API_TOKEN",)}
+PROVIDER_ENV = {"EODHD:": ("EODHD_API_TOKEN",), "FMP:": ("FMP_API_KEY",)}
 
 
 def missing_env(*names: str) -> str | None:

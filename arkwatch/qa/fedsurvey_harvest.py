@@ -31,6 +31,7 @@ from pathlib import Path
 
 from .. import db
 from ..fetchers import fedsurvey
+from . import fetch_log
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
 
@@ -279,9 +280,10 @@ def main(argv: list[str] | None = None) -> int:
     n_err = sum(1 for v in results.values() if v.startswith(("error:", "nlp-failed")))
     print(f"=== done: {n_new} new, {len(results) - n_new - n_err} unchanged, {n_err} errors ===")
     conn.close()
-    # any failure (fetch or NLP) must page via the daemon's exit-code contract —
-    # 2026-09-19: 6/6 errors exited 0 and the missing key rotted silently
-    return 1 if n_err else 0
+    # a broad failure pages via the daemon's exit-code contract (2026-09-19: 6/6 errors
+    # exited 0 and the missing key rotted silently); one sick source of six is a degradation,
+    # visible in fetch_log and /v1/health/fetchers
+    return fetch_log.exit_code(len(results) - n_err, n_err)
 
 
 if __name__ == "__main__":

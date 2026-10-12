@@ -82,7 +82,7 @@ def test_fetch_tree_news_sample_json(monkeypatch):
     assert items[0]["symbols"] == ["$USD", "SPY"]
 
 
-def test_network_errors_return_empty_gracefully(monkeypatch):
+def test_network_errors_surface_to_the_caller(monkeypatch):
     def fake_fail(*_args, **_kw):
         raise URLError("Connection refused")
 
@@ -96,12 +96,14 @@ def test_network_errors_return_empty_gracefully(monkeypatch):
     except Exception:
         pass
 
-    # RSS failures surface (market_news logs them to fetch_log and degrades)
+    # failures surface (market_news logs them to fetch_log and degrades): a swallowed Tree News
+    # outage used to be logged OK with 0 rows
     with pytest.raises(URLError):
         rss_news.fetch_rss_feed("FED", "https://example.com")
     with pytest.raises(RuntimeError, match="all RSS feeds failed"):
         rss_news.fetch_all_rss_feeds()
-    assert tree_news.fetch_tree_news() == []
+    with pytest.raises(URLError):
+        tree_news.fetch_tree_news()
 
 
 def test_fetch_cryptopanic_posts_with_votes(monkeypatch):
@@ -138,3 +140,12 @@ def test_fetch_cryptopanic_posts_with_votes(monkeypatch):
     assert posts[0]["source"] == "CRYPTOPANIC"
     assert posts[0]["symbols"] == ["BTC"]
     assert "Votes: +45 / -5" in posts[0]["summary"]
+
+
+def test_tier1_gate_matches_whole_source_words():
+    from arkwatch.fetchers.tree_news import _is_high_signal
+
+    assert _is_high_signal("REUTERS", "Company X files quarterly report", [])
+    assert _is_high_signal("THE FINANCIAL TIMES", "Company X files quarterly report", [])
+    assert not _is_high_signal("SECURITY WEEKLY", "Company X files quarterly report", [])
+    assert not _is_high_signal("SOFTWARE DAILY", "Company X files quarterly report", [])

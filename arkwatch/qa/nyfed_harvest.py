@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .. import db
 from ..fetchers import nyfed
+from . import fetch_log
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
 OPS_COLUMNS = (
@@ -180,7 +181,7 @@ def harvest_rates(conn) -> int:
         except Exception as ex:
             fail += 1
             print(f"  ✗ {sid}: {str(ex)[:120]}")
-    return 1 if fail else 0
+    return fetch_log.exit_code(len(sids) - fail, fail)
 
 
 def main(argv: list[str] | None = None) -> int:

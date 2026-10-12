@@ -18,6 +18,7 @@ from .. import db
 from ..config import PROVIDER_ENV, PlanLimited, load_registry, missing_env
 from ..fetchers.caldist import NoDataYet
 from ..qa.verify_sources import ROUTES
+from . import fetch_log
 from .redact import _redact  # noqa: F401  (re-export for older importers)
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
@@ -229,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     ok, fail, rows = harvest(a.db, block=a.block)
     ts = datetime.now(UTC).isoformat(timespec="seconds")
     print(f"=== harvest {ts}: {ok} OK · {fail} ERROR · {rows:,} new rows ===")
-    return 1 if fail else 0
+    return fetch_log.exit_code(ok, fail)
 
 
 if __name__ == "__main__":

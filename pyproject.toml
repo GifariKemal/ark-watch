@@ -1,12 +1,12 @@
 [project]
 name = "arkwatch"
 version = "0.1.0"
-description = "Personal US macro monitoring engine — data pipeline, signals, and a daily Telegram brief"
+description = "Personal US macro monitoring engine: data pipeline, signals, a read API, phone push and a daily brief"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "curl_cffi>=0.7",     # impersonated HTTP for bot-gated sites (cmegroup, QuikStrike)
-    "requests[socks]>=2.31", # socks5h:// for ARKWATCH_YAHOO_PROXY (pysocks)
-    "pandas>=2.2",        # read_excel (calamine engine)
+    "requests[socks]>=2.31", # socks5h:// for ARKWATCH_PROXY (pysocks)
+    "pandas>=2.2",        # Timestamp floor in market_timeline (exchange-calendars needs it anyway)
     "numpy>=1.26",        # lstsq (rank-deficient ECB-watch design matrix)
     "exchange-calendars>=4.13.2,<5", # session-aware intraday freshness
     "openpyxl>=3.1",      # XLSX sources (WGC, ADS, WGT, LME)

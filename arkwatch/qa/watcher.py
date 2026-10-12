@@ -1066,9 +1066,8 @@ def check_all(conn) -> list[str]:
                 if _fire(conn, alert_type, condition, context, action, cooldown_key=key):
                     fired.append(alert_type)
 
-    # Alert-spam tripwire (round-2): the Telegram channel is the only active
-    # delivery path — a dedup regression here spam-burned the user for 17
-    # days before anyone noticed. Any cooldown_key delivered >2x within 7d
+    # Alert-spam tripwire (round-2): every alert reaches the phone (ntfy) — a dedup
+    # regression here once spam-burned the user for 17 days before anyone noticed. Any cooldown_key delivered >2x within 7d
     # means the suppression machinery itself is broken: announce THAT.
     try:
         spam = conn.execute(

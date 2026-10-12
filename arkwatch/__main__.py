@@ -23,16 +23,16 @@ PENGGUNAAN:
   python -m arkwatch <perintah> [argumen] [opsi]
 
 [1. TRADING PLAYBOOK & EKSEKUSI LELANG (AMT)]
-  scanner [--min-rr FLOAT]       Memindai 31 aset & menyaring peluang (default: R:R >= 1.5)
+  scanner [--min-rr FLOAT]       Memindai 29 aset & menyaring peluang (default: R:R >= 1.5)
   playbook [SYMBOL]              Playbook Dual-Horizon (Intraday & Swing) per instrumen
   tracker [SYMBOL] [--detail]    Pelacak performa trading (Win Rate, PnL, R-Mult, Log)
   levels [SYMBOL]                Level lelang AMT (VAH, VAL, POC, TPO, CVA, Naked POC)
   sentiment [--limit INT]        Ekstraksi sentimen berita 7-dimensi via model AI
 
 [2. REAL-TIME MARKET & MIKROSTRUKTUR]
-  market [--interval 5m|1m]      Pemanenan bar harga real-time 31 aset portofolio
-  market-news                    Pemanenan berita breaking dari 14 sumber resmi
-  breadth                        S&P 500 Constituent Breadth (504 saham)
+  market [--interval 5m|1m]      Pemanenan bar harga real-time aset portofolio
+  market-news                    Pemanenan berita breaking (RSS resmi, Tree News, Argus)
+  breadth                        S&P 500 Constituent Breadth (konstituen dari FMP)
   crypto                         Sinyal derivatif & likuidasi kripto (OKX/Bybit)
   polymarket                     Probabilitas crowd Polymarket untuk topik makro/geo
   kalshi                         Probabilitas market Kalshi (Fed, resesi, CPI)
@@ -44,6 +44,18 @@ PENGGUNAAN:
   verify [--limit INT]           Verifikasi kelayakan endpoint seluruh provider data
   explore <target> [--trace]     Inspeksi interaktif data database & trace komponen
   backtest                       Uji statistik sinyal makro dengan Benjamini-Hochberg FDR
+  healthcheck [okxws] [--heal]   Cek heartbeat, lane, disk, umur backup (dipakai Docker)
+
+[4. JOB DAEMON & OPERASI] (dijadwalkan oleh `daemon`, bisa dijalankan manual)
+  daemon                         Scheduler + lane watch/market (satu instance, flock)
+  harvest | calendar | surprise  Data registry, kalender rilis, surprise index
+  cme | f2 | fiscalx | soma      CME, flows/COT/FedWatch, fiscal data, SOMA holdings
+  nyfed ops | energy | fedsurvey NY Fed operations, kurva energi, survei Fed + NLP
+  instruments sweep|backfill     Harga harian instrumen (--only SYMBOL)
+  brief | send                   Brief pagi + kirim outbox (ntfy/Telegram/Discord)
+  backup | alfred | coverage     Backup + retensi tabel, perawatan mingguan, audit registry
+  gdelt-retention [--apply]      Retensi GDELT + market_news (preview tanpa --apply)
+  calibrate | f4 | flows | export | backfill --source X | liquidations (okxws)
 
 ========================================================================================
 """

@@ -407,7 +407,7 @@ def signals_list(
 
 @v1.get("/odds", response_model=OddsOut, tags=["signals"])
 def odds_list(c: Conn):
-    """Polymarket market-implied probabilities (third-party prediction market; not a forecast)."""
+    """Polymarket and Kalshi market-implied probabilities (third-party prediction markets; not a forecast)."""
     return api.list_odds(c)
 
 

@@ -920,21 +920,24 @@ def test_writes_are_keyed_and_capped_before_the_body_is_parsed(client):
 
 
 def test_every_v1_route_requires_the_key(client):
-    """Enumerate the app: a route registered outside the keyed router would be public."""
+    """Enumerate the app (OpenAPI: this FastAPI wraps included routers, so app.routes only shows
+    the router): a route registered outside the keyed router would be public."""
     import re
-
-    from fastapi.routing import APIRoute
 
     from arkwatch.server.app import app as the_app
 
-    for route in the_app.routes:
-        if (
-            not isinstance(route, APIRoute)
-            or not route.path.startswith("/v1")
-            or route.path == "/v1/health"
-        ):
+    paths = the_app.openapi()["paths"]
+    checked = 0
+    for path, ops in paths.items():
+        if path == "/v1/health":
             continue
-        path = re.sub(r"\{[^}]+\}", "1", route.path)
-        for method in route.methods:
-            r = client.request(method, path, headers={"x-arkwatch-key": "wrong"}, json={})
-            assert r.status_code == 401, (method, route.path, r.status_code)
+        for method in ops:
+            r = client.request(
+                method.upper(),
+                re.sub(r"\{[^}]+\}", "1", path),
+                headers={"x-arkwatch-key": "wrong"},
+                json={},
+            )
+            assert r.status_code == 401, (method, path, r.status_code)
+            checked += 1
+    assert checked >= 30  # the inventory itself must not silently shrink to nothing

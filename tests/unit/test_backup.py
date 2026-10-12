@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -71,3 +72,49 @@ def test_main_prunes_old_1m_bars_only(live):
     left = c.execute("SELECT interval, bar_ts_utc FROM intraday_bars ORDER BY 1, 2").fetchall()
     c.close()
     assert left == [("1m", new), ("5m", old)]
+
+
+def test_prune_applies_table_retention_in_chunks(live, monkeypatch):
+    monkeypatch.setattr(backup, "PRUNE_CHUNK", 2)  # force several chunks
+    now = datetime.now(UTC)
+    old = [(now - timedelta(days=8, minutes=i)).isoformat(timespec="seconds") for i in range(5)]
+    new = (now - timedelta(days=1)).isoformat(timespec="seconds")
+    c = sqlite3.connect(live)
+    c.executemany(
+        "INSERT INTO crypto_orderbook_snapshots(ts_utc, source, instrument, raw_json, fetched_at)"
+        " VALUES (?, 'OKX', 'BTC-USDT-SWAP', '{}', ?)",
+        [(ts, new) for ts in [*old, new]],
+    )
+    c.executemany(
+        "INSERT INTO fetch_log(ts, fetcher, target, status) VALUES (?, ?, 't', 'OK')",
+        [(old[0], "market"), (old[0], "fred"), ((now - timedelta(days=40)).isoformat(), "market")],
+    )
+    c.commit()
+    c.close()
+    deleted = backup.prune(str(live), now)
+    assert deleted["crypto_orderbook_snapshots"] == 5
+    c = sqlite3.connect(live)
+    assert c.execute("SELECT ts_utc FROM crypto_orderbook_snapshots").fetchall() == [(new,)]
+    # market rows keep 30 days, every other fetcher 180
+    assert sorted(c.execute("SELECT fetcher FROM fetch_log").fetchall()) == [("fred",), ("market",)]
+    c.close()
+
+
+def test_rotate_keeps_dailies_monthlies_and_sweeps_old_orphans(tmp_path, monkeypatch):
+    d = tmp_path / "backups"
+    d.mkdir()
+    monkeypatch.setattr(backup, "BACKUP_DIR", d)
+    days = [datetime(2026, 1, 1) + timedelta(days=i) for i in range(0, 300, 3)]
+    for day in days:
+        (d / f"arkwatch-{day:%Y%m%d}.db").write_bytes(b"x")
+    stale = d / ".gdelt-retention-before-20260101T000000Z-aaaa.db"
+    fresh = d / ".gdelt-retention-before-20260102T000000Z-bbbb.db"
+    stale.write_bytes(b"x")
+    fresh.write_bytes(b"x")
+    os.utime(stale, (1_000, 1_000))
+    backup.rotate(now=fresh.stat().st_mtime + 60)
+    left = sorted(f.name for f in d.glob("arkwatch-*.db"))
+    monthly = {f"arkwatch-{min(x for x in days if x.month == m):%Y%m%d}.db" for m in range(5, 11)}
+    assert left[-backup.DAILIES :] == [f"arkwatch-{x:%Y%m%d}.db" for x in days[-backup.DAILIES :]]
+    assert set(left) == monthly | set(left[-backup.DAILIES :])
+    assert not stale.exists() and fresh.exists()

@@ -168,8 +168,15 @@ def clean(
             _record_file_sizes(result, path)
             return result
 
-        temporary_backup, backup_bytes, backup_counts = _create_temporary_backup(path, instant)
-        result["temporary_backup_bytes"] = backup_bytes
+        # The full pre-cleanup snapshot guards the GDELT mass delete only; news and fetch_log
+        # pruning is covered by the nightly backup (a 260 MB copy to drop 24 news rows was
+        # pure disk churn, 2026-10-12 audit).
+        temporary_backup, backup_counts = None, {}
+        if any(item["rows"] for item in result["tables"].values()):
+            temporary_backup, backup_bytes, backup_counts = _create_temporary_backup(path, instant)
+            result["temporary_backup_bytes"] = backup_bytes
+        else:
+            result["temporary_backup_bytes"] = 0
         conn.execute("BEGIN IMMEDIATE")
         try:
             for table, backup_count in backup_counts.items():
@@ -189,6 +196,13 @@ def clean(
                 deleted[table] = cursor.rowcount
             fetch_log = conn.execute("DELETE FROM fetch_log WHERE ts < datetime('now', '-180 day')")
             news_cutoff = _cutoff(instant, days=MARKET_NEWS_RETENTION_DAYS)
+            # news_intelligence.news_id REFERENCES market_news (no ON DELETE): children first,
+            # or foreign_keys=ON aborts the whole cleanup (failed every Sunday since v31)
+            intel_del = conn.execute(
+                "DELETE FROM news_intelligence WHERE news_id IN "
+                "(SELECT news_id FROM market_news WHERE published_at_utc < ?)",
+                (news_cutoff,),
+            )
             news_del = conn.execute(
                 "DELETE FROM market_news WHERE published_at_utc < ?", (news_cutoff,)
             )
@@ -197,16 +211,20 @@ def clean(
             )
             deleted["market_news"] = news_del.rowcount
             deleted["market_news_payloads"] = payload_del.rowcount
+            deleted["news_intelligence"] = intel_del.rowcount
             remaining = {table: _summary(conn, table, cutoff)["rows"] for table in TABLES}
             if any(remaining.values()):
                 raise RuntimeError(f"GDELT retention postcondition failed: {remaining}")
-            quick_check = conn.execute("PRAGMA quick_check").fetchone()[0]
-            if quick_check != "ok":
-                raise RuntimeError(f"database quick_check after GDELT cleanup: {quick_check}")
             conn.commit()
         except Exception:
             conn.rollback()
             raise
+        # quick_check scans the whole file: outside the write lock, or every concurrent writer
+        # (okxws, the lanes; busy_timeout 10 s) fails with "database is locked" meanwhile.
+        # A failure here keeps the snapshot for recovery.
+        quick_check = conn.execute("PRAGMA quick_check").fetchone()[0]
+        if quick_check != "ok":
+            raise RuntimeError(f"database quick_check after GDELT cleanup: {quick_check}")
         result["deleted"] = deleted
         result["remaining"] = remaining
         result["quick_check"] = quick_check
@@ -214,8 +232,11 @@ def clean(
         result["freelist_pages"] = conn.execute("PRAGMA freelist_count").fetchone()[0]
         conn.close()
         conn = None
-        temporary_backup.unlink()
-        result["temporary_backup_removed"] = not temporary_backup.exists()
+        if temporary_backup is not None:
+            temporary_backup.unlink()
+        result["temporary_backup_removed"] = (
+            temporary_backup is None or not temporary_backup.exists()
+        )
         _record_file_sizes(result, path)
         return result
     finally:

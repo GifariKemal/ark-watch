@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from arkwatch import db
 from arkwatch.qa import jobs_runner
+from arkwatch.server import app as server_app
 from arkwatch.server.app import app
 
 KEY = "k" * 40
@@ -144,8 +145,17 @@ def test_auth_required_and_rejected(client, path):
 
 def test_health_unauthenticated(client, seeded):
     (seeded.parent / "daemon_heartbeat").write_text(datetime.now(UTC).isoformat())
+    wib_today = datetime.now(server_app.WIB).date()
+    yesterday = wib_today - timedelta(days=1)
     (seeded.parent / "daemon_state.json").write_text(
-        json.dumps({f"0600-harvest@{TODAY}": "1", f"0620-instruments sweep@{TODAY}": "1"})
+        json.dumps(
+            {
+                f"0600-harvest@{wib_today}": "1",
+                f"0620-instruments sweep@{wib_today}": "1",
+                f"2330-backup@{yesterday}": "1",  # an older build persisted every day
+                "bootstrapped": "1",
+            }
+        )
     )
     r = client.get("/v1/health", headers={"x-arkwatch-key": ""})
     assert r.status_code == 200

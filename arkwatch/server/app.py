@@ -27,6 +27,7 @@ from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, FastAPI, Header, Path, Query, Request, Security
 from fastapi.encoders import jsonable_encoder
@@ -271,13 +272,18 @@ def _heartbeat_age_s() -> float | None:
         return None
 
 
+WIB = ZoneInfo("Asia/Jakarta")
+
+
 def _daemon_succeeded_today() -> list[str]:
     try:
         state = json.loads((db.data_dir() / "daemon_state.json").read_text())
     except (OSError, ValueError):
         return []
-    # keys look like "0600-harvest@2026-10-08" (successes of the WIB day only)
-    return sorted(k.split("-", 1)[-1].rsplit("@", 1)[0] for k in state)
+    # keys look like "0600-harvest@2026-10-08"; keep the current WIB day only (an older daemon
+    # build persisted every day since start) and drop the bootstrap markers
+    today = datetime.now(WIB).date().isoformat()
+    return sorted({k.split("-", 1)[-1].rsplit("@", 1)[0] for k in state if k.endswith(f"@{today}")})
 
 
 @app.get(

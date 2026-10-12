@@ -11,11 +11,15 @@ import hashlib
 import sqlite3
 from datetime import UTC, datetime
 
+from .redact import _redact
+
 
 def schema_fp(first_obj: dict | None) -> str | None:
     if not isinstance(first_obj, dict) or not first_obj:
         return None
-    return hashlib.sha1("|".join(sorted(first_obj.keys())).encode()).hexdigest()[:16]
+    return hashlib.sha1(
+        "|".join(sorted(first_obj.keys())).encode(), usedforsecurity=False
+    ).hexdigest()[:16]
 
 
 def log(
@@ -28,6 +32,9 @@ def log(
     fp: str | None = None,
     duration_ms: int | None = None,
 ) -> None:
+    """One fetch_log row; `err` is redacted here so no caller can persist a key it echoed."""
+    if err:
+        err = _redact(err)
     conn.execute(
         "INSERT INTO fetch_log(ts,fetcher,target,status,error,duration_ms,rows,schema_fp)"
         " VALUES (?,?,?,?,?,?,?,?)",
@@ -63,8 +70,6 @@ def log_collection(
     HEALTHY no-news day (fedsurvey 'all sources unchanged', ~95% of days) pass
     status='OK' explicitly — the EMPTY badge is reserved for fetches that
     returned zero OBSERVATIONS (the suspicious case)."""
-    from .redact import _redact
-
     if err:
         err = _redact(err)
     fp = schema_fp(first_obj)

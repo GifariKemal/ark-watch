@@ -1093,16 +1093,23 @@ def main(argv: list[str] | None = None) -> int:
     conn = db.get_conn(a.db, allow_init=True)
     fired = check_all(conn)
     conn.close()
-    # Retry pending alerts on every watch cycle (5-minute per-row pacing in
-    # the sender)
+    # Retry pending alerts on every watch cycle (5-minute per-row pacing in the sender); inside
+    # the daytime window also briefs, so a failed 07:05 send or an API retry is delivered within
+    # a minute instead of the next morning (when a newer brief supersedes it)
     try:
-        from ..senders.outbox import send_pending_alerts
+        from ..senders.outbox import in_brief_window, send_pending, send_pending_alerts
 
-        retried = send_pending_alerts(a.db)
+        if in_brief_window():
+            res = send_pending(a.db)
+            retried = res["alerts"]
+            if res["sent"]:
+                print(f"  ↻ brief delivered: {res['sent']}")
+        else:
+            retried = send_pending_alerts(a.db)
         if retried["sent"]:
             print(f"  ↻ retry alerts sent: {retried['sent']}")
-    except Exception:
-        pass  # no token/env — skipped (the 07:05 send job still runs)
+    except Exception as ex:
+        print(f"  ⚠ outbox retry skipped: {type(ex).__name__}")  # the 07:05 send job still runs
     ts = datetime.now(UTC).isoformat(timespec="seconds")
     if fired:
         print(f"=== watcher {ts}: {len(fired)} alerts fired: {', '.join(fired)} ===")

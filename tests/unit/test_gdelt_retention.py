@@ -85,6 +85,7 @@ def test_gdelt_retention_apply_removes_temporary_backup_after_verified_cleanup(
         "gdelt_events": 1,
         "market_news": 0,
         "market_news_payloads": 0,
+        "news_intelligence": 0,
     }
     assert result["remaining"] == {table: 0 for table in gdelt_retention.TABLES}
     assert result["quick_check"] == "ok"
@@ -205,13 +206,28 @@ def test_market_news_retention_window_is_decoupled(tmp_path, monkeypatch):
             t_100d,
         ),
     )
+    # an NLP row on the old article: its FK (no ON DELETE) aborted every Sunday run until 2026-10-12
+    for news_id, ts in (("n-100d", t_100d), ("n-15d", t_15d)):
+        conn.execute(
+            "INSERT INTO news_intelligence (news_id, asset, stance, magnitude, confidence,"
+            " macro_channel, impact_horizon, evidence_level, evidence_quote,"
+            " transmission_rationale, created_at, published_at_utc)"
+            " VALUES (?, 'NQ1', 'NEUTRAL', 0.1, 0.5, 'RATES', 'DAYS', 'INFERRED', 'q', 'r', ?, ?)",
+            (news_id, ts, ts),
+        )
     conn.commit()
     conn.close()
+    monkeypatch.setattr(gdelt_retention, "BACKUP_DIR", tmp_path / "backups")
 
-    clean(path, now=now, apply=True)
+    result = clean(path, now=now, apply=True)
 
     conn = db.get_conn(path)
     survived = [row[0] for row in conn.execute("SELECT news_id FROM market_news").fetchall()]
+    intel = [row[0] for row in conn.execute("SELECT news_id FROM news_intelligence").fetchall()]
     conn.close()
-    # 15-day-old news survived, 100-day-old news was purged
-    assert survived == ["n-15d"]
+    # 15-day-old news survived, 100-day-old news was purged with its NLP rows
+    assert survived == ["n-15d"] and intel == ["n-15d"]
+    assert result["deleted"]["news_intelligence"] == 1
+    # no GDELT rows to drop: no full-DB snapshot was taken or left behind
+    assert result["temporary_backup_bytes"] == 0
+    assert not (tmp_path / "backups").exists() or not any((tmp_path / "backups").iterdir())

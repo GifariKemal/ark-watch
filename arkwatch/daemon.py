@@ -26,6 +26,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from .qa.redact import _redact
+
 ROOT = Path(__file__).resolve().parent.parent
 # Docker sets ARKWATCH_DATA_DIR=/data: DB, state, logs and backups on the volume
 _DATA_ENV = os.environ.get("ARKWATCH_DATA_DIR")
@@ -224,31 +226,65 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+LANES = ("watch_lane", "market_lane")
+LANE_MAX_AGE_S = 600  # both lanes cycle at least every 5 min; 10 = a missed cycle plus a slow job
+MIN_FREE_BYTES = 3 * 1024**3  # page (dead-man stops pinging) before SQLite hits SQLITE_FULL
+BACKUP_MAX_AGE_S = 36 * 3600  # nightly backup plus a failed night's slack
+
+
 def _heartbeat():
-    _atomic_write(HEARTBEAT, datetime.now(UTC).isoformat(timespec="seconds"))
+    """Main loop -> daemon_heartbeat; a lane thread -> its own <lane>_heartbeat. Only the main
+    loop proves the scheduler is cycling: lanes used to refresh the shared file, so a wedged
+    main loop looked healthy (2026-10-12 audit)."""
+    t = threading.current_thread()
+    lane = t.name.strip("_")
+    path = HEARTBEAT if lane not in LANES else HEARTBEAT.with_name(f"{lane}_heartbeat")
+    _atomic_write(path, datetime.now(UTC).isoformat(timespec="seconds"))
+
+
+def _age_s(path: Path) -> float:
+    return (datetime.now(UTC) - datetime.fromisoformat(path.read_text().strip())).total_seconds()
 
 
 def healthcheck(heartbeat: Path | None = None, db_path: Path | None = None) -> int:
-    """Docker HEALTHCHECK: 0 = heartbeat fresh (<5 min) and DB readable."""
+    """Docker HEALTHCHECK and dead-man gate: 0 = main heartbeat fresh (<5 min), lane
+    heartbeats fresh (<10 min, when present), DB readable, >= 3 GB free on the data volume
+    and the newest nightly backup < 36 h old (when any exists)."""
+    import shutil
     import sqlite3
 
+    heartbeat = heartbeat or HEARTBEAT
+    db_file = Path(db_path or DB_PATH)
+    problems = []
     try:
-        beat = datetime.fromisoformat((heartbeat or HEARTBEAT).read_text().strip())
-        age = (datetime.now(UTC) - beat).total_seconds()
+        age = _age_s(heartbeat)
         # as_uri() percent-encodes '#', '?', '%' (a raw f"file:{path}" cut the path at '#')
-        uri = Path(db_path or DB_PATH).resolve().as_uri()
-        conn = sqlite3.connect(f"{uri}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"{db_file.resolve().as_uri()}?mode=ro", uri=True)
         try:
             conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
         finally:
             conn.close()
+        free = shutil.disk_usage(db_file.parent).free
     except Exception as ex:
         print(f"unhealthy: {type(ex).__name__}: {ex}")
         return 1
     if age > HEALTH_MAX_AGE_S:
-        print(f"unhealthy: heartbeat {age:.0f}s old")
+        problems.append(f"heartbeat {age:.0f}s old")
+    for lane in LANES:
+        f = heartbeat.with_name(f"{lane}_heartbeat")
+        if f.exists() and (lane_age := _age_s(f)) > LANE_MAX_AGE_S:
+            problems.append(f"{lane} {lane_age:.0f}s old")
+    if free < MIN_FREE_BYTES:
+        problems.append(f"disk free {free / 1024**3:.1f} GB")
+    backups = list((db_file.parent / "backups").glob("arkwatch-*.db"))
+    if backups:
+        newest = max(f.stat().st_mtime for f in backups)
+        if (b_age := time.time() - newest) > BACKUP_MAX_AGE_S:
+            problems.append(f"newest backup {b_age / 3600:.0f}h old")
+    if problems:
+        print("unhealthy: " + "; ".join(problems))
         return 1
-    print(f"ok: heartbeat {age:.0f}s old")
+    print(f"ok: heartbeat {age:.0f}s old, disk free {free / 1024**3:.1f} GB")
     return 0
 
 
@@ -438,6 +474,7 @@ def _run_job(cmd: str, desc: str) -> bool:
                 result = next((ln for ln in reversed(tail) if ln.startswith("{")), None)
                 if result is None:
                     logger.error("gdelt-retention-result missing structured output")
+                    _alert_job_failed(cmd, "exit 0 without its structured result line")
                     return False
                 logger.info(f"gdelt-retention-result {result}")
                 return True
@@ -454,9 +491,9 @@ def _run_job(cmd: str, desc: str) -> bool:
         fail_lines = [
             ln for ln in err if any(m in ln for m in ("✗", "ERROR", "Error", "Traceback"))
         ]
-        tail = (" | ".join(fail_lines[-2:]) if fail_lines else (err[-1] if err else "no output"))[
-            :200
-        ]
+        tail = _redact(
+            (" | ".join(fail_lines[-2:]) if fail_lines else (err[-1] if err else "no output"))[:200]
+        )
         logger.error(f"✗ {cmd} ({dt:.0f}s) exit={code}, {tail}")
         _alert_job_failed(cmd, tail)
         return False
@@ -558,23 +595,28 @@ def _load_state(path: Path | None = None) -> dict[str, str]:
     import json as _json
 
     try:
-        raw = _json.loads((path or STATE_PATH).read_text())
-        today = datetime.now(WIB).date().isoformat()
-        return {
-            k: v
-            for k, v in raw.items()
-            if (k.endswith(f"@{today}") or k in (BOOTSTRAP_MARKER, BOOTSTRAP_STARTED)) and v == "1"
-        }
+        return _today_successes(_json.loads((path or STATE_PATH).read_text()))
     except Exception:
         return {}
 
 
+def _today_successes(d: dict[str, str]) -> dict[str, str]:
+    today = datetime.now(WIB).date().isoformat()
+    return {
+        k: v
+        for k, v in d.items()
+        if (k.endswith(f"@{today}") or k in (BOOTSTRAP_MARKER, BOOTSTRAP_STARTED)) and v == "1"
+    }
+
+
 def _save_state(d: dict[str, str], path: Path | None = None) -> None:
-    """Persist the day-state — successes only, mirroring _load_state."""
+    """Persist the day-state — today's successes only, mirroring _load_state (the in-memory
+    last_run keeps every day since start: dumping it all made /v1/health list yesterday's
+    successes as today's, 2026-10-12 audit)."""
     import json as _json
 
     try:
-        succ = {k: v for k, v in d.items() if v == "1"}
+        succ = _today_successes(d)
         _atomic_write(path or STATE_PATH, _json.dumps(succ))
     except Exception as ex:
         logger.warning(f"state persist failed: {ex}")

@@ -21,6 +21,7 @@ from pathlib import Path
 from .. import db
 from ..fetchers.fred import fetch_observations
 from . import fetch_log
+from .redact import _redact
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
 
@@ -86,6 +87,7 @@ def harvest_alfred_vintages(
                 sort="asc",
             )
         except Exception as ex:
+            msg = _redact(str(ex))  # requests echoes the URL, and FRED's key rides its query
             dur_ms = int((time.time() - t0) * 1000)
             fetch_log.log(
                 conn,
@@ -93,11 +95,11 @@ def harvest_alfred_vintages(
                 f"{full_sid}:VINTAGE",
                 "ERROR",
                 0,
-                err=str(ex)[:160],
+                err=msg[:160],
                 duration_ms=dur_ms,
             )
             counts[full_sid] = -1
-            print(f"  ✗ {full_sid}: {ex}")
+            print(f"  ✗ {full_sid}: {msg}")
             continue
 
         valid_rows = [

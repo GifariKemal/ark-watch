@@ -9,7 +9,8 @@ BROADCAST to every active channel.
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from ..config import missing_env
 from ..db import get_conn
@@ -22,6 +23,9 @@ CHANNEL_ENV = {
 }
 
 CLAIM_STALE_MIN = 10  # re-claim a sending row only after >10 min
+# The watch lane also delivers briefs (retries of a failed send, an API retry) but only inside
+# this WIB window: the 04:15 Saturday edition must still wait for the 07:05 send, not ring at 04:16
+BRIEF_WINDOW_WIB = (time(7, 5), time(22, 0))
 BRIEF_MAX_ATTEMPTS = 3
 ALERT_MAX_ATTEMPTS = 5
 ALERT_MIN_GAP_S = 300  # minimum gap between alert attempts
@@ -42,7 +46,7 @@ def _claim_brief_rows(conn: sqlite3.Connection) -> list[tuple]:
         "SELECT channel, MAX(brief_date) FROM brief_deliveries GROUP BY channel"
     ).fetchall()
     keep_ids: list[int] = []
-    for channel, _max_date in newest:
+    for channel, max_date in newest:
         row = conn.execute(
             "SELECT id FROM brief_deliveries"
             " WHERE channel=? AND brief_date=?"
@@ -50,28 +54,21 @@ def _claim_brief_rows(conn: sqlite3.Connection) -> list[tuple]:
             "  OR (status='sending' AND (claimed_at IS NULL OR claimed_at < ?))"
             "  OR (status='failed' AND attempts < ?))"
             " ORDER BY id DESC LIMIT 1",
-            (channel, _max_date, stale, BRIEF_MAX_ATTEMPTS),
+            (channel, max_date, stale, BRIEF_MAX_ATTEMPTS),
         ).fetchone()
         if row:
             keep_ids.append(row[0])
-    # supersede everything older still marked undelivered — but NEVER a
-    # fresh 'sending' row (< CLAIM_STALE_MIN old): a second send_pending
-    # inside the claim window would terminally kill the in-flight delivery
-    if keep_ids:
-        marks = ",".join("?" * len(keep_ids))
+        # supersede what a fresher brief replaced — but NEVER a fresh 'sending' row
+        # (< CLAIM_STALE_MIN old: a second send_pending inside the claim window would kill
+        # the in-flight delivery) and never the newest date's terminal failure (attempts
+        # spent): relabelling it hid the failure and made the API retry refuse it
         conn.execute(
             "UPDATE brief_deliveries SET status='superseded'"
-            f" WHERE id NOT IN ({marks}) AND status IN ('pending','failed')"
-            " OR (id NOT IN (" + marks + ") AND status='sending'"
-            " AND (claimed_at IS NULL OR claimed_at < ?))",
-            (*keep_ids, *keep_ids, stale),
-        )
-    else:
-        conn.execute(
-            "UPDATE brief_deliveries SET status='superseded'"
-            " WHERE status IN ('pending','failed')"
-            " OR (status='sending' AND (claimed_at IS NULL OR claimed_at < ?))",
-            (stale,),
+            " WHERE channel=? AND id<>?"
+            " AND (brief_date<? OR NOT (status='failed' AND attempts>=?))"
+            " AND (status IN ('pending','failed')"
+            "  OR (status='sending' AND (claimed_at IS NULL OR claimed_at < ?)))",
+            (channel, row[0] if row else -1, max_date, BRIEF_MAX_ATTEMPTS, stale),
         )
     rows = []
     for row_id in keep_ids:
@@ -87,6 +84,11 @@ def _claim_brief_rows(conn: sqlite3.Connection) -> list[tuple]:
         rows.append(r)
     conn.execute("COMMIT")
     return rows
+
+
+def in_brief_window(now: datetime | None = None) -> bool:
+    t = (now or datetime.now(UTC)).astimezone(ZoneInfo("Asia/Jakarta")).time()
+    return BRIEF_WINDOW_WIB[0] <= t < BRIEF_WINDOW_WIB[1]
 
 
 def send_pending(db_path: str) -> dict:
@@ -200,11 +202,17 @@ def send_pending_alerts(
                 conn.commit()
                 return {"sent": 0, "still_pending": 0, "skipped": len(rows)}
             for row_id, message, attempts in rows:
-                conn.execute(
-                    "UPDATE alert_deliveries SET attempts=attempts+1, last_attempt=? WHERE id=?",
-                    (now_iso, row_id),
-                )
+                # claim: the watch lane (every 60 s) and the send job both run this; only the
+                # process whose UPDATE wins sends, so a row never goes out twice
+                claimed = conn.execute(
+                    "UPDATE alert_deliveries SET attempts=attempts+1, last_attempt=?"
+                    " WHERE id=? AND status='pending' AND attempts=?"
+                    " AND (last_attempt IS NULL OR last_attempt < ?)",
+                    (now_iso, row_id, attempts, gap_before),
+                ).rowcount
                 conn.commit()
+                if not claimed:
+                    continue
                 delivered_id = None
                 for ch_name, ch in channels.items():
                     try:

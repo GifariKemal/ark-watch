@@ -231,7 +231,9 @@ def event_uid(normalized_name: str, ts_utc: str) -> str:
     actuals silently never filled for them. ONE canonical helper for ALL
     writers; the uid uses only the DATE because the winning TIME can change
     between pulls (dedup key is name+date)."""
-    return hashlib.sha1(f"{normalized_name}|{ts_utc[:10]}|US".encode()).hexdigest()[:16]
+    return hashlib.sha1(
+        f"{normalized_name}|{ts_utc[:10]}|US".encode(), usedforsecurity=False
+    ).hexdigest()[:16]
 
 
 # Sub-component event families whose vendor feed is DEAD: no consensus AND no

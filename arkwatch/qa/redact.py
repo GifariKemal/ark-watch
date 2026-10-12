@@ -7,7 +7,10 @@ from __future__ import annotations
 import re
 
 _SECRET_RE = re.compile(
-    r"((?:api_key|api_token|apikey|token|key)=)[^&\s]+"
+    r"((?<![a-z0-9])(?:api_key|api_token|apikey|token|key|secret|password|passwd|auth|sig)=)[^&\s]+"
+    r"|([\"'](?:api_key|apikey|api_token|token|secret|password)[\"']\s*:\s*[\"'])[^\"']+"  # JSON
+    r"|(x-api-key[\"']?\s*[:=]\s*[\"']?)[^\s\"',}]+"  # header echo
+    r"|(hc-ping\.com/)[\w-]+"  # healthchecks.io ping URL (the uuid is the secret)
     r"|(/bot)\d+:[\w-]+"  # Telegram bot token in an echoed URL path
     r"|(/api/webhooks/)[^\s'\"]+"  # Discord webhook id/token
     r"|(ntfy[\w.:-]*/)[^\s'\"]+"  # ntfy topic (the topic name is the secret)

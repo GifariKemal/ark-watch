@@ -91,3 +91,12 @@ def test_gdelt_retention_logs_complete_structured_result(monkeypatch):
 
     assert daemon._run_job("gdelt-retention --apply", "weekly cleanup") is True
     assert f"gdelt-retention-result {result}" in logs
+
+
+def test_save_state_drops_previous_days(tmp_path):
+    p = tmp_path / "state.json"
+    today = datetime.now(WIB).date().isoformat()
+    _save_state(
+        {f"0600-harvest@{today}": "1", "0600-harvest@2000-01-01": "1", "bootstrapped": "1"}, p
+    )
+    assert set(json.loads(p.read_text())) == {f"0600-harvest@{today}", "bootstrapped"}

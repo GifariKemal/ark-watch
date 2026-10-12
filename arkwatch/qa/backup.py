@@ -1,9 +1,11 @@
-"""Manual database backup command: VACUUM INTO + verification.
+"""Nightly database backup: VACUUM INTO + verification + rotation + table retention.
 
 Verification opens the resulting file, runs integrity_check, and compares the
-row COUNTs of key tables. Retention: 30 dailies + 12 monthlies (monthly = the
-first backup of each month). Copying the live DB file directly is forbidden
-(a live SQLite file in WAL mode may copy inconsistently).
+row COUNTs of key tables. Retention: 7 dailies + 6 monthlies (monthly = the
+first backup of each month). Every backup is a full copy on the SAME volume,
+so the count stays small; offsite is Litestream's job. Copying the live DB
+file directly is forbidden (a live SQLite file in WAL mode may copy
+inconsistently).
 """
 
 from __future__ import annotations
@@ -22,9 +24,30 @@ _DATA_ENV = os.environ.get("ARKWATCH_DATA_DIR")
 DEFAULT_DB = (Path(_DATA_ENV) if _DATA_ENV else _ROOT / "data") / "arkwatch.db"
 BACKUP_DIR = Path(_DATA_ENV) / "backups" if _DATA_ENV else _ROOT / "backups"
 KEY_TABLES = ("raw_observations", "instrument_prices", "events")
-# 1m bars are a same-day view (market_timeline refetches range=1d); every
-# signal/level/backtest reader pins interval='5m'
-INTRADAY_1M_RETENTION_DAYS = 3
+DAILIES, MONTHLIES = 7, 6
+# Crash leftovers of gdelt_retention's pre-cleanup snapshot (dot-prefixed, outside the *.db glob)
+ORPHAN_GLOB, ORPHAN_MAX_AGE_S = ".gdelt-retention-before-*.db", 86400
+# (table, time column, keep days, extra filter). 2026-10-12 audit: the OKX stream grew the DB
+# ~60-85 MB/day with no retention at all. Longest reader per table:
+# - intraday 1m: same-day view (market_timeline refetches range=1d); readers pin interval='5m'
+# - fetch_log: health views read <= 8 days; the 5-minute market/okx rows are 90% of the volume
+# - orderbook snapshots, raw trade batches, trade events: no reader beyond MAX(ts) (recovery
+#   highwater) - a raw archive
+# - liquidations: cascade detector baseline 30 days; flow_1m: CVD 24 h
+# - cme options: OI walls/max pain read the latest date, the PCR band the trailing history
+RETENTION = (
+    ("fetch_log", "ts", 180, ""),
+    ("fetch_log", "ts", 30, " AND fetcher IN ('market', 'okx_market')"),
+    ("intraday_bars", "bar_ts_utc", 3, " AND interval = '1m'"),
+    ("crypto_orderbook_snapshots", "ts_utc", 7, ""),
+    ("crypto_trade_raw_batches", "batch_ts_utc", 7, ""),
+    ("crypto_trade_events", "ts_utc", 7, ""),
+    ("crypto_liquidations", "ts_utc", 35, ""),
+    ("crypto_trade_flow_1m", "minute_utc", 180, ""),
+    ("crypto_derivatives", "ts_utc", 180, ""),
+    ("cme_options_settlements", "trade_date", 400, ""),
+)
+PRUNE_CHUNK = 5000  # short write transactions: okxws and the lanes keep writing meanwhile
 
 
 def backup(db_path: str = str(DEFAULT_DB)) -> Path:
@@ -45,6 +68,8 @@ def backup(db_path: str = str(DEFAULT_DB)) -> Path:
         # credential-adjacent table; harden.sh swept the old ones but every NEW
         # backup was still born 644 (umask default)
         os.chmod(tmp, 0o600)
+        # verify BEFORE the rename: a bad copy must never replace today's good one
+        verify(db_path, tmp)
         os.replace(tmp, dst)
     finally:
         tmp.unlink(missing_ok=True)
@@ -70,12 +95,16 @@ def verify(db_path: str, backup_path: Path) -> None:
         bak.close()
 
 
-def rotate() -> None:
-    """Retention: last 30 dailies + the first backup of each month (max 12 months).
+def rotate(now: float | None = None) -> None:
+    """Retention: last DAILIES dailies + the first backup of each month (max MONTHLIES).
 
     The first backup of a month is preserved so monthly history survives the
-    30-day daily rotation.
+    daily rotation. Also sweeps gdelt_retention snapshots a hard kill left behind.
     """
+    cutoff = (now if now is not None else datetime.now(UTC).timestamp()) - ORPHAN_MAX_AGE_S
+    for f in BACKUP_DIR.glob(ORPHAN_GLOB):
+        if f.stat().st_mtime < cutoff:
+            f.unlink(missing_ok=True)
     files = sorted(BACKUP_DIR.glob("arkwatch-*.db"))
     # Monthly = the FIRST backup of each month (smallest date per YYYYMM)
     first_of_month: dict[str, Path] = {}
@@ -84,10 +113,39 @@ def rotate() -> None:
         ym = stem[9:15]
         if ym.isdigit() and len(ym) == 6:
             first_of_month.setdefault(ym, f)
-    keep_monthly = set(first_of_month[ym] for ym in sorted(first_of_month)[-12:])
+    keep_monthly = set(first_of_month[ym] for ym in sorted(first_of_month)[-MONTHLIES:])
     dailies = [f for f in files if f not in keep_monthly]
-    for f in dailies[:-30]:
+    for f in dailies[:-DAILIES]:
         f.unlink(missing_ok=True)
+
+
+def prune(db_path: str, now: datetime | None = None) -> dict[str, int]:
+    """Apply RETENTION in PRUNE_CHUNK-row transactions; returns deleted rows per table."""
+    now = now or datetime.now(UTC)
+    deleted: dict[str, int] = {}
+    conn = sqlite3.connect(db_path, isolation_level=None)
+    try:
+        conn.execute("PRAGMA busy_timeout=30000")
+        for table, col, days, extra in RETENTION:
+            cut = now - timedelta(days=days)
+            cutoff = (
+                cut.date().isoformat() if col == "trade_date" else cut.isoformat(timespec="seconds")
+            )
+            sql = (
+                f"DELETE FROM {table} WHERE rowid IN"  # table/col/extra are internal literals
+                f" (SELECT rowid FROM {table} WHERE {col} < ?{extra} LIMIT {PRUNE_CHUNK})"
+            )
+            n = 0
+            while True:
+                rc = conn.execute(sql, (cutoff,)).rowcount
+                n += rc
+                if rc < PRUNE_CHUNK:
+                    break
+            deleted[table] = deleted.get(table, 0) + n
+        conn.execute("PRAGMA optimize")  # refresh planner stats where they drifted
+    finally:
+        conn.close()
+    return deleted
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -95,29 +153,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--db", default=str(DEFAULT_DB))
     a = p.parse_args(argv)
     dst = backup(a.db)
-    verify(a.db, dst)
     rotate()
-    # ROUND-6: fetch_log is the one operational table that grew unbounded
-    # (~300-900 rows/day incl. retries) with no consumer beyond ~7d of
-    # health checks — prune past 180d nightly with the backup. Each DELETE
-    # autocommits on its own (short write lock, the daemon keeps running).
     try:
-        _c = sqlite3.connect(a.db, isolation_level=None)
-        try:
-            _c.execute("PRAGMA busy_timeout=30000")
-            cur = _c.execute("DELETE FROM fetch_log WHERE ts < datetime('now', '-180 day')")
-            print(f"  fetch_log pruned: -{cur.rowcount} rows (>180d)")
-            cutoff = datetime.now(UTC) - timedelta(days=INTRADAY_1M_RETENTION_DAYS)
-            cur = _c.execute(
-                "DELETE FROM intraday_bars WHERE interval = '1m' AND bar_ts_utc < ?",
-                (cutoff.isoformat(timespec="seconds"),),
-            )
-            print(f"  intraday 1m pruned: -{cur.rowcount} rows (>{INTRADAY_1M_RETENTION_DAYS}d)")
-            _c.execute("PRAGMA optimize")  # refresh planner stats where they drifted
-        finally:
-            _c.close()
+        pruned = prune(a.db)
+        msg = ", ".join(f"{t} -{n}" for t, n in pruned.items() if n)
+        print(f"  pruned: {msg or 'none'}")
     except Exception as ex:  # pruning must never fail the backup
-        print(f"  ⚠ prune/optimize skipped: {str(ex)[:80]}")
+        print(f"  ⚠ prune skipped: {str(ex)[:80]}")
     print(
         f"=== backup OK: {dst.name} ({dst.stat().st_size / 1e6:.1f} MB, "
         f"integrity ✓, key-table COUNTs match) ==="

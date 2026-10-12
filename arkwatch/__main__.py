@@ -358,11 +358,14 @@ def main() -> int:
 
         load_dotenv()
         result = send_pending(_DEFAULT_DB if len(sys.argv) < 3 else sys.argv[2])
+        failed = result["failed"] + result.get("alerts", {}).get("failed", 0)
         print(
-            f"=== Telegram sender: {result['sent']} sent · {result['failed']} failed"
+            f"=== outbox sender: {result['sent']} sent · {result['failed']} failed"
             f" · alerts {result.get('alerts', {}).get('sent', 0)} ==="
         )
-        return 0
+        # exit 1 on a failed delivery: the daemon then pages (job_failed) and retries in
+        # 10 minutes; exit 0 here silently lost the day's brief (2026-10-12 audit)
+        return 1 if failed else 0
     if cmd == "export":
         import csv
         import sqlite3

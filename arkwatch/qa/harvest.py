@@ -88,7 +88,9 @@ def harvest(db_path: str = str(DEFAULT_DB), *, block: str | None = None) -> tupl
         fields, so the drift check below raises an alarm."""
         if not isinstance(obj, dict) or not obj:
             return None
-        return hashlib.sha1("|".join(sorted(obj.keys())).encode()).hexdigest()[:16]
+        return hashlib.sha1(
+            "|".join(sorted(obj.keys())).encode(), usedforsecurity=False
+        ).hexdigest()[:16]
 
     ok = fail = rows_new = 0
     now = datetime.now(UTC).isoformat(timespec="seconds")

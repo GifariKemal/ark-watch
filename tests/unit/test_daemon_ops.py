@@ -5,6 +5,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -67,6 +68,39 @@ def test_healthcheck_exit_codes(tmp_path):
     junk.write_bytes(b"not a database at all" * 10)
     assert daemon.healthcheck(_beat(tmp_path / "hb", 10), junk) == 1
     assert daemon.healthcheck(_beat(tmp_path / "hb2", 10), tmp_path / "absent.db") == 1
+
+
+def test_healthcheck_lanes_disk_and_backup_age(tmp_path, monkeypatch):
+    import shutil
+    from collections import namedtuple
+
+    db = _db(tmp_path / "arkwatch.db")
+    hb = _beat(tmp_path / "daemon_heartbeat", 10)
+    assert daemon.healthcheck(hb, db) == 0  # no lane files / no backups yet: first boot is fine
+    _beat(tmp_path / "watch_lane_heartbeat", 900)
+    assert daemon.healthcheck(hb, db) == 1  # a dead lane is unhealthy even if main beats
+    _beat(tmp_path / "watch_lane_heartbeat", 30)
+    (tmp_path / "backups").mkdir()
+    old = tmp_path / "backups" / "arkwatch-20260101.db"
+    old.write_bytes(b"x")
+    os.utime(old, (0, 0))
+    assert daemon.healthcheck(hb, db) == 1  # backups stopped
+    os.utime(old, None)
+    assert daemon.healthcheck(hb, db) == 0
+    du = namedtuple("du", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda _p: du(10, 9, 1024**3))
+    assert daemon.healthcheck(hb, db) == 1  # 1 GB left
+
+
+def test_lane_threads_write_their_own_heartbeat(tmp_path, monkeypatch):
+    monkeypatch.setattr(daemon, "HEARTBEAT", tmp_path / "daemon_heartbeat")
+    t = threading.Thread(target=daemon._heartbeat, name="_watch_lane")
+    t.start()
+    t.join()
+    assert (tmp_path / "watch_lane_heartbeat").exists()
+    assert not (tmp_path / "daemon_heartbeat").exists()
+    daemon._heartbeat()
+    assert (tmp_path / "daemon_heartbeat").exists()
 
 
 def test_heartbeat_keeps_refreshing_during_long_job(monkeypatch):

@@ -142,3 +142,14 @@ class TestExitCodeContract:
         conn.close()
         rc = fh.main(["--db", str(tmp_path / "t.db")])
         assert rc == 0
+
+
+def test_minutes_excerpt_skips_the_staff_review():
+    staff = "Staff Review of the Economic Situation " + "s" * 30000
+    views = "Participants’ Views on Current Conditions: inflation remained elevated " + "v" * 30000
+    action = "Committee Policy Actions: members agreed to raise the target range " + "a" * 5000
+    text = f"{staff} {views} {action}"
+    out = minutes.policy_excerpt(text)
+    assert len(out) <= 12000 and out.startswith("Participants")
+    assert "members agreed to raise" in out and "Staff Review" not in out
+    assert minutes.policy_excerpt("no headings " * 2000) == ("no headings " * 2000)[:12000]

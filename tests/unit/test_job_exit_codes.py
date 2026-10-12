@@ -104,3 +104,20 @@ def test_multi_source_exit_code_pages_only_on_broad_outage():
     assert exit_code(227, 1) == 0  # one series of the harvest: degradation, logged
     assert exit_code(3, 3) == 1  # half or more failed: an outage
     assert exit_code(0, 1) == 1 and exit_code(5, 0) == 0
+
+
+def test_cme_restated_settle_replaces_the_preliminary_print(tmp_path):
+    from arkwatch import db
+    from arkwatch.qa.cme_harvest import _save_settlements
+
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    row = {"trade_date": "2026-09-17", "product_id": 305, "month": "OCT 26", "volume": 1.0,
+           "open_interest": 10.0}  # fmt: skip
+    assert _save_settlements(conn, [row | {"settle": 96.105}]) == 1
+    assert _save_settlements(conn, [row | {"settle": 96.105}]) == 0  # unchanged: no write
+    assert _save_settlements(conn, [row | {"settle": 96.110, "open_interest": 12.0}]) == 1
+    assert conn.execute("SELECT settle, open_interest FROM cme_settlements").fetchone() == (
+        96.11,
+        12.0,
+    )
+    conn.close()

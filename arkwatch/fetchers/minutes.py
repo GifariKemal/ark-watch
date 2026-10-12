@@ -167,3 +167,19 @@ def minutes_dates() -> list[str]:
         raise MinutesError(f"FOMC calendar: HTTP {r.status_code}")
     dates = sorted(set(re.findall(r"fomcminutes(\d{8})\.htm", r.text)), reverse=True)
     return [f"{d[:4]}-{d[4:6]}-{d[6:]}" for d in dates]
+
+
+def policy_excerpt(text: str, budget: int = 12000) -> str:
+    """The part of the minutes that carries the policy tone, within the NLP budget.
+
+    analyze_tone reads 12k characters. Minutes run 60-90k and open with the staff and markets
+    reviews, so the first 12k scored the staff's description, not the Committee: take the
+    participants' views (3/4 of the budget) plus the policy-action section (1/4); fall back to
+    the head when a layout change hides both headings."""
+    views = re.search(r"Participants\W{1,2}Views", text)  # straight or curly apostrophe
+    action = re.search(r"Committee Policy Actions?", text)
+    if not views and not action:
+        return text[:budget]
+    head = text[views.start() : views.start() + budget * 3 // 4] if views else ""
+    tail = text[action.start() : action.start() + budget - len(head)] if action else ""
+    return (head + "\n...\n" + tail if head and tail else head or tail)[:budget]

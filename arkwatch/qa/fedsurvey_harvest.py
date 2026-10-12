@@ -177,14 +177,14 @@ def harvest_all(conn) -> dict[str, str]:
 
     # --- FOMC Minutes (NLP) ---
     try:
-        from ..fetchers.minutes import minutes_dates, parse_minutes
+        from ..fetchers.minutes import minutes_dates, parse_minutes, policy_excerpt
 
         latest = minutes_dates()[0]  # newest available
         stored = _latest_stored(conn, "minutes")
         # minutes ts = meeting date (release is +3wk but URL uses meeting date)
         if _check_new(latest, stored):
             p = parse_minutes(latest)
-            tone = _nlp_tone(p["full_text"], "minutes")
+            tone = _nlp_tone(policy_excerpt(p["full_text"]), "minutes")
             dissent_metrics = {"net_bias": p["dissent_direction"] or "none"}
             if tone.get("score") is None:
                 _store_row(

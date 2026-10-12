@@ -141,9 +141,17 @@ def _save_settlements(conn, rows: list[dict]) -> int:
     ]
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # upsert, not first-print-wins: CME restates a preliminary settle hours later (ZQ,
+        # 2026-09-17) and OI finalizes the next day; FedWatch/ECBWatch/XCCY read these rows.
+        # rowcount = rows inserted or actually changed.
         cur = conn.executemany(
-            "INSERT OR IGNORE INTO cme_settlements(trade_date,product_id,month,settle,volume,open_interest,fetched_at)"
-            " VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO cme_settlements(trade_date,product_id,month,settle,volume,open_interest,fetched_at)"
+            " VALUES (?,?,?,?,?,?,?)"
+            " ON CONFLICT(trade_date, product_id, month) DO UPDATE SET settle=excluded.settle,"
+            " volume=excluded.volume, open_interest=excluded.open_interest,"
+            " fetched_at=excluded.fetched_at"
+            " WHERE settle IS NOT excluded.settle OR volume IS NOT excluded.volume"
+            " OR open_interest IS NOT excluded.open_interest",
             payload,
         )
         conn.execute("COMMIT")

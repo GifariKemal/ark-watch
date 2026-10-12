@@ -153,10 +153,6 @@ def _save_settlements(conn, rows: list[dict]) -> int:
     return cur.rowcount
 
 
-def harvest_cvol(conn) -> int:
-    return harvest_cvol_from(conn, cme.fetch_cvol())
-
-
 def harvest_cvol_from(conn, rows: list[dict]) -> int:
     payload = [
         (

@@ -53,7 +53,6 @@ SECURITY_TYPE_COLUMNS = {
     "FRNs": "frn",
     "TIPS": "tips",
 }
-NOMINAL_TYPES = ("Bills", "NotesBonds", "FRNs")  # everything except TIPS
 
 
 class SomaError(RuntimeError):

@@ -160,36 +160,6 @@ def parse_minutes(date_iso: str) -> dict:
     }
 
 
-def nlp_sentiment(text: str, api_key: str | None = None) -> dict:
-    """Minutes tone analysis — thin wrapper over the canonical NLP layer.
-
-    AUDIT 2026-09-20: the fedsurvey_harvest rewrite (db61aff) replaced this
-    function's only caller with nlp.analyze_tone, leaving this near-duplicate
-    implementation dead — two prompts that could drift apart invisibly. It
-    stays as a delegation (the agent-harness plan references the API) so there
-    is exactly ONE provider/prompt implementation: nlp.py.
-
-    api_key (backward-compat) is honored via NLP_API_KEY and RESTORED after
-    the call — the round-2 mutation version leaked it into the process env,
-    silently retargeting every later NLP call.
-    """
-    import os as _os
-
-    old = _os.environ.get("NLP_API_KEY")
-    if api_key:
-        _os.environ["NLP_API_KEY"] = api_key
-    try:
-        from .nlp import analyze_tone
-
-        return analyze_tone(text, source_type="minutes")
-    finally:
-        if api_key:
-            if old is None:
-                _os.environ.pop("NLP_API_KEY", None)
-            else:
-                _os.environ["NLP_API_KEY"] = old
-
-
 def minutes_dates() -> list[str]:
     """All minutes release dates (meeting end-dates) from the calendar."""
     r = requests.get(CALENDAR_URL, timeout=(10, 60))

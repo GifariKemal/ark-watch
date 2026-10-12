@@ -257,10 +257,6 @@ def fetch_latest(series_id: str) -> dict:
     raise NyFedError(f"unknown nyfed series: {key}")
 
 
-def fetch_history_sofr(n: int = 500) -> list[dict]:
-    return fetch_sofr_percentiles(n)
-
-
 # --- SOMA agency holdings + WAM -------------------------------------------------
 
 

@@ -8,7 +8,6 @@ Single table: column 0 = Peak, column 1 = Trough, cell format
 from __future__ import annotations
 
 import re
-from datetime import datetime
 
 import requests
 
@@ -58,22 +57,3 @@ def fetch_recession_dates() -> list[dict]:
             }
         )
     return out
-
-
-def is_recession(date_str: str, cycles: list[dict]) -> bool | None:
-    """Check whether a date falls inside an NBER recession period (peak <= d <= trough)."""
-    try:
-        d = datetime.strptime(date_str[:10], "%Y-%m-%d")
-    except ValueError:
-        return None
-    for c in cycles:
-        try:
-            if not c.get("peak"):
-                continue
-            peak = datetime.strptime(c["peak"], "%B %Y")
-            trough = datetime.strptime(c["trough"], "%B %Y") if c.get("trough") else datetime.max
-            if peak <= d <= trough:
-                return True
-        except ValueError:
-            continue
-    return False

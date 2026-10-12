@@ -93,9 +93,3 @@ def fetch_first_ts(series_id: str) -> str:
         raise EcbError(f"ecb: unrouted series {series_id}")
     rows = _csv_rows(ESTR_KEY, last_n=1, start="2019-10-01", first_n=1)
     return rows[0]["ts"] if rows else "2019-10-02"
-
-
-def fetch_dfr(last_n: int = 5) -> list[dict]:
-    """Deposit Facility Rate from the portal — backup when FRED:ECBDFR is
-    stale (both carry the same series; kept for the anchor cross-check)."""
-    return _csv_rows(DFR_KEY, last_n, None)

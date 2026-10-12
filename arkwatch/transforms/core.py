@@ -8,16 +8,6 @@ N trading days (D series) or N months (M series).
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-
-
-@dataclass
-class TransformResult:
-    value: float | None
-    z: float | None = None
-    percentile: float | None = None  # 0-100
-    momentum: float | None = None
-    state: str = "INSUFFICIENT"
 
 
 def zscore(values: list[float], window: int = 1260, min_frac: float = 0.8) -> float | None:

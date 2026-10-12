@@ -20,17 +20,6 @@ from ..fetchers.fiscal import ERAS
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
 
-REQUIRED_FIELDS = (
-    "series_id",
-    "name",
-    "block",
-    "tier",
-    "unit",
-    "value_format",
-    "freq",
-    "primary_source",
-)
-
 
 def sync_registry(conn) -> int:
     """Sync upstream config into series_registry (FK target for raw_observations)."""

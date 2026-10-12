@@ -213,12 +213,6 @@ _STALE_OVERRIDE = {
 }
 
 
-def _brief_health_check(conn: sqlite3.Connection) -> tuple[int, int, int, int]:
-    """Active series health → (n_ok, n_warn, n_fail, n_total)."""
-    ok, warn, fail, total, _detail = _health_detail(conn)
-    return ok, warn, fail, total
-
-
 def _health_detail(conn: sqlite3.Connection) -> tuple[int, int, int, int, list[tuple]]:
     """Health check + per-series DETAIL for stale suffixes.
 

@@ -20,9 +20,6 @@ from datetime import date, timedelta
 # Product IDs
 SR3_PID, ESR_PID, EUR_PID = 8462, 10247, 58
 
-# CME month code → IMM cycle month (Mar/Jun/Sep/Dec)
-IMM_MONTHS = {"H": 3, "M": 6, "U": 9, "Z": 12}
-
 
 @dataclass
 class XccyRow:

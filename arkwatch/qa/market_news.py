@@ -39,19 +39,6 @@ SESSION.mount(
         )
     ),
 )
-TOPICS = (
-    "fed",
-    "inflation",
-    "oil",
-    "bitcoin",
-    "ethereum",
-    "war",
-    "tariff",
-    "yield",
-    "treasury",
-    "jobs",
-    "china",
-)
 MAX_GDELT_WINDOWS_PER_FEED = 16
 INITIAL_GDELT_CATCHUP_WINDOWS = 96
 GDELT_EVENT_FIELDS = (

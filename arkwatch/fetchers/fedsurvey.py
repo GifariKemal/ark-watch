@@ -383,34 +383,3 @@ def fetch_window(series_id: str, days: int = 10, **kw) -> list[dict]:
 
 
 # --- Convenience: analyze any survey with NLP ----------------------------------------
-
-
-def analyze_survey(source: str, yyyymm: str | None = None) -> dict:
-    """Fetch + NLP-analyze any Federal Reserve survey/report.
-
-    source: 'sloos' | 'beige_book' | 'scoos' | 'fsr'
-    Returns {'text': ..., 'tone': {...}, 'metrics': {...}}.
-    """
-    fetchers = {
-        "sloos": fetch_sloos,
-        "beige_book": fetch_beige_book,
-        "scoos": fetch_scoos,
-        "fsr": fetch_fsr,
-    }
-    if source not in fetchers:
-        raise FedSurveyError(f"unknown source: {source} (sloos|beige_book|scoos|fsr)")
-
-    data = fetchers[source](yyyymm) if source != "fsr" else fetch_fsr()
-
-    # structural metrics (SLOOS-specific)
-    metrics = sloos_tone_metrics(data["text"]) if source == "sloos" else {}
-
-    # NLP tone analysis
-    from .nlp import analyze_tone
-
-    try:
-        tone = analyze_tone(data["text"], source_type=source.replace("_", " "))
-    except Exception as ex:
-        tone = {"error": str(ex)[:100]}
-
-    return {**data, "tone": tone, "metrics": metrics}

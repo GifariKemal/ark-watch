@@ -47,9 +47,6 @@ _CODE_TO_SYM = {
     "209742": "NQ",
 }
 
-# our disagg reportable categories that must sum to FMP tot_rept
-_REPORTABLE = ("mm", "prod", "swap", "other")
-
 
 def fetch_fmp_cot_dump() -> list[dict]:
     """Full FMP v4 COT report (~31MB, ~2y weekly history, all contracts)."""

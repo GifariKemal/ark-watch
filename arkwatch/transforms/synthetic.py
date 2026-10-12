@@ -45,11 +45,6 @@ def _compute_cross(conn: sqlite3.Connection, metal: str) -> dict:
     raise LookupError(f"{metal}GBP: no same-date {metal} (or its future) + GBPUSD pair")
 
 
-def compute_xaggbp(conn: sqlite3.Connection) -> dict:
-    """XAGGBP = XAGUSD / GBPUSD → {ts, value}."""
-    return _compute_cross(conn, "XAGUSD")
-
-
 def compute_xaugbp(conn: sqlite3.Connection) -> dict:
     """XAUGBP = XAUUSD / GBPUSD → {ts, value}."""
     return _compute_cross(conn, "XAUUSD")

@@ -272,9 +272,10 @@ def main() -> int:
 
         return daemon_main(sys.argv[2:])
     if cmd == "healthcheck":
-        from .daemon import healthcheck
+        from .daemon import healthcheck, okx_healthcheck
 
-        return healthcheck()
+        heal = "--heal" in sys.argv[2:]
+        return okx_healthcheck(heal=heal) if "okxws" in sys.argv[2:] else healthcheck(heal=heal)
     if cmd == "cme":
         from .qa.cme_harvest import main as cme_main
 

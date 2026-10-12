@@ -781,12 +781,20 @@ def check_all(conn) -> list[str]:
     with _trigger("gold_ry_divergence"):
         ry = recent_values(conn, "FRED:DFII10", 60)
         ry_lv = latest_value(conn, "FRED:DFII10")
-        gold = conn.execute(
-            "SELECT close FROM instrument_prices WHERE symbol='XAUUSD' AND source='EODHD' "
-            "AND (SELECT MAX(ts) FROM instrument_prices WHERE symbol='XAUUSD' "
-            "AND source='EODHD' AND close IS NOT NULL) >= date('now','-4 day') "
-            "ORDER BY ts DESC LIMIT 60"
-        ).fetchall()
+        # spot XAUUSD (EODHD) when fresh, else COMEX GC1 (Yahoo): EODHD is off by owner decision
+        # (2026-10-10), which left this trigger without any gold series. Completed days only.
+        gold = []
+        for sym, src in (("XAUUSD", "EODHD"), ("GC1", "YAHOO")):
+            gold = conn.execute(
+                "SELECT close FROM instrument_prices WHERE symbol=? AND source=? "
+                "AND close IS NOT NULL AND ts < date('now') "
+                "AND (SELECT MAX(ts) FROM instrument_prices WHERE symbol=? AND source=? "
+                "AND close IS NOT NULL) >= date('now','-4 day') "
+                "ORDER BY ts DESC LIMIT 60",
+                (sym, src, sym, src),
+            ).fetchall()
+            if len(gold) >= 20:
+                break
         if len(ry) >= 20 and len(gold) >= 20:
             # ROUND-6: the gold list is DESC (newest first) — the old
             # gold[-1]-gold[-20] compared the OLDEST sessions in the 60-row
@@ -797,11 +805,13 @@ def check_all(conn) -> list[str]:
             # ROUND-6: magnitude gate on the gold leg — a +$4 (+0.09%) drift
             # was announced 8× as a 'structural bid'; require a real move
             gold_pct = gold_m / gold[19][0] if gold[19][0] else 0.0
-            if ry_m > GOLD_RY_DIV_MIN_BP / 100 and gold_pct >= GOLD_RY_DIV_MIN_GOLD_PCT:
+            # gold_pct is a fraction, the threshold a percent (yaml: 0.5 = 0.5%): comparing the
+            # two raw required a 50% gold rally in 20 sessions, so this never fired
+            if ry_m > GOLD_RY_DIV_MIN_BP / 100 and gold_pct * 100 >= GOLD_RY_DIV_MIN_GOLD_PCT:
                 if _fire(
                     conn,
                     "gold_ry_divergence",
-                    f"Gold +{gold_pct:+.1%} (+{gold_m:.0f}) BUT DFII10 +{ry_m * 100:.0f}bps (20d)",
+                    f"Gold {gold_pct:+.1%} ({gold_m:+.0f}) BUT DFII10 +{ry_m * 100:.0f}bps (20d)",
                     "Divergence: gold rising despite rising real yields = structural bid (CB?)",
                     "Watch PBoC/CB buying in the flows data",
                     cooldown_key=f"gold_ry_divergence@{ry_lv[0][:10] if ry_lv else '?'}",

@@ -39,6 +39,19 @@ jobs:
       - name: Tests
         run: uv run pytest -q -p no:cacheprovider
 
+  # Known-vulnerability scan of the locked runtime deps. Its own job: a fresh advisory must not
+  # block an urgent deploy, but it shows red on the commit and in the Actions tab.
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: pip-audit (uv.lock, runtime deps)
+        run: |
+          uv export --locked --no-dev --no-hashes --format requirements-txt -o req.txt
+          uvx --from pip-audit==2.10.0 pip-audit -r req.txt --progress-spinner off
+
   deploy:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -58,7 +58,9 @@ def _split_message(text: str, max_len: int = 4000) -> list[str]:
         return [text]
     parts, current, cur_len, in_pre = [], [], 0, False
     for line in text.split("\n"):
-        line_len = len(line) + 1
+        # budget the ESCAPED size: the caller escapes each chunk, and '<' -> '&lt;' grew a
+        # 4000-char raw chunk past Telegram's 4096 limit (HTTP 400, retried until it died)
+        line_len = len(html.escape(line)) + 1
         if cur_len + line_len > max_len - 30 and current:  # margin for <pre> tags
             chunk = "\n".join(current)
             if in_pre:

@@ -1,0 +1,20 @@
+# Weekly bump PRs; CI (ruff, pyright, pytest) gates every one. The Dockerfile and compose bases
+# are pinned by digest, so without this they would never pick up a security rebuild.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+  - package-ecosystem: docker
+    directory: /
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /ofm
+    schedule: {interval: weekly}
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule: {interval: weekly}
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}

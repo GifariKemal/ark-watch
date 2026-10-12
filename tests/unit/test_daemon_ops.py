@@ -269,3 +269,38 @@ def test_atomic_write_from_many_threads(tmp_path):
         t.join()
     assert not errors and target.read_text() == "x"
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_heal_restarts_only_a_wedge(tmp_path, monkeypatch):
+    kills = []
+    monkeypatch.setattr(daemon.os, "kill", lambda pid, sig: kills.append((pid, sig)))
+    monkeypatch.setattr(daemon, "CAN_SIGNAL_INIT", True)
+    db = _db(tmp_path / "arkwatch.db")
+    assert daemon.healthcheck(_beat(tmp_path / "hb", 400), db, heal=True) == 1
+    assert kills == []  # 6.7 min: unhealthy, but maybe a slow job: no restart yet
+    assert daemon.healthcheck(_beat(tmp_path / "hb", 1000), db, heal=True) == 1
+    assert kills == [(1, daemon.signal.SIGTERM)]
+
+
+def test_okx_healthcheck(tmp_path, monkeypatch):
+    kills = []
+    monkeypatch.setattr(daemon.os, "kill", lambda pid, sig: kills.append(pid))
+    monkeypatch.setattr(daemon, "CAN_SIGNAL_INIT", True)
+    from arkwatch import db as adb
+
+    path = tmp_path / "arkwatch.db"
+    c = adb.get_conn(path, allow_init=True)
+    assert daemon.okx_healthcheck(path, heal=True) == 1 and kills == []  # no batch yet: boot
+    for age_s in (60, 400, 1200):
+        c.execute("DELETE FROM crypto_trade_raw_batches")
+        c.execute(
+            "INSERT INTO crypto_trade_raw_batches(batch_id, batch_ts_utc, source, instrument,"
+            " trade_count, first_trade_ts, last_trade_ts, first_trade_id, last_trade_id,"
+            " payload_gzip, payload_sha256, fetched_at)"
+            " VALUES ('b', ?, 'OKX_WS', 'BTC', 1, 'x', 'x', '1', '1', x'00', 'h', 'x')",
+            ((datetime.now(UTC) - timedelta(seconds=age_s)).isoformat(),),
+        )
+        c.commit()
+        daemon.okx_healthcheck(path, heal=True)
+    c.close()
+    assert kills == [1]  # only the 20-minute silence restarts

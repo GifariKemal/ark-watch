@@ -246,7 +246,50 @@ def _age_s(path: Path) -> float:
     return (datetime.now(UTC) - datetime.fromisoformat(path.read_text().strip())).total_seconds()
 
 
-def healthcheck(heartbeat: Path | None = None, db_path: Path | None = None) -> int:
+HEAL_AFTER_S = 900  # a heartbeat this stale is a wedge, not a slow job: restart the container
+OKX_MAX_AGE_S = 300
+CAN_SIGNAL_INIT = os.name != "nt"  # Windows dev runs have no container PID 1
+
+
+def _heal(age: float) -> None:
+    """Docker never acts on 'unhealthy' (restart policies watch exits only): a wedged process
+    stays wedged. SIGTERM to PID 1 (tini with init: true) exits the container cleanly and
+    `restart: unless-stopped` brings it back."""
+    if age > HEAL_AFTER_S and CAN_SIGNAL_INIT:
+        print(f"heal: {age:.0f}s stale, SIGTERM to PID 1")
+        os.kill(1, signal.SIGTERM)
+
+
+def okx_healthcheck(db_path: Path | None = None, heal: bool = False) -> int:
+    """okxws container: unhealthy when no OKX_WS trade batch landed for 5 min; with heal, a
+    collector silent for 15 min is restarted (its own reconnect loop did not recover)."""
+    import sqlite3
+
+    try:
+        uri = Path(db_path or DB_PATH).resolve().as_uri()
+        conn = sqlite3.connect(f"{uri}?mode=ro", uri=True, timeout=5)
+        try:
+            t = conn.execute(
+                "SELECT MAX(batch_ts_utc) FROM crypto_trade_raw_batches WHERE source='OKX_WS'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        age = (datetime.now(UTC) - datetime.fromisoformat(t)).total_seconds() if t else float("inf")
+    except Exception as ex:
+        print(f"unhealthy: {type(ex).__name__}: {ex}")
+        return 1
+    if age > OKX_MAX_AGE_S:
+        print(f"unhealthy: newest OKX_WS batch {age:.0f}s old")
+        if heal and t:  # no batch yet = first boot, leave it to start_period
+            _heal(age)
+        return 1
+    print(f"ok: newest OKX_WS batch {age:.0f}s old")
+    return 0
+
+
+def healthcheck(
+    heartbeat: Path | None = None, db_path: Path | None = None, heal: bool = False
+) -> int:
     """Docker HEALTHCHECK and dead-man gate: 0 = main heartbeat fresh (<5 min), lane
     heartbeats fresh (<10 min, when present), DB readable, >= 3 GB free on the data volume
     and the newest nightly backup < 36 h old (when any exists)."""
@@ -270,10 +313,12 @@ def healthcheck(heartbeat: Path | None = None, db_path: Path | None = None) -> i
         return 1
     if age > HEALTH_MAX_AGE_S:
         problems.append(f"heartbeat {age:.0f}s old")
+    stalest = age
     for lane in LANES:
         f = heartbeat.with_name(f"{lane}_heartbeat")
         if f.exists() and (lane_age := _age_s(f)) > LANE_MAX_AGE_S:
             problems.append(f"{lane} {lane_age:.0f}s old")
+            stalest = max(stalest, lane_age)
     if free < MIN_FREE_BYTES:
         problems.append(f"disk free {free / 1024**3:.1f} GB")
     backups = list((db_file.parent / "backups").glob("arkwatch-*.db"))
@@ -283,6 +328,8 @@ def healthcheck(heartbeat: Path | None = None, db_path: Path | None = None) -> i
             problems.append(f"newest backup {b_age / 3600:.0f}h old")
     if problems:
         print("unhealthy: " + "; ".join(problems))
+        if heal:  # only a wedge restarts; low disk or a missing backup must not loop restarts
+            _heal(stalest)
         return 1
     print(f"ok: heartbeat {age:.0f}s old, disk free {free / 1024**3:.1f} GB")
     return 0

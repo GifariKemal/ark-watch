@@ -39,14 +39,16 @@ class DiscordWebhookChannel:
     name = "discord"
 
     def send_text(self, text: str) -> str | None:
-        """Send one message; return the Discord message id (or None)."""
+        """Send the text in <= 2000-char messages (a longer one is a 400 and was retried
+        identically until its attempts ran out); None when any part fails."""
         url = os.environ.get("DISCORD_WEBHOOK_URL", "")
         if not url:
             raise RuntimeError("DISCORD_WEBHOOK_URL not set")
-        r = requests.post(url, json={"content": text}, timeout=(10, 30))
-        if r.status_code not in (200, 204):
-            print(f"  ⚠ Discord: HTTP {r.status_code} {r.text[:80]}")
-            return None
+        for part in _split_plain(text):
+            r = requests.post(url, json={"content": part}, timeout=(10, 30))
+            if r.status_code not in (200, 204):
+                print(f"  ⚠ Discord: HTTP {r.status_code} {r.text[:80]}")
+                return None
         # webhook responds 204 with no body; no id available → use a timestamp
         from datetime import UTC, datetime
 

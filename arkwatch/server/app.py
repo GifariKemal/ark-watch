@@ -119,20 +119,18 @@ async def lifespan(app: FastAPI):
         )
     app.state.api_key = key or None
     app.state.db_path = db.default_db_path()
-    app.state.cache, app.state.cache_lock = {}, threading.Lock()
-    app.state.probe, app.state.probe_lock = None, threading.Lock()
+    app.state.cache, app.state.cache_lock, app.state.flights = {}, threading.Lock(), {}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         # qa/stats imports scipy/statsmodels lazily (CLI speed); loading them here, off the request
         # path, saves the first scorecard or playbook request after a deploy about one second
         threading.Thread(target=_warm_stats_imports, name="warm-stats", daemon=True).start()
     yield
-    if app.state.probe is not None:
-        app.state.probe.close()
 
 
 _ERR: dict[int | str, dict[str, Any]] = {
-    s: {"model": ErrorOut} for s in (400, 401, 404, 409, 422, 503)
+    s: {"model": ErrorOut} for s in (400, 401, 404, 409, 413, 422, 500, 503)
 }
+MAX_BODY_BYTES = 16 * 1024  # the write bodies are a note, an exit price, a flag, a job kind
 app = FastAPI(
     title="ark-watch API",
     version="1.0.0",
@@ -191,12 +189,33 @@ def _internal(_: Request, exc: Exception) -> JSONResponse:
 _key_header = APIKeyHeader(name="x-arkwatch-key", auto_error=False)
 
 
+def _key_ok(expected: str | None, key: str | None) -> bool:
+    return (
+        expected is None or bool(key) and hmac.compare_digest(str(key).encode(), expected.encode())
+    )
+
+
 def require_key(request: Request, key: Annotated[str | None, Security(_key_header)]) -> None:
-    expected = request.app.state.api_key
-    if expected is None:
-        return
-    if not key or not hmac.compare_digest(key.encode(), expected.encode()):
+    if not _key_ok(request.app.state.api_key, key):
         raise ServerError(401, "unauthorized", "missing or invalid API key")
+
+
+@app.middleware("http")
+async def _edge(request: Request, call_next):
+    """Before routing: FastAPI decodes a request body BEFORE the router's auth dependency, so an
+    unauthenticated malformed JSON got a 422 and an unbounded body was read. Writes are
+    therefore keyed and size-capped here. Every response is no-store / nosniff (no shared
+    cache may keep an authenticated body)."""
+    if request.method in ("POST", "PATCH", "PUT", "DELETE") and request.url.path.startswith("/v1/"):
+        if not _key_ok(request.app.state.api_key, request.headers.get("x-arkwatch-key")):
+            return _err(401, "unauthorized", "missing or invalid API key")
+        length = request.headers.get("content-length", "0")
+        if not length.isdigit() or int(length) > MAX_BODY_BYTES:
+            return _err(413, "payload_too_large", f"body over {MAX_BODY_BYTES} bytes")
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 def _open(request: Request, *, read_only: bool) -> sqlite3.Connection:
@@ -223,6 +242,8 @@ def write_conn(request: Request) -> Iterator[sqlite3.Connection]:
     try:
         yield c
     finally:
+        with request.app.state.cache_lock:  # a cancel or toggle must show on the next read
+            request.app.state.cache.clear()
         c.close()
 
 
@@ -240,24 +261,31 @@ ToTs = Annotated[str | None, Query(alias="to", max_length=32)]
 
 
 def cached(request: Request, name: str, args: tuple, fn: Callable[[], Any]) -> Any:
-    """TTL cache for compute-heavy reads, keyed by args + PRAGMA data_version
-    of one long-lived probe connection (data_version is only comparable
-    within a connection; it moves whenever any other connection commits)."""
+    """TTL cache for compute-heavy reads, one computation per key at a time (single-flight).
+
+    Keyed by (name, args) only. It used to include PRAGMA data_version, which moves on every
+    commit of any other connection: okxws commits every few seconds, so the cache never hit and
+    every dashboard poll paid the cold cost (2026-10-12 audit). Staleness is bounded by
+    CACHE_TTL_S; the API's own writes clear the cache (write_conn)."""
     st = request.app.state
-    with st.probe_lock:
-        if st.probe is None:
-            st.probe = db.get_conn(st.db_path, read_only=True)
-        version = st.probe.execute("PRAGMA data_version").fetchone()[0]
-    key, now = (name, args, version), time.monotonic()
+    key = (name, args)
     with st.cache_lock:
         hit = st.cache.get(key)
-        if hit and now - hit[0] < CACHE_TTL_S:
+        if hit and time.monotonic() - hit[0] < CACHE_TTL_S:
             return hit[1]
-    value = fn()
-    with st.cache_lock:
-        if len(st.cache) > 256:
-            st.cache.clear()
-        st.cache[key] = (now, value)
+        flight = st.flights.setdefault(key, threading.Lock())
+    with flight:  # concurrent misses wait for the first computation instead of repeating it
+        with st.cache_lock:
+            hit = st.cache.get(key)
+            if hit and time.monotonic() - hit[0] < CACHE_TTL_S:
+                return hit[1]
+        value = fn()
+        with st.cache_lock:
+            now = time.monotonic()
+            # drop expired entries instead of clearing fresh ones with them
+            for k in [k for k, (t, _v) in st.cache.items() if now - t >= CACHE_TTL_S]:
+                del st.cache[k]
+            st.cache[key] = (now, value)
     return value
 
 
@@ -430,6 +458,12 @@ def playbooks_list(
 
 
 def _scorecard(request: Request, c: sqlite3.Connection, **kw: str | None) -> dict:
+    # compute_scorecard normalizes its filters: so does the key, or " gc1" and "GC1" are two
+    # entries of a ~1 s computation
+    kw = {
+        k: (v.strip().lower() if k == "asset_class" else v.strip().upper()) if v else None
+        for k, v in kw.items()
+    }
     return cached(request, "scorecard", tuple(kw.items()), lambda: compute_scorecard(c, **kw))
 
 

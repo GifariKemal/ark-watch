@@ -25,3 +25,34 @@ def test_secret_is_scrubbed(raw, secret):
 
 def test_word_suffixes_are_not_mangled():
     assert _redact("monkey=1 donkey=2") == "monkey=1 donkey=2"
+
+
+def test_news_urls_are_http_only():
+    from arkwatch.qa.market_news import _canonical_url
+    from arkwatch.server.models import NewsOut
+
+    assert _canonical_url("javascript:alert(1)") is None
+    assert (
+        _canonical_url("HTTPS://Example.com/a/?utm_source=x&id=1") == "https://example.com/a?id=1"
+    )
+    base = {
+        "news_id": "n",
+        "published_at_utc": "t",
+        "source": "s",
+        "title": "t",
+        "symbols": [],
+        "cluster_id": "c",
+    }
+    assert NewsOut(**base, url="data:text/html,x").url is None
+    assert NewsOut(**base, url="https://x.test/a").url == "https://x.test/a"
+
+
+def test_job_env_drops_secrets_no_job_reads(monkeypatch):
+    from arkwatch.qa.redact import job_env
+
+    monkeypatch.setenv("ARKWATCH_API_KEY", "k")
+    monkeypatch.setenv("LITESTREAM_SECRET_ACCESS_KEY", "s")
+    monkeypatch.setenv("FRED_API_KEY", "f")
+    env = job_env()
+    assert "ARKWATCH_API_KEY" not in env and "LITESTREAM_SECRET_ACCESS_KEY" not in env
+    assert env["FRED_API_KEY"] == "f"  # what the fetchers need stays

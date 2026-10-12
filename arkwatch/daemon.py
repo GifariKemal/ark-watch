@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .qa.redact import _redact
+from .qa.redact import _redact, job_env
 
 ROOT = Path(__file__).resolve().parent.parent
 # Docker sets ARKWATCH_DATA_DIR=/data: DB, state, logs and backups on the volume
@@ -383,6 +383,7 @@ def _spawn(argv: list[str], timeout_s: float) -> tuple[int, str, str]:
         encoding="utf-8",
         errors="replace",
         start_new_session=os.name != "nt",
+        env=job_env(),
     ) as proc:
         try:
             while True:

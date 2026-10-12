@@ -17,7 +17,7 @@ import sqlite3
 from datetime import UTC
 from pathlib import Path
 
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 36
 
 SCHEMA_V1 = """
 CREATE TABLE series_registry (
@@ -711,6 +711,23 @@ ALTER TABLE series_registry ADD COLUMN max_age_days INTEGER;
 -- upserts never rewrite indicator_key, so relabel the rows already stored
 UPDATE events SET indicator_key = 'GOODS TRADE BALANCE'
   WHERE indicator_key = 'GOODS TRADE BALANCE ADV';
+""",
+    36: """-- v36: indexes for the per-minute watcher and the uncached API reads that full-scanned
+-- (2026-10-12 audit): alerts newest-first and the spam tripwire, Fed ops by status/date,
+-- scenario fill/close events, news clustering, per-instrument liquidations, ESI by release,
+-- fetcher health, COT history by contract.
+CREATE INDEX IF NOT EXISTS idx_alert_triggered ON alert_deliveries(triggered_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_fedops_status_date
+  ON fed_operations(status, operation_date, family, direction);
+CREATE INDEX IF NOT EXISTS idx_playbook_trig ON playbook_scenarios(triggered_at_utc)
+  WHERE entry_price IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_playbook_res ON playbook_scenarios(resolved_at_utc)
+  WHERE entry_price IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_market_news_cluster ON market_news(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_liq_inst_ts ON crypto_liquidations(instrument, ts_utc);
+CREATE INDEX IF NOT EXISTS idx_events_release ON events(release_ts);
+CREATE INDEX IF NOT EXISTS idx_fetch_log_fetcher ON fetch_log(fetcher, ts, status);
+CREATE INDEX IF NOT EXISTS idx_cot_contract_date ON cot_raw(contract_code, report_date DESC);
 """,
 }
 

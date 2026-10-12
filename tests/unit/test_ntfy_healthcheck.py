@@ -100,6 +100,8 @@ def test_ntfy_headers_priority_click_token(server, monkeypatch):
     assert h["Priority"] == "4" and h["Click"] == "https://example.test/x#alerts"
     assert "Authorization" not in h
     assert len(_rfc2047(h["Title"])) <= 80
+    ch.send_text("⚠ WIB 21:05 · SCENARIO_ACTIVE\nNQ1 short filled")
+    assert Fake.calls[-1][2]["Priority"] == "2"  # scenario events: listed, no sound
 
 
 def test_ntfy_body_truncated_to_3500_bytes(server, monkeypatch):

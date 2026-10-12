@@ -323,8 +323,9 @@ def test_levels_mixed_fields_become_null_plus_status(client, monkeypatch):
     assert body["context"] == {"extra": 1, "level_context": {"TPO_SINGLE_PRINTS": [1]}}
 
 
-def test_regime_cache_invalidated_by_data_version(client, seeded, monkeypatch):
+def test_regime_cache_ttl_single_flight_and_write_clear(client, seeded, monkeypatch):
     from arkwatch import api
+    from arkwatch.server import app as server_app
 
     calls = []
     real = api.get_regime_snapshot
@@ -335,13 +336,20 @@ def test_regime_cache_invalidated_by_data_version(client, seeded, monkeypatch):
         "NEUTRAL",
         "INSUFFICIENT DATA",
     )
-    client.get("/v1/regime")
-    assert len(calls) == 1  # served from cache
     w = db.get_conn(seeded)
     db.insert_observations(w, [("T:DAILY", "1999-01-01", 1.0, "S")])
     w.close()
     client.get("/v1/regime")
-    assert len(calls) == 2  # a commit elsewhere moved data_version
+    assert len(calls) == 1  # a daemon commit no longer busts the cache: TTL bounds staleness
+    monkeypatch.setattr(server_app, "CACHE_TTL_S", 0)
+    client.get("/v1/regime")
+    assert len(calls) == 2  # expired
+    monkeypatch.setattr(server_app, "CACHE_TTL_S", 45)
+    client.get("/v1/regime")
+    assert len(calls) == 2  # fresh again
+    client.post("/v1/jobs", json={"kind": "harvest"})
+    client.get("/v1/regime")
+    assert len(calls) == 3  # an API write cleared the cache
 
 
 def test_freshness_statuses(client):
@@ -892,3 +900,41 @@ def test_odds_sorts_polymarket_before_kalshi_and_coerces_unknown_venue(client, s
         ("polymarket:p-odd", "polymarket", "usd"),
         ("kalshi:k-big", "kalshi", "contracts"),
     ]
+
+
+def test_writes_are_keyed_and_capped_before_the_body_is_parsed(client):
+    # malformed JSON without a key: 401, not a 422 that reveals the route and parses the body
+    r = client.post(
+        "/v1/jobs",
+        content=b"{bad",
+        headers={"x-arkwatch-key": "", "content-type": "application/json"},
+    )
+    assert r.status_code == 401 and r.json()["code"] == "unauthorized"
+    r = client.post("/v1/jobs", content=b"x" * 20000, headers={"content-type": "application/json"})
+    assert r.status_code == 413 and r.json()["code"] == "payload_too_large"
+    r = client.get("/v1/regime")
+    assert (
+        r.headers["cache-control"] == "no-store"
+        and r.headers["x-content-type-options"] == "nosniff"
+    )
+
+
+def test_every_v1_route_requires_the_key(client):
+    """Enumerate the app: a route registered outside the keyed router would be public."""
+    import re
+
+    from fastapi.routing import APIRoute
+
+    from arkwatch.server.app import app as the_app
+
+    for route in the_app.routes:
+        if (
+            not isinstance(route, APIRoute)
+            or not route.path.startswith("/v1")
+            or route.path == "/v1/health"
+        ):
+            continue
+        path = re.sub(r"\{[^}]+\}", "1", route.path)
+        for method in route.methods:
+            r = client.request(method, path, headers={"x-arkwatch-key": "wrong"}, json={})
+            assert r.status_code == 401, (method, route.path, r.status_code)

@@ -44,6 +44,11 @@ def _post(url: str, data: bytes, headers: dict) -> requests.Response:
     raise RuntimeError(f"ntfy: {err}")  # outside except: no chained URL-bearing cause
 
 
+# Scenario fill/close pushes are ~90% of the volume (2026-10-12: 61 of 65 in a week): low
+# priority = listed in the drawer without sound or vibration; macro alerts keep the default.
+QUIET = {"scenario_active", "scenario_closed"}
+
+
 class NtfyChannel:
     name = "ntfy"
 
@@ -64,9 +69,10 @@ class NtfyChannel:
         from ..qa.watcher import URGENT
 
         urgent = any(t.upper() in first for t in URGENT)
+        quiet = any(t.upper() in first for t in QUIET)
         headers = {
             "Title": _header(first[:80]),
-            "Priority": "4" if urgent else "3",
+            "Priority": "4" if urgent else "2" if quiet else "3",
             "Tags": "newspaper" if brief else "rotating_light" if urgent else "warning",
             "Click": _click_url("brief" if brief else None),
         }

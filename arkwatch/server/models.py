@@ -296,12 +296,20 @@ class CalendarEventOut(BaseModel):
     surprise_z: Num = None
 
 
+def _web_url(v: Any) -> str | None:
+    """Only http(s) links leave the API: news URLs come from third-party feeds."""
+    return v if isinstance(v, str) and v.lower().startswith(("http://", "https://")) else None
+
+
+WebUrl = Annotated[str | None, BeforeValidator(_web_url)]
+
+
 class NewsOut(BaseModel):
     news_id: str
     published_at_utc: str
     source: str
     title: str
-    url: str | None = None
+    url: WebUrl = None
     summary: str | None = None
     symbols: list[str]
     cluster_id: str

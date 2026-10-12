@@ -17,7 +17,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .redact import _redact
+from .redact import _redact, job_env
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -56,6 +56,7 @@ def _run(argv: list[str], timeout: float) -> tuple[int, str, str]:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=job_env(),
     )
     return r.returncode, r.stdout, r.stderr
 

@@ -4,6 +4,7 @@ that whole graph just to log one fetch."""
 
 from __future__ import annotations
 
+import os
 import re
 
 _SECRET_RE = re.compile(
@@ -25,3 +26,13 @@ def _redact(text: str) -> str:
     query params (api_key=…&api_token=…). One 4xx away from a key persisting
     into fetch_log; scrub centrally at both writers."""
     return _SECRET_RE.sub(lambda m: next(g for g in m.groups() if g) + "REDACTED", text)
+
+
+# Secrets the daemon container may hold that no job reads (the API key belongs to the api
+# service, Litestream keys to the sidecar). Job subprocesses parse PDF/XLSX/ZIP from the
+# internet: a parser exploit must not find them in its environment.
+_NOT_FOR_JOBS = ("ARKWATCH_API_KEY", "ZONELAB_ARKWATCH_KEY", "LITESTREAM_", "EASYPANEL_")
+
+
+def job_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if not k.startswith(_NOT_FOR_JOBS)}

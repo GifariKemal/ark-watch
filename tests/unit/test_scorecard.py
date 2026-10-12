@@ -74,9 +74,11 @@ def test_group_math_and_trade_definition(conn):
         "INTRADAY",
         "equity_index",
     )
-    assert g["n"] == 5 and g["wins"] == 2 and g["win_rate"] == 0.4
+    # the 0R scratch counts in n and expectancy, not in the win rate (a share of decisive
+    # trades, like the breakeven it is compared with)
+    assert g["n"] == 5 and g["wins"] == 2 and g["scratches"] == 1 and g["win_rate"] == 0.5
     lo, hi = g["win_rate_ci95"]
-    assert 0.05 < lo < 0.4 < hi < 0.9
+    assert 0.1 < lo < 0.5 < hi < 0.9
     assert g["expectancy_r"] == pytest.approx(0.4)
     assert g["avg_win_r"] == 2.0 and g["avg_loss_r"] == -1.0
     assert g["profit_factor"] == 2.0
@@ -88,6 +90,30 @@ def test_group_math_and_trade_definition(conn):
     assert (
         scorecard.compute_scorecard(conn)["groups"][0]["expectancy_ci95"] == (g["expectancy_ci95"])
     )
+
+
+def test_supported_needs_a_beaten_null():
+    rs = [2.0] * 60 + [-1.0] * 40
+    sessions = [f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}" for i in range(100)]
+    beaten = {
+        "null_n": 50,
+        "null_draws": 100,
+        "null_mean_r": 0.0,
+        "null_p": 0.01,
+        "beats_random": True,
+    }
+    assert scorecard.group_stats(rs, sessions, [], beaten)["tier"] == "supported"
+    assert (
+        scorecard.group_stats(rs, sessions, [], beaten | {"beats_random": False})["tier"]
+        == "emerging"
+    )
+    assert scorecard.group_stats(rs, sessions, [])["tier"] == "emerging"  # null not computed
+
+
+def test_manual_cancels_are_not_trades(conn):
+    _trades(conn, [1.0, -1.0])
+    _row(conn, "manual", state="CANCELLED_MANUAL", entry=100.0, r=5.0)
+    assert _only(conn)["n"] == 2
 
 
 def test_grouping_and_filters(conn):
@@ -107,7 +133,9 @@ def test_grouping_and_filters(conn):
         ([2.0] * 10 + [-1.0] * 9, "unvalidated"),  # n = 19
         ([2.0] * 10 + [-1.0] * 10, "emerging"),  # n = 20
         ([2.0] * 60 + [-1.0] * 39, "emerging"),  # n = 99: never supported below 100
-        ([2.0] * 60 + [-1.0] * 40, "supported"),  # 60% vs breakeven 33%, E = +0.8R
+        # 60% vs breakeven 33%, E = +0.8R, but no bars to replay: without a beaten random-entry
+        # null 'supported' is capped (see test_supported_needs_a_beaten_null)
+        ([2.0] * 60 + [-1.0] * 40, "emerging"),
         ([1.0] * 50 + [-1.0] * 50, "emerging"),  # CI straddles breakeven 50%
         ([1.0] * 30 + [-1.0] * 70, "rejected"),  # Wilson upper < 50%
     ],

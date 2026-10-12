@@ -6,7 +6,13 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
-from .pillars import PILLAR_WEIGHTS, REGIME_RISK_OFF, REGIME_RISK_ON, compute_pillars
+from .pillars import (
+    PILLAR_WEIGHTS,
+    REGIME_RISK_OFF,
+    REGIME_RISK_ON,
+    compute_pillars,
+    regime_label,
+)
 
 # COT z-score parameters come from config (params_signals.yaml) — the same file
 # the watcher and the brief read, so the crowded flag is one definition everywhere.
@@ -436,9 +442,7 @@ def store_cot_signals(conn: sqlite3.Connection, score: float) -> int:
         "regime_score",
         today,
         round(score, 4),
-        "RISK-ON"
-        if score > REGIME_RISK_ON
-        else ("RISK-OFF" if score < REGIME_RISK_OFF else "NEUTRAL"),
+        regime_label(score, pillars),  # the brief's label: INSUFFICIENT DATA below 4 pillars
         {"weights": PILLAR_WEIGHTS},
     )
     for blk, p in pillars.items():

@@ -25,8 +25,7 @@ import numpy as np
 from .playbook_tracker import _bars, _expiry, _pnl, _simulate
 
 # Bar walks per scorecard computation: ~0.15 ms each on prod bars, ~0.8 s at the cap on 1 vCPU.
-# ponytail: past 250 eligible trades K drops below K_MIN and the null is skipped; subsample
-# trades per group (or vectorize _simulate) when the book gets there.
+# scorecard.py keeps the budget by replaying at most NULL_SAMPLE trades per group.
 MAX_WALKS = 5000
 K_MAX, K_MIN = 200, 20  # draws per trade; below K_MIN the smallest reachable p is > 0.05
 

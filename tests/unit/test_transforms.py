@@ -3,6 +3,8 @@
 Each test verifies a transform against hand-computed numbers or values
 known from the literature/publications."""
 
+import pytest
+
 from arkwatch.transforms.core import (
     momentum,
     percentile_rank,
@@ -168,7 +170,7 @@ class TestFedWatch:
         With anchor_date passed, the just-held meeting re-runs first and the
         running rate bootstraps the post-hike level from the strip itself.
 
-        SOAK 2026-09-18: Oct-28 (n_post=4 ≤ 7) now reads the NEXT-month
+        SOAK 2026-09-18: Oct-28 (n_post=3 < 7) now reads the NEXT-month
         contract per the CME last-week convention — implied = NOV = 3.98,
         not the old day-weighted 4.0775."""
         from datetime import date
@@ -184,10 +186,11 @@ class TestFedWatch:
         # the passed meeting is bootstrap machinery — never returned
         assert all(p.meeting_date > date(2026, 9, 16) for p in probs)
         oct_row = next(p for p in probs if p.meeting_date == date(2026, 10, 28))
-        # bootstrap: (3.7375·30 − 3.63·15)/15 = 3.845 running → Oct post =
-        # NOV implied 3.98 — sane, NOT the 5.529 the stale anchor produced
+        # bootstrap: the Sep-16 decision day still prints the old rate (CME: 16 pre, 14 post
+        # days) -> (3.7375·30 − 3.63·16)/14 = 3.8604 running → Oct post = NOV implied 3.98 —
+        # sane, NOT the 5.529 the stale anchor produced
         assert abs(oct_row.implied_rate - 3.98) < 0.01
-        assert oct_row.prob_hike > 0.5  # ≈ +13.5bp priced for Oct
+        assert oct_row.prob_hike == pytest.approx((3.98 - 3.860357) / 0.25, abs=1e-3)  # +12bp
 
     def test_stale_anchor_without_date_now_sane(self):
         """SOAK 2026-09-18: without anchor_date, the Sep bootstrap + the

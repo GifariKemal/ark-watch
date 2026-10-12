@@ -26,10 +26,10 @@ def _conn(hy, es, ig=None):
     return conn
 
 
-def test_hy_widening_while_es_rises_fires_once_per_credit_date():
+def test_hy_widening_while_es_rises_fires_once_per_week():
     conn = _conn(hy=[2.80, 2.90, 3.00, 3.10, 3.20, 3.40], es=[6000, 6010, 6020, 6030, 6040, 6060])
     key, cond, ctx, _ = watcher.credit_equity_divergence(conn)
-    assert key == "credit_equity_divergence@2026-10-08"
+    assert key == "credit_equity_divergence:HY@2026-W41"  # 2026-10-08 is in ISO week 41
     assert cond == "HY OAS +60bp in 5 prints (2.80% to 3.40%) while ES1 +1.0%"
     assert ctx.startswith("2026-10-01 to 2026-10-08")
     assert watcher._fire(conn, "credit_equity_divergence", cond, ctx, "a", cooldown_key=key)
@@ -51,3 +51,36 @@ def test_widening_below_threshold_and_ig_branch():
 def test_no_equity_print_at_window_start_stays_quiet():
     conn = _conn(hy=[2.80, 2.90, 3.00, 3.10, 3.20, 3.40], es=[])
     assert watcher.credit_equity_divergence(conn) is None
+
+
+def test_next_print_of_the_same_episode_does_not_refire():
+    conn = _conn(hy=[2.80, 2.90, 3.00, 3.10, 3.20, 3.40], es=[6000, 6010, 6020, 6030, 6040, 6060])
+    key, cond, ctx, _ = watcher.credit_equity_divergence(conn)
+    assert watcher._fire(conn, "credit_equity_divergence", cond, ctx, "a", cooldown_key=key)
+    conn.execute(
+        "INSERT INTO raw_observations(series_id, ts, value, source, fetched_at)"
+        " VALUES ('FRED:BAMLH0A0HYM2', '2026-10-09', 3.45, 'FRED', 'x')"
+    )
+    conn.execute(
+        "INSERT INTO instrument_prices(symbol, ts, source, close) VALUES ('ES1', '2026-10-09', 'YAHOO', 6070)"
+    )
+    key2 = watcher.credit_equity_divergence(conn)[0]
+    assert key2 == key  # the window slid one print, the episode key did not
+
+
+def test_todays_partial_es1_close_is_ignored():
+    from datetime import UTC, datetime
+
+    today = datetime.now(UTC).date().isoformat()
+    conn = _conn(hy=[2.80, 2.90, 3.00, 3.10, 3.20, 3.40], es=[6000, 6010, 6020, 6030, 6040, 6060])
+    conn.execute(
+        "INSERT INTO raw_observations(series_id, ts, value, source, fetched_at)"
+        " VALUES ('FRED:BAMLH0A0HYM2', ?, 3.50, 'FRED', 'x')",
+        (today,),
+    )
+    # a mid-session daily row with a crash close must not decide "ES1 did not fall"
+    conn.execute(
+        "INSERT INTO instrument_prices(symbol, ts, source, close) VALUES ('ES1', ?, 'YAHOO', 1)",
+        (today,),
+    )
+    assert "while ES1 +" in watcher.credit_equity_divergence(conn)[1]

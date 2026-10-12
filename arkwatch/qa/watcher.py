@@ -330,8 +330,9 @@ def credit_equity_divergence(conn) -> tuple[str, str, str, str] | None:
 
         def close_on(ts: str) -> float | None:
             r = conn.execute(
+                # ts < today: a daily row swept mid-session holds a partial close
                 "SELECT close FROM instrument_prices WHERE symbol='ES1' AND ts<=?"
-                " AND close IS NOT NULL ORDER BY ts DESC, source LIMIT 1",
+                " AND ts < date('now') AND close IS NOT NULL ORDER BY ts DESC, source LIMIT 1",
                 (ts[:10],),
             ).fetchone()
             return r[0] if r else None
@@ -342,8 +343,11 @@ def credit_equity_divergence(conn) -> tuple[str, str, str, str] | None:
         es_pct = (es1 / es0 - 1) * 100
         if es_pct < CREDIT_DIV_EQ_MIN_PCT:
             continue  # equities already falling with credit: plain risk-off, not a divergence
+        # one alert per series per ISO week: the window slides one print at a time, so a key
+        # per print re-fired every day the divergence stayed open
+        y, w, _ = datetime.fromisoformat(end_ts[:10]).isocalendar()
         return (
-            f"credit_equity_divergence@{end_ts[:10]}",
+            f"credit_equity_divergence:{name}@{y}-W{w:02d}",
             f"{name} OAS +{widen_bp:.0f}bp in {CREDIT_DIV_WINDOW} prints"
             f" ({start_v:.2f}% to {end_v:.2f}%) while ES1 {es_pct:+.1f}%",
             f"{start_ts[:10]} to {end_ts[:10]}: credit is repricing risk before equities",

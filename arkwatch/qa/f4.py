@@ -262,12 +262,7 @@ def run_replay(conn, start: str = "2005-01", verbose: bool = True) -> list[dict]
     episodes. Returns [{month, score, label, recession, c_state,
     c_episode}] — the basis for threshold calibration and the honest backtest."""
     from ..fetchers.nber import fetch_recession_dates
-    from ..signals.pillars import (
-        REGIME_RISK_OFF,
-        REGIME_RISK_ON,
-        compute_pillars,
-        compute_regime_score,
-    )
+    from ..signals.pillars import compute_pillars, compute_regime_score, regime_label
 
     nber_na = False
     try:
@@ -294,11 +289,9 @@ def run_replay(conn, start: str = "2005-01", verbose: bool = True) -> list[dict]
         reader = AsOfReader(conn, as_of)
         pillars = compute_pillars(conn, reader=reader)
         score = compute_regime_score(pillars)
-        label = (
-            "RISK-ON"
-            if score > REGIME_RISK_ON
-            else ("RISK-OFF" if score < REGIME_RISK_OFF else "NEUTRAL")
-        )
+        # the live label: a month with fewer than 4 pillars is INSUFFICIENT DATA, not a call the
+        # replay's hit rate may count
+        label = regime_label(score, pillars)
         # Pillar composition varies by era (2005-09 may have a single pillar),
         # making scores non-comparable — record the active pillar count per
         # month as metadata

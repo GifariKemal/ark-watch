@@ -291,7 +291,8 @@ def generate_trading_playbook(
 
     # Systemic Net Liquidity: SOMA Fed Balance Sheet (WALCL) - TGA (WTREGEN) - RRP (RRPONTSYD)
     liq = [latest_before(conn, f"FRED:{s}", as_of_iso) for s in ("WALCL", "WTREGEN", "RRPONTSYD")]
-    net_liq_b = round((liq[0] - liq[1] - liq[2]) / 1000.0, 2) if None not in liq else None  # pyright: ignore[reportOperatorIssue] -- None-guarded
+    # WALCL/WTREGEN are $M, RRPONTSYD is natively $B (soma.py, golden_anchors)
+    net_liq_b = round((liq[0] - liq[1]) / 1000.0 - liq[2], 2) if None not in liq else None  # pyright: ignore[reportOperatorIssue] -- None-guarded
     friction_warnings = []
     tailwinds = []
 
@@ -1134,7 +1135,7 @@ def generate_trading_playbook(
                     "horizon": "SWING",
                     "title": f"Multi-Day {cva_name} Breakout Expansion Long",
                     "direction": "LONG",
-                    "trigger_condition": f"Daily bar accepts and sustains above Composite VAH ({levels.get('DYNAMIC_CVA_VAH')})",
+                    "trigger_condition": f"Accepts above Composite VAH ({levels.get('DYNAMIC_CVA_VAH')}): tracked as the first 5m close above it",
                     "trigger_price": levels.get("DYNAMIC_CVA_VAH") or last_price,
                     "target_profit": cva_target,
                     "invalidation_level": cva_inval,
@@ -1170,7 +1171,7 @@ def generate_trading_playbook(
                     "horizon": "SWING",
                     "title": f"Multi-Day {cva_name} Breakdown Expansion Short",
                     "direction": "SHORT",
-                    "trigger_condition": f"Daily bar accepts and sustains below Composite VAL ({levels.get('DYNAMIC_CVA_VAL')})",
+                    "trigger_condition": f"Accepts below Composite VAL ({levels.get('DYNAMIC_CVA_VAL')}): tracked as the first 5m close below it",
                     "trigger_price": levels.get("DYNAMIC_CVA_VAL") or last_price,
                     "target_profit": cva_target,
                     "invalidation_level": cva_inval,

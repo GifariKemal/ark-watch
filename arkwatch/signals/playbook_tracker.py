@@ -41,6 +41,25 @@ _ET = ZoneInfo("America/New_York")
 _SESSION_CLOSE_ET = time(17, 0)  # CME Globex session close
 _OPEN = ("PENDING_TRIGGER", "ACTIVE")
 
+# How a scenario fills, so the track record scores the thesis the scenario states (2026-10-12
+# audit: every type filled on a touch, so "sweep above PDH then close back below" was scored as
+# "short PDH on touch"). Default "touch": entry at the trigger (or a gapped open).
+#   close_beyond   the first 5m CLOSE on the trade side of the trigger; entry at that close
+#   sweep_reclaim  a bar trades through the trigger against the trade, then a close back on the
+#                  trade side (same bar or later); entry at that close
+FILL_RULES = {
+    "SCENARIO_INTRADAY_EXPANSION_LONG": "close_beyond",
+    "SCENARIO_INTRADAY_EXPANSION_SHORT": "close_beyond",
+    "SCENARIO_SWING_CVA_EXPANSION_LONG": "close_beyond",
+    "SCENARIO_SWING_CVA_EXPANSION_SHORT": "close_beyond",
+    "SCENARIO_INTRADAY_SWEEP_SHORT": "sweep_reclaim",
+    "SCENARIO_INTRADAY_SWEEP_LONG": "sweep_reclaim",
+}
+
+
+def fill_rule(scenario_id: str | None) -> str:
+    return FILL_RULES.get(scenario_id or "", "touch")
+
 
 def _expiry(horizon: str, session_id: str) -> datetime | None:
     """Session close (17:00 ET on the session date); SWING gets SWING_EXPIRY_DAYS more."""
@@ -114,8 +133,11 @@ def _simulate(
     target: float,
     bars: list[tuple],
     shock_ts: str | None = None,
+    filled_on_open: bool = True,
 ) -> dict[str, Any]:
-    """Walk bars from the activation bar (bars[0]). Pure function, so rescans are idempotent."""
+    """Walk bars from the activation bar (bars[0]). Pure function, so rescans are idempotent.
+    filled_on_open: bars[0] is the bar the fill happened INSIDE (its favourable extreme may
+    precede the fill). A close fill passes the bars after the fill bar with False."""
     sign = 1.0 if direction == "LONG" else -1.0
     risk = abs(entry - stop) or 1.0
     res: dict[str, Any] = {"outcome": None, "exit": None, "ts": None, "mfe": 0.0, "mae": 0.0}
@@ -126,7 +148,7 @@ def _simulate(
     vwap_losses = 0
     for i, (ts, o, h, lo, c, v) in enumerate(bars):
         fav, adv = (h, lo) if sign > 0 else (lo, h)
-        if i == 0:
+        if i == 0 and filled_on_open:
             o = fav = entry  # activation bar: its favourable extreme may precede the fill
         if shock_ts and ts > shock_ts and not shocked:
             # adverse news known at shock_ts: lock breakeven if in profit, else halve the risk
@@ -162,6 +184,17 @@ def _simulate(
         else:
             vwap_losses = 0
     return res
+
+
+def _trade_bars(
+    conn: sqlite3.Connection, sym: str, triggered_at: str, end_ts: str, rule: str
+) -> tuple[list[tuple], bool]:
+    """Bars a filled trade walks, and whether bars[0] is the bar the fill happened inside.
+    A close fill happened at the END of its bar: the trade starts with the next bar."""
+    bars = _bars(conn, sym, triggered_at, end_ts)
+    if rule == "touch":
+        return bars, True
+    return [b for b in bars if b[0] > triggered_at], False
 
 
 def _pnl(direction: str, entry: float, exit_p: float, risk: float, partial: bool) -> float:
@@ -363,7 +396,7 @@ def evaluate_active_playbooks(
     rows = conn.execute(
         """
         SELECT scenario_uid, symbol, horizon, direction, trigger_price, target_profit,
-               invalidation_level, created_at_utc, session_id
+               invalidation_level, created_at_utc, session_id, scenario_id
         FROM playbook_scenarios
         WHERE state IN ('PENDING_TRIGGER', 'ACTIVE')
         ORDER BY created_at_utc, rowid
@@ -371,7 +404,8 @@ def evaluate_active_playbooks(
     ).fetchall()
     stats["evaluated"] = len(rows)
 
-    for uid, sym, horizon, direction, trig_p, target_p, stop_p, created_at, sess_id in rows:
+    for uid, sym, horizon, direction, trig_p, target_p, stop_p, created_at, sess_id, sc_id in rows:
+        rule = fill_rule(sc_id)
         # fresh state: an earlier iteration in this batch may have resolved or activated it
         cur = conn.execute(
             "SELECT state, entry_price, triggered_at_utc FROM playbook_scenarios"
@@ -392,11 +426,20 @@ def evaluate_active_playbooks(
 
         if state == "PENDING_TRIGGER":
             act_bar = None
+            swept = False
             for b in _bars(conn, sym, created_at, end_ts) if direction in ("LONG", "SHORT") else []:
                 o, fav, adv = b[1], (b[2] if sign > 0 else b[3]), (b[3] if sign > 0 else b[2])
-                trig_hit = sign * (fav - trig_p) >= 0
                 stop_hit = sign * (adv - stop_p) <= 0
-                if stop_hit and (not trig_hit or sign * (o - stop_p) <= 0):
+                if rule == "touch":
+                    trig_hit = sign * (fav - trig_p) >= 0
+                elif rule == "close_beyond":
+                    trig_hit = sign * (b[4] - trig_p) >= 0
+                else:  # sweep_reclaim
+                    swept = swept or sign * (adv - trig_p) < 0
+                    trig_hit = swept and sign * (b[4] - trig_p) > 0
+                # a close rule only knows its fill at the close: a stop touched inside that same
+                # bar came first
+                if stop_hit and (not trig_hit or rule != "touch" or sign * (o - stop_p) <= 0):
                     _update(
                         conn,
                         uid,
@@ -425,7 +468,10 @@ def evaluate_active_playbooks(
                 continue
 
             trig_time = act_bar[0]
-            entry_p = max(trig_p, act_bar[1]) if sign > 0 else min(trig_p, act_bar[1])
+            if rule == "touch":
+                entry_p = max(trig_p, act_bar[1]) if sign > 0 else min(trig_p, act_bar[1])
+            else:
+                entry_p = act_bar[4]
             if sign * (target_p - entry_p) <= 0:
                 _update(
                     conn,
@@ -442,7 +488,7 @@ def evaluate_active_playbooks(
                 uid,
                 "TRIGGERED_ACTIVE",
                 trig_time,
-                f"Trigger met, filled at {entry_p} on bar {trig_time}",
+                f"Trigger met ({rule}), filled at {entry_p} on bar {trig_time}",
                 state="ACTIVE",
                 triggered_at_utc=trig_time,
                 entry_price=entry_p,
@@ -456,19 +502,25 @@ def evaluate_active_playbooks(
 
             # 1. Close opposite ACTIVE scenarios at this fill (reversal flip) unless their own
             #    bars already resolved them before this trigger
-            for o_uid, o_entry, o_stop, o_target, o_trig_at in conn.execute(
+            for o_uid, o_entry, o_stop, o_target, o_trig_at, o_sc in conn.execute(
                 """
                 SELECT scenario_uid, entry_price, invalidation_level, target_profit,
-                       triggered_at_utc
+                       triggered_at_utc, scenario_id
                 FROM playbook_scenarios
                 WHERE symbol = ? AND session_id = ? AND horizon = ? AND state = 'ACTIVE'
                   AND direction = ? AND triggered_at_utc < ?
                 """,
                 (sym, sess_id, horizon, opposite, trig_time),
             ).fetchall():
-                o_bars = [b for b in _bars(conn, sym, o_trig_at, trig_time) if b[0] < trig_time]
+                o_bars, o_open = _trade_bars(conn, sym, o_trig_at, trig_time, fill_rule(o_sc))
                 o_sim = _simulate(
-                    opposite, o_entry, o_stop, o_target, o_bars, _shock_ts(_log_events(conn, o_uid))
+                    opposite,
+                    o_entry,
+                    o_stop,
+                    o_target,
+                    [b for b in o_bars if b[0] < trig_time],
+                    _shock_ts(_log_events(conn, o_uid)),
+                    o_open,
                 )
                 if o_sim["outcome"] is None:
                     _close_trade(
@@ -507,14 +559,8 @@ def evaluate_active_playbooks(
         if state != "ACTIVE" or entry_p is None:
             continue
         events = _log_events(conn, uid)
-        sim = _simulate(
-            direction,
-            entry_p,
-            stop_p,
-            target_p,
-            _bars(conn, sym, triggered_at, end_ts),
-            _shock_ts(events),
-        )
+        bars, on_open = _trade_bars(conn, sym, triggered_at, end_ts, rule)
+        sim = _simulate(direction, entry_p, stop_p, target_p, bars, _shock_ts(events), on_open)
         if sim["partial_ts"] and not any(e.get("event") == "PARTIAL_TP_50" for e in events):
             _update(
                 conn,
@@ -626,7 +672,8 @@ def get_playbook_performance_metrics(
     ).fetchall()
 
     closed = [r for r in rows if r[0] not in _OPEN]
-    trades = [r for r in closed if r[1] is not None]
+    # manual cancels carry an operator-chosen exit: counted as non-trades, as in the scorecard
+    trades = [r for r in closed if r[1] is not None and r[0] != "CANCELLED_MANUAL"]
     rs = [r[2] or 0.0 for r in trades]
     n = len(rs)
     wins = sum(x > 0 for x in rs)
@@ -634,7 +681,7 @@ def get_playbook_performance_metrics(
     gross_win = sum(x for x in rs if x > 0)
     gross_loss = -sum(x for x in rs if x < 0)
     expectancy = round(sum(rs) / n, 2) if n else None
-    non_trades = Counter(r[5] or r[0] for r in closed if r[1] is None)
+    non_trades = Counter(r[5] or r[0] for r in closed if r[1] is None or r[0] == "CANCELLED_MANUAL")
 
     def _avg(i: int) -> float | None:
         if not symbol:  # MFE/MAE are raw points: an SPX and a BTC trade do not average

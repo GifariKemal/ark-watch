@@ -83,7 +83,7 @@ def compute(
     ×31/4 → Oct-26 "implied" 5.53% the morning after the Sep-16 hike to
     3.88). When anchor_date predates a just-held meeting, that meeting is
     re-run FIRST so the running rate bootstraps the new level from the strip
-    itself (live: (3.7375·30 − 3.63·15)/15 = 3.845 = the post-hike level).
+    itself (live: (3.7375·30 − 3.63·16)/14 = 3.860 vs the 3.875 decided midpoint).
     The anchor counts as the PRE-rate through the decision day itself — a
     same-day DFF still prints the old rate because the new target takes
     effect the following day.
@@ -106,7 +106,9 @@ def compute(
         m, y = mtg.month, mtg.year
         D = calendar.monthrange(y, m)[1]
         d = mtg.day
-        n_post = D - d + 1
+        # the new target takes effect the day AFTER the decision (CME FedWatch methodology:
+        # a Dec-14 meeting in a 31-day month = 14 pre days, 17 post days)
+        n_post = D - d
 
         key_cur = month_code(y, m)
         key_next = month_code(y, m + 1) if m < 12 else month_code(y + 1, 1)
@@ -124,7 +126,7 @@ def compute(
         # 8pp of probability — tick noise the day-weighted formula amplifies
         # 31/4×. The next-month contract prices the post-meeting level
         # directly (live: settle-vs-mid timing flipped Oct between 0% and 53%).
-        if n_post <= 7:
+        if n_post < 7:
             if key_next in implied:
                 post_rate = implied[key_next]  # end-of-month trick
             else:
@@ -133,7 +135,7 @@ def compute(
                 # degenerate value.
                 continue
         else:
-            n_pre = d - 1
+            n_pre = d
             post_rate = (rate_cur * D - pre_rate * n_pre) / n_post
 
         running = post_rate  # new rate in effect after this meeting

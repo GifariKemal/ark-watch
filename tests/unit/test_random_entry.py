@@ -121,7 +121,12 @@ def test_cost_cap(conn, monkeypatch):
     monkeypatch.setattr(scorecard, "MAX_WALKS", 500)
     assert _group(conn)["null_draws"] == 25 and len(calls) == 500
     calls.clear()
-    monkeypatch.setattr(scorecard, "MAX_WALKS", 300)  # 15 draws per trade < K_MIN: skipped
+    # 300 walks: 15 per trade would fall below K_MIN, so a 15-trade sample gets K_MIN draws
+    monkeypatch.setattr(scorecard, "MAX_WALKS", 300)
+    g = _group(conn)
+    assert (g["null_n"], g["null_draws"]) == (15, 20) and len(calls) == 300
+    calls.clear()
+    monkeypatch.setattr(scorecard, "MAX_WALKS", 10)  # not even one trade at K_MIN: skipped
     assert _group(conn)["beats_random"] is None and not calls
 
 

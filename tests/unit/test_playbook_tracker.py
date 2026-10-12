@@ -964,3 +964,52 @@ def test_a_revised_trigger_is_never_filled_by_a_bar_from_before_the_revision(tmp
         "SELECT created_at_utc FROM playbook_scenarios WHERE scenario_uid = ?", (uid,)
     ).fetchone()[0]
     assert created == _ts(10)  # the revised scenario exists from its revision on
+
+
+# --- fill rules: the tracker trades the thesis the scenario states ---------------------------
+
+
+def test_sweep_short_needs_a_sweep_then_a_close_back_below(tmp_path):
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    (uid,) = _record(conn, ("SCENARIO_INTRADAY_SWEEP_SHORT", "SHORT", 100.0, 103.0, 94.0))
+    # a touch from below is NOT a sweep: on a touch rule this bar already filled the short
+    _bars(conn, (5, 99.0, 100.0, 98.5, 99.5))
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(5))
+    assert _row(conn, uid)["state"] == "PENDING_TRIGGER"
+    # the sweep: trades above 100 and closes above (no reclaim yet), then closes back below
+    _bars(conn, (10, 99.5, 101.5, 99.4, 101.0), (15, 101.0, 101.2, 99.0, 99.2))
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(15))
+    r = _row(conn, uid)
+    assert (r["state"], r["entry"]) == ("ACTIVE", 99.2)  # filled at the reclaim close
+    assert r["mfe"] == 0.0 and r["mae"] == 0.0  # the fill bar's own range precedes the fill
+    _bars(conn, (20, 99.2, 99.5, 93.5, 94.0))
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(20))
+    r = _row(conn, uid)
+    assert (r["state"], r["exit"]) == ("HIT_TARGET_WIN", 94.0)
+
+
+def test_sweep_through_the_stop_invalidates(tmp_path):
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    (uid,) = _record(conn, ("SCENARIO_INTRADAY_SWEEP_SHORT", "SHORT", 100.0, 103.0, 94.0))
+    _bars(conn, (5, 99.0, 103.5, 98.0, 99.0))  # swept and closed back below, but via the stop
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(5))
+    assert _row(conn, uid)["outcome"] == "INVALIDATED_PRE_ENTRY"
+
+
+def test_expansion_long_fills_on_a_close_above_not_a_wick(tmp_path):
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    (uid,) = _record(conn, ("SCENARIO_INTRADAY_EXPANSION_LONG", "LONG", 100.0, 97.0, 106.0))
+    _bars(conn, (5, 99.0, 100.8, 98.5, 99.6))  # wick above VAH, close back inside
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(5))
+    assert _row(conn, uid)["state"] == "PENDING_TRIGGER"
+    _bars(conn, (10, 99.6, 100.9, 99.5, 100.7), (15, 100.7, 101.5, 100.2, 101.0))
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(15))
+    r = _row(conn, uid)
+    assert (r["state"], r["entry"]) == ("ACTIVE", 100.7)
+    assert r["mfe"] == 0.8 and r["mae"] == 0.5  # from the NEXT bar on (101.5 / 100.2)
+
+
+def test_fill_rule_defaults_to_touch():
+    assert playbook_tracker.fill_rule("SCENARIO_INTRADAY_VAL_ROTATION_LONG") == "touch"
+    assert playbook_tracker.fill_rule(None) == "touch"
+    assert playbook_tracker.fill_rule("SCENARIO_SWING_CVA_EXPANSION_SHORT") == "close_beyond"

@@ -1,8 +1,11 @@
 """scorecard.py - per scenario-type track record of the playbook, with evidence tiers.
 
-A trade is a resolved scenario that was filled (entry_price set), the same definition as
-playbook_tracker.get_playbook_performance_metrics; it scores by its realized r_multiple
-(win > 0). Scenario type = the generator's stable `scenario_id` (e.g.
+A trade is a resolved scenario that was filled (entry_price set) and closed by the tracker's
+rules, the same definition as playbook_tracker.get_playbook_performance_metrics; it scores by its
+realized r_multiple (win > 0). Manual cancels (CANCELLED_MANUAL, an operator-chosen exit) are
+not rule-based outcomes and are left out. Win rate and its Wilson CI count wins among DECISIVE
+trades (R != 0): the breakeven win rate they are compared with is |L| / (W + |L|), a share of
+decisive trades, so scratches (0R) must not dilute the numerator's population. Scenario type = the generator's stable `scenario_id` (e.g.
 SCENARIO_INTRADAY_SWEEP_SHORT); groups are type x direction x horizon x asset class.
 
 Tiers describe tracked outcomes only. They are not a forecast and promise no future edge:
@@ -15,14 +18,15 @@ Tiers describe tracked outcomes only. They are not a forecast and promise no fut
 Random-entry control (random_entry.py): for groups with n >= 20 each trade is replayed from
 random entry bars of the same symbol and window with the same direction and stop / target
 geometry. null_mean_r, null_p and beats_random report whether the group's expectancy beats that
-null. A group that would be 'supported' but does not beat random, or whose trades come from fewer than
-10 sessions or an effective n under 20, is capped at 'emerging'. When
-the null was not computed (n < 20, cost cap, no bars) beats_random is None and the tier stands.
+null. Within the walk budget each group replays a deterministic sample of at most NULL_SAMPLE
+trades. 'supported' requires beats_random True, at least 10 sessions and an effective n of 20:
+a group whose null could not be computed is capped at 'emerging' (it used to pass).
 """
 
 from __future__ import annotations
 
 import sqlite3
+import zlib
 from datetime import UTC, datetime
 from functools import cache
 from typing import Any
@@ -39,6 +43,7 @@ from .playbook_tracker import _OPEN
 from .random_entry import K_MAX, K_MIN, MAX_WALKS, NO_NULL, null_summary, trade_draws
 
 MIN_N, SUPPORT_N = 20, 100
+NULL_SAMPLE = 50  # trades per group replayed for the random-entry null
 DISCLAIMER = (
     "Tiers summarize tracked outcomes of past scenarios; they are not a forecast and do not"
     " promise future edge. ark-watch never trades."
@@ -80,10 +85,11 @@ def group_stats(
     n = len(rs)
     wins = [r for r in rs if r > 0]
     losses = [r for r in rs if r < 0]
+    decisive = len(wins) + len(losses)
     avg_win = sum(wins) / len(wins) if wins else None
     avg_loss = sum(losses) / len(losses) if losses else None
     be = -avg_loss / (avg_win - avg_loss) if avg_win is not None and avg_loss is not None else None
-    wr_ci = list(wilson_ci(len(wins), n)) if n else None
+    wr_ci = list(wilson_ci(len(wins), decisive)) if decisive else None
     exp_ci = list(cluster_bootstrap_ci(rs, sessions, seed=0)) if n else None
     n_eff = round(effective_n(rs, sessions), 1) if n else 0.0
     k = len(set(sessions))
@@ -99,8 +105,11 @@ def group_stats(
             " expectancy interval is not a confidence statement"
         )
     tier = _tier(n, wr_ci, be, exp_ci)
-    # 'supported' needs independent evidence: many sessions, not one session's correlated trades
-    if tier == "supported" and (null["beats_random"] is False or k < MIN_CLUSTERS or n_eff < MIN_N):
+    # 'supported' needs independent evidence: a beaten random-entry null and many sessions, not
+    # one session's correlated trades
+    if tier == "supported" and (
+        null["beats_random"] is not True or k < MIN_CLUSTERS or n_eff < MIN_N
+    ):
         tier = "emerging"
     return {
         "n": n,
@@ -108,7 +117,8 @@ def group_stats(
         "losses": len(losses),
         "n_sessions": k,
         "effective_n": n_eff,
-        "win_rate": round(len(wins) / n, 4) if n else None,
+        "scratches": n - decisive,
+        "win_rate": round(len(wins) / decisive, 4) if decisive else None,
         "win_rate_ci95": wr_ci,
         "expectancy_r": round(sum(rs) / n, 4) if n else None,
         "expectancy_ci95": exp_ci,
@@ -116,7 +126,7 @@ def group_stats(
         "avg_loss_r": avg_loss,
         "profit_factor": round(sum(wins) / -sum(losses), 4) if losses else None,
         "breakeven_win_rate": round(be, 4) if be is not None else None,
-        "p_value_vs_breakeven": binom_pvalue_vs_base_rate(len(wins), n, be)
+        "p_value_vs_breakeven": binom_pvalue_vs_base_rate(len(wins), decisive, be)
         if be is not None
         else None,
         "tier": tier,
@@ -144,7 +154,8 @@ def compute_scorecard(
         "SELECT scenario_id, direction, horizon, symbol, session_id, r_multiple, resolved_at_utc,"
         " scenario_uid, created_at_utc, entry_price, invalidation_level, target_profit"
         f" FROM playbook_scenarios WHERE state NOT IN ({','.join('?' * len(_OPEN))})"
-        f" AND entry_price IS NOT NULL{where}",
+        " AND state <> 'CANCELLED_MANUAL' AND entry_price IS NOT NULL"
+        f" AND r_multiple IS NOT NULL{where}",
         (*_OPEN, *params),
     ).fetchall()
     groups: dict[tuple, list[tuple]] = {}
@@ -153,17 +164,21 @@ def compute_scorecard(
         if asset_class and cls != asset_class.strip().lower():
             continue
         geo = (uid, sym, d, h, sess, created, entry, stop, target)
-        groups.setdefault((sid, d, h, cls), []).append((r or 0.0, sess, res, geo))
+        groups.setdefault((sid, d, h, cls), []).append((r, sess, res, geo))
 
-    # random-entry null only where a tier can be earned, within the MAX_WALKS budget
-    eligible = sum(len(t) for t in groups.values() if len(t) >= MIN_N)
-    n_draws = min(K_MAX, MAX_WALKS // eligible) if eligible else 0
+    # random-entry null only where a tier can be earned, within the MAX_WALKS budget: each group
+    # replays a deterministic sample (by uid hash) so the null survives a growing book
+    big = [t for t in groups.values() if len(t) >= MIN_N]
+    per_group = min(NULL_SAMPLE, MAX_WALKS // (K_MIN * len(big))) if big else 0
+    covered = sum(min(len(t), per_group) for t in big)
+    n_draws = min(K_MAX, MAX_WALKS // covered) if covered else 0
     bar_cache: dict = {}
 
     def null(trades: list[tuple]) -> dict | None:
-        if len(trades) < MIN_N or n_draws < K_MIN:
+        if len(trades) < MIN_N or n_draws < K_MIN or not per_group:
             return None
-        pairs = [(t[0], trade_draws(conn, t[3], n_draws, bar_cache)) for t in trades]
+        sample = sorted(trades, key=lambda t: zlib.crc32(t[3][0].encode()))[:per_group]
+        pairs = [(t[0], trade_draws(conn, t[3], n_draws, bar_cache)) for t in sample]
         pairs = [(r, d) for r, d in pairs if d is not None]
         return null_summary([r for r, _ in pairs], [d for _, d in pairs]) if pairs else None
 

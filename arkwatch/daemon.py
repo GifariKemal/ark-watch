@@ -226,7 +226,7 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-LANES = ("watch_lane", "market_lane")
+LANES = ("watch_lane", "market_lane", "news_lane")
 LANE_MAX_AGE_S = 600  # both lanes cycle at least every 5 min; 10 = a missed cycle plus a slow job
 MIN_FREE_BYTES = 3 * 1024**3  # page (dead-man stops pinging) before SQLite hits SQLITE_FULL
 BACKUP_MAX_AGE_S = 36 * 3600  # nightly backup plus a failed night's slack
@@ -671,6 +671,7 @@ def _save_state(d: dict[str, str], path: Path | None = None) -> None:
 
 
 MARKET_LANE_TICK_S = 5.0
+NEWS_LANE_TICK_S = 30.0
 
 
 def _watch_lane(stop: threading.Event) -> None:
@@ -704,6 +705,30 @@ def _market_lane(stop: threading.Event) -> None:
         except Exception as ex:
             logger.error(f"market lane: {ex}")
         stop.wait(MARKET_LANE_TICK_S)
+
+
+def _news_lane(stop: threading.Event) -> None:
+    """News, sentiment, breadth and crypto every 15 min in the London/NY overlap, hourly
+    otherwise, in their own thread: the LLM sentiment job runs up to 15 min and used to hold
+    the main loop, delaying scheduled jobs (the 23:30 backup) by as much (2026-10-12 audit).
+    Fires on a NEW bucket, never at every deploy (the first bucket is the current one)."""
+    start = datetime.now(WIB)
+    last_bucket = start.strftime("%Y%m%d%H") + f"{start.minute // _market_news_interval(start):02d}"
+    while not stop.is_set():
+        try:
+            _heartbeat()  # idle between buckets (up to an hour) is not a wedge
+            now_wib = datetime.now(WIB)
+            interval = _market_news_interval(now_wib)
+            bucket = now_wib.strftime("%Y%m%d%H") + f"{now_wib.minute // interval:02d}"
+            if bucket != last_bucket:
+                last_bucket = bucket
+                _run_job("market-news", "Cross-source catalyst news")
+                _run_job("sentiment", "Multi-asset news intelligence radar")
+                _run_job("breadth", "S&P 500 constituent breadth")
+                _run_job("crypto", "Crypto liquidation analytics")
+        except Exception as ex:
+            logger.error(f"news lane: {ex}")
+        stop.wait(NEWS_LANE_TICK_S)
 
 
 def _on_signal(signum, _frame):
@@ -749,14 +774,10 @@ def run_loop():
     next_retry: dict[str, float] = {}  # cmd → monotonic retry time (non-blocking)
     log_day = datetime.now(UTC).date()
     last_ping = float("-inf")
-    _start = datetime.now(WIB)  # first news run at the next boundary, not at every deploy
-    last_news_bucket = _start.strftime("%Y%m%d%H") + (
-        f"{_start.minute // _market_news_interval(_start):02d}"
-    )
     stop_lanes = threading.Event()
     lanes = [
         threading.Thread(target=fn, args=(stop_lanes,), name=fn.__name__, daemon=True)
-        for fn in (_watch_lane, _market_lane)
+        for fn in (_watch_lane, _market_lane, _news_lane)
     ]
     daemon_start = datetime.now(UTC).isoformat(timespec="seconds")
     try:
@@ -801,15 +822,6 @@ def run_loop():
                     next_retry[key] = time.monotonic() + RETRY_DELAY_S
                     logger.warning(f"  retry {cmd} in {RETRY_DELAY_S // 60} minutes")
 
-            news_interval = _market_news_interval(now_wib)
-            news_bucket = now_wib.strftime("%Y%m%d%H") + f"{now_wib.minute // news_interval:02d}"
-            # a new bucket, not minute % N == 0: a busy loop at :00 used to lose the hour
-            if news_bucket != last_news_bucket:
-                last_news_bucket = news_bucket
-                _run_job("market-news", "Cross-source catalyst news")
-                _run_job("sentiment", "Multi-asset news intelligence radar")
-                _run_job("breadth", "S&P 500 constituent breadth")
-                _run_job("crypto", "Crypto liquidation analytics")
             _run_api_jobs(daemon_start)
             # Rotate logs at the UTC date change (the filename convention is
             # UTC). CYCLE-counting drifted: a daemon started at 20:18 rotated

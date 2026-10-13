@@ -304,3 +304,26 @@ def test_okx_healthcheck(tmp_path, monkeypatch):
         daemon.okx_healthcheck(path, heal=True)
     c.close()
     assert kills == [1]  # only the 20-minute silence restarts
+
+
+def test_news_lane_runs_its_jobs_on_a_new_bucket_only(monkeypatch):
+    runs = []
+    monkeypatch.setattr(daemon, "_heartbeat", lambda: None)
+    monkeypatch.setattr(daemon, "_run_job", lambda cmd, desc: runs.append(cmd) or True)
+    monkeypatch.setattr(daemon, "NEWS_LANE_TICK_S", 0.01)
+    buckets = iter([0, 0, 15])  # minutes: start bucket, same bucket, then a new one
+
+    class Clock:
+        @staticmethod
+        def now(tz=None):
+            return datetime(2026, 10, 14, 15, next(buckets, 15), tzinfo=tz)
+
+    monkeypatch.setattr(daemon, "datetime", Clock)
+    monkeypatch.setattr(daemon, "_market_news_interval", lambda _n: 15)
+    stop = threading.Event()
+    t = threading.Thread(target=daemon._news_lane, args=(stop,))
+    t.start()
+    time.sleep(0.2)
+    stop.set()
+    t.join(5)
+    assert runs == ["market-news", "sentiment", "breadth", "crypto"]  # once, not at start

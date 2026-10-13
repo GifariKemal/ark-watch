@@ -25,8 +25,9 @@ DEFAULT_DB = (Path(_DATA_ENV) if _DATA_ENV else _ROOT / "data") / "arkwatch.db"
 BACKUP_DIR = Path(_DATA_ENV) / "backups" if _DATA_ENV else _ROOT / "backups"
 KEY_TABLES = ("raw_observations", "instrument_prices", "events")
 DAILIES, MONTHLIES = 7, 6
-# Crash leftovers of gdelt_retention's pre-cleanup snapshot (dot-prefixed, outside the *.db glob)
-ORPHAN_GLOB, ORPHAN_MAX_AGE_S = ".gdelt-retention-before-*.db", 86400
+# Crash leftovers outside the arkwatch-*.db glob: gdelt_retention's pre-cleanup snapshot and a
+# backup .tmp whose run was killed (a redeploy mid-VACUUM; backup() only clears TODAY's .tmp)
+ORPHAN_GLOBS, ORPHAN_MAX_AGE_S = (".gdelt-retention-before-*.db", "arkwatch-*.db.tmp"), 86400
 # (table, time column, keep days, extra filter). 2026-10-12 audit: the OKX stream grew the DB
 # ~60-85 MB/day with no retention at all. Longest reader per table:
 # - intraday 1m: same-day view (market_timeline refetches range=1d); readers pin interval='5m'
@@ -102,7 +103,7 @@ def rotate(now: float | None = None) -> None:
     daily rotation. Also sweeps gdelt_retention snapshots a hard kill left behind.
     """
     cutoff = (now if now is not None else datetime.now(UTC).timestamp()) - ORPHAN_MAX_AGE_S
-    for f in BACKUP_DIR.glob(ORPHAN_GLOB):
+    for f in (f for g in ORPHAN_GLOBS for f in BACKUP_DIR.glob(g)):
         if f.stat().st_mtime < cutoff:
             f.unlink(missing_ok=True)
     files = sorted(BACKUP_DIR.glob("arkwatch-*.db"))

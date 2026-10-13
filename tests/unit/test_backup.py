@@ -109,12 +109,14 @@ def test_rotate_keeps_dailies_monthlies_and_sweeps_old_orphans(tmp_path, monkeyp
         (d / f"arkwatch-{day:%Y%m%d}.db").write_bytes(b"x")
     stale = d / ".gdelt-retention-before-20260101T000000Z-aaaa.db"
     fresh = d / ".gdelt-retention-before-20260102T000000Z-bbbb.db"
-    stale.write_bytes(b"x")
-    fresh.write_bytes(b"x")
+    killed = d / "arkwatch-20260101.db.tmp"  # a backup killed mid-VACUUM on another day
+    for f in (stale, fresh, killed):
+        f.write_bytes(b"x")
     os.utime(stale, (1_000, 1_000))
+    os.utime(killed, (1_000, 1_000))
     backup.rotate(now=fresh.stat().st_mtime + 60)
     left = sorted(f.name for f in d.glob("arkwatch-*.db"))
     monthly = {f"arkwatch-{min(x for x in days if x.month == m):%Y%m%d}.db" for m in range(5, 11)}
     assert left[-backup.DAILIES :] == [f"arkwatch-{x:%Y%m%d}.db" for x in days[-backup.DAILIES :]]
     assert set(left) == monthly | set(left[-backup.DAILIES :])
-    assert not stale.exists() and fresh.exists()
+    assert not stale.exists() and not killed.exists() and fresh.exists()

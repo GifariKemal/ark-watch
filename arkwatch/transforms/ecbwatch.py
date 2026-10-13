@@ -8,8 +8,7 @@ docs/methodology/estrwatch.md):
   Reference Quarter [third-Wednesday of the contract month, +3 months).
   NOTE the contract month names the START of accrual (verified empirically:
   JUN26 implied 2.1925 matches realized Jun-17→Sep-9 €STR 2.18-2.19).
-  xccy._imm_approx is 2 days early for ESR (third MONDAY) and is NOT used
-  here — see L11 in ISSUE.md D-006.
+  xccy._imm_approx reuses _third_wednesday below (one IMM convention).
 - ECB decisions take effect the first Wednesday AFTER the Thursday
   announcement (start of the new reserve-maintenance period; verified: €STR
   jumped on 2026-06-17, six days after the 2026-06-11 decision).

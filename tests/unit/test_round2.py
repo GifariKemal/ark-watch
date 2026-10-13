@@ -37,15 +37,15 @@ class TestSplitMessage:
             assert p.count("<pre>") == p.count("</pre>")  # balanced in every chunk
 
 
-class TestImmThirdMonday:
+class TestImmThirdWednesday:
     def test_sep26_is_21(self):
-        # regression: the old range(7, 21) returned the 14th (second Monday)
-        assert _imm_approx("SEP 26") == date(2026, 9, 21)
+        # the 6E delivery / SR3-ESR reference date (was the third Monday, 2 days early)
+        assert _imm_approx("SEP 26") == date(2026, 9, 16)
 
     def test_always_15_to_21(self):
         for _m, name in ((3, "MAR"), (6, "JUN"), (9, "SEP"), (12, "DEC")):
             d = _imm_approx(f"{name} 27")
-            assert 15 <= d.day <= 21 and d.weekday() == 0, (name, d)
+            assert 15 <= d.day <= 21 and d.weekday() == 2, (name, d)
 
     def test_reject_4digit_year(self):
         assert _imm_approx("SEP 2026") is None

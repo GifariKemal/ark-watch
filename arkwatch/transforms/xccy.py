@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
+
+from .ecbwatch import _MONTHS, _third_wednesday
 
 # Product IDs
 SR3_PID, ESR_PID, EUR_PID = 8462, 10247, 58
@@ -101,47 +103,21 @@ def _get_spot(conn: sqlite3.Connection, td: str | None = None) -> float | None:
 
 
 def _imm_approx(contract_month: str) -> date | None:
-    """Parse 'SEP 26' → IMM date = third Monday of that month (15th-21st).
+    """Parse 'SEP 26' -> IMM date = the third WEDNESDAY of that month (15th-21st).
 
-    The exact third Monday is required (a hardcoded 15th mis-states τ by up
-    to ~6 days). The year must be 2 digits ('SEP 2026' is rejected, not
-    silently parsed as the year 4026).
+    The 6E future delivers on the third Wednesday and the SR3/ESR reference quarters start
+    there (CME Rulebook Ch.480, the same date ecbwatch uses): it is the forward's value date
+    for the CIP leg. The third Monday used before is the 6E last trading day, 2 days early
+    (2026-10-12 audit). The year must be 2 digits ('SEP 2026' is rejected, not silently
+    parsed as the year 4026).
     """
     parts = contract_month.strip().upper().split()
     if len(parts) != 2:
         return None
     mon_str, yr_str = parts
-    if len(yr_str) != 2 or not yr_str.isdigit():
+    if len(yr_str) != 2 or not yr_str.isdigit() or mon_str not in _MONTHS:
         return None
-    yr = 2000 + int(yr_str)
-    months = {
-        "JAN": 1,
-        "FEB": 2,
-        "MAR": 3,
-        "APR": 4,
-        "MAY": 5,
-        "JUN": 6,
-        "JUL": 7,
-        "AUG": 8,
-        "SEP": 9,
-        "OCT": 10,
-        "NOV": 11,
-        "DEC": 12,
-    }
-    m = months.get(mon_str)
-    if not m:
-        return None
-    first = date(yr, m, 1)
-    # Third Monday = the Monday falling on the 15th-21st. A range starting
-    # at 7 picks the SECOND Monday (8th-14th): SEP 26 → Sep 14 instead of
-    # Sep 21, mis-stating τ by 7 days and inflating the annualized basis
-    # by ~2-3%.
-    mondays = [
-        first + timedelta(days=i)
-        for i in range(14, 21)
-        if (first + timedelta(days=i)).weekday() == 0
-    ]
-    return mondays[0] if mondays else date(yr, m, 15)
+    return _third_wednesday(2000 + int(yr_str), _MONTHS[mon_str])
 
 
 def compute_xccy(conn: sqlite3.Connection) -> list[XccyRow]:

@@ -122,6 +122,6 @@ def test_imm_via_xccy_delegasi():
     """The IMM approximation resolves exact contract dates and rejects 4-digit years."""
     from arkwatch.transforms.xccy import _imm_approx
 
-    assert _imm_approx("MAR 27") == date(2027, 3, 15)
-    assert _imm_approx("SEP 26") == date(2026, 9, 21)
+    assert _imm_approx("MAR 27") == date(2027, 3, 17)
+    assert _imm_approx("SEP 26") == date(2026, 9, 16)
     assert _imm_approx("SEP 2026") is None  # 4-digit years are rejected

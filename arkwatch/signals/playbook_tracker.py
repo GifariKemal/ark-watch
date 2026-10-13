@@ -296,6 +296,8 @@ def record_playbook_scenarios(
 
         payload_json = json.dumps(
             {
+                # which config/params_playbook.yaml vintage built this scenario
+                "params_version": (playbook_payload.get("provenance") or {}).get("params_version"),
                 "scenario": sc,
                 "catalysts": playbook_payload.get("catalysts", {}),
                 "multi_domain": playbook_payload.get("multi_domain", {}),

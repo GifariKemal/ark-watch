@@ -212,6 +212,12 @@ def compute_pillars(conn: sqlite3.Connection, *, reader=None) -> dict[str, dict]
         "label": "Inflation",
         "state": c_state,
         "detail": c_detail,
+        # SIGN (decided 2026-10-13, audit C6): kept POSITIVE, unlike B and F. Tested on the
+        # realtime monthly history 2006-2026 against NBER recessions: the YoY z averages -0.37
+        # inside recessions and +0.15 outside (disinflation comes with the downturn), so +z
+        # lowers the score in recessions (RISK-OFF in 9 of 22 recession months) while a negated
+        # C would raise it (3 of 22, mean score +0.135 in recession). Inflation here reads as
+        # a reflation/demand signal; the inflation REGIME is the quadrant's job (state above).
         # Use the YoY rate for the inflation z-score, not the index level.
         # Level z-scores of monotonically increasing series are pinned near
         # +sqrt(3) regardless of actual inflation, creating a permanent +0.26

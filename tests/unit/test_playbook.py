@@ -561,3 +561,23 @@ def test_a_historical_replay_does_not_write_the_track_record(tmp_path):
     conn = db.get_conn(f)
     assert conn.execute("SELECT COUNT(*) FROM playbook_scenarios").fetchone()[0] == 0
     conn.close()
+
+
+def test_recorded_scenarios_carry_the_params_version(tmp_path):
+    import json as _json
+
+    from arkwatch.config import params_version
+    from arkwatch.signals import playbook
+
+    assert params_version("params_playbook.yaml") == playbook.PARAMS_VERSION
+    assert playbook.RR_FLOOR == 1.5 and playbook.MIN_STOP_RANGE_UNITS == 0.25  # values unchanged
+    now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    f = tmp_path / "pv.db"
+    _seed_breakout(f, now)
+    api.get_trading_playbook("NQ1", db_path=f, as_of=now, record=True)
+    conn = db.get_conn(f)
+    payloads = [
+        _json.loads(r[0]) for r in conn.execute("SELECT payload_json FROM playbook_scenarios")
+    ]
+    conn.close()
+    assert payloads and {p["params_version"] for p in payloads} == {playbook.PARAMS_VERSION}

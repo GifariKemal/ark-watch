@@ -194,6 +194,8 @@ class ScorecardStatsOut(BaseModel):
     n_sessions: int
     effective_n: Num = None
     scratches: int = 0  # 0R trades: in n and expectancy, not in the win rate
+    expectancy_gross_r: Num = None  # paper R before the assumed round-trip cost
+    avg_cost_r: Num = None  # the cost in R the net statistics paid
     win_rate: Num = None  # wins / (wins + losses), the population of breakeven_win_rate
     win_rate_ci95: list[float] | None = None
     expectancy_r: Num = None

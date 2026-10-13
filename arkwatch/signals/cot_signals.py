@@ -218,32 +218,32 @@ def _cross_contract_aggregate(conn: sqlite3.Connection) -> dict | None:
         return None
     # financial subset: EUR + JPY + GBP + DXY + SPX + NQ + BTC
     financial_codes = ("099741", "097741", "096742", "098662", "13874+", "209742", "133741")
-    nets = []
-    # Count contracts that actually contributed rows on the latest date — a
-    # hardcoded total would overstate coverage when a contract has no rows
-    # that day.
-    contributing = 0
+    # Each contract's net (mm+lev+am) is scaled by its own open interest before averaging
+    # (decided 2026-10-13, audit L5): summing raw contract counts let the contract with the
+    # biggest count set the sign (SPX e-mini lots vs BTC lots are not the same exposure).
+    ratios: list[float] = []
+    total = 0
     for code in financial_codes:
         rows = conn.execute(
-            "SELECT category, long, short FROM cot_raw "
+            "SELECT category, long, short, open_interest_all FROM cot_raw "
             "WHERE contract_code=? AND report_date=? "
             "AND report_type NOT LIKE '%_c' "
             "AND category IN ('mm','lev','am')",
             (code, latest),
         ).fetchall()
-        n_before = len(nets)
-        for _cat, lng, sht in rows:
-            if lng is not None:
-                nets.append(lng - (sht or 0))
-        if len(nets) > n_before:
-            contributing += 1
-    if not nets:
+        net = sum(lng - (sht or 0) for _c, lng, sht, _oi in rows if lng is not None)
+        oi = max((r[3] for r in rows if r[3]), default=None)
+        if rows and oi:
+            ratios.append(net / oi)
+            total += net
+    if not ratios:
         return None
-    total = sum(nets)
+    mean_ratio = sum(ratios) / len(ratios)
     return {
         "total_net": total,
-        "n_contracts": contributing,
-        "signal": "RISK-ON" if total > 0 else "RISK-OFF",
+        "mean_net_oi": round(mean_ratio, 4),  # average net as a share of each contract's OI
+        "n_contracts": len(ratios),
+        "signal": "RISK-ON" if mean_ratio > 0 else "RISK-OFF",
     }
 
 

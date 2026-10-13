@@ -50,6 +50,8 @@ fixtures/    captured API responses for parser tests
 
 ### Kalshi market probabilities
 
+Calibration (job `calibration`, stored in `computed_signals`) scores Polymarket at 1, 7 and 30 days before resolution and leaves out markets already priced at or beyond 3%/97% at that horizon (`excluded_already_decided`): a "by date X" market that settled in substance before closing would otherwise inflate the skill.
+
 `python -m arkwatch kalshi` (daemon: every hour at minute 25) reads Kalshi's public market data (no key) for `KXFEDDECISION`, `KXRECSSNBER` and `KXCPIYOY`: the nearest open event of each, its most-traded markets, stored as `kalshi:<ticker>` with the same topics as Polymarket. The price is the mid of a Yes quote no wider than 5 cents, else the last trade. Volume is in contracts (each pays $1), not USD. `GET /v1/odds` returns both venues with `venue` and `volume_unit`. Brier calibration stays Polymarket-only until Kalshi markets resolve after a stored snapshot.
 
 ### Phone push and dead-man switch
@@ -176,9 +178,11 @@ Playbook track record and open-book risk (computed from `playbook_scenarios`):
 | `GET /v1/playbooks/{uid}` | also `scorecard`: the group of that scenario's own type, or null with `scorecard_reason` |
 | `GET /v1/risk/book` | open scenarios (PENDING_TRIGGER, ACTIVE) with risk % of entry, reward to risk, age; counts by state, direction, asset class and cluster (`config/risk_clusters.yaml`); `r_at_stake` (1R per ACTIVE scenario, stated in the response); plain-text `flags` and advisory `veto_hints` |
 
-How the tracker fills a scenario, so the record scores the stated setup: expansion and composite-value (CVA) scenarios fill on the first 5-minute **close** beyond the trigger, liquidity sweeps on a trade through the level followed by a close back (entry at that close, the trade starts with the next bar); rotations, single prints and naked-POC targets fill on a touch. Fills are paper fills on 5-minute bars: no spread, slippage or fees. Manual cancels (an operator-chosen exit) are not trades.
+Every playbook number (geometry, reward/risk floors, friction thresholds, trading costs) lives in `config/params_playbook.yaml` with its provenance; each recorded scenario carries `params_version` (sha256 of that file), so parameter changes stay traceable in the record.
 
-Tiers: `unvalidated` below 20 trades; `supported` needs 100+ trades, a Wilson lower bound above the breakeven win rate, an expectancy CI above 0, a beaten random-entry null (computed on a deterministic sample of at most 50 trades per group), at least 10 sessions and an effective n of 20; `rejected` needs 100+ trades and a Wilson upper bound below breakeven; everything else is `emerging`. Tiers describe tracked outcomes only. They are not a forecast and promise no future edge. Calibration is null because scenarios carry no claimed win probability. Asset class comes from the `class` field in `config/instruments.yaml` (unknown symbols are `other`).
+How the tracker fills a scenario, so the record scores the stated setup: expansion and composite-value (CVA) scenarios fill on the first 5-minute **close** beyond the trigger, liquidity sweeps on a trade through the level followed by a close back (entry at that close, the trade starts with the next bar); rotations, single prints and naked-POC targets fill on a touch. Fills are paper fills on 5-minute bars; the scorecard scores them **net** of an assumed round-trip cost per asset class (`costs_bps`, converted to R with the stop distance) and reports `expectancy_gross_r` and `avg_cost_r` beside it. The random-entry draws pay the same cost. Manual cancels (an operator-chosen exit) are not trades.
+
+Tiers: `unvalidated` below 20 trades; `supported` needs 100+ trades, a Wilson lower bound above the breakeven win rate (the interval uses design-effect-scaled counts, n x n_eff / n, because trades of one session move together), an expectancy CI above 0, a beaten random-entry null (computed on a deterministic sample of at most 50 trades per group), at least 10 sessions and an effective n of 20; `rejected` needs 100+ trades and a Wilson upper bound below breakeven; everything else is `emerging`. Tiers describe tracked outcomes only. They are not a forecast and promise no future edge. Calibration is null because scenarios carry no claimed win probability. Asset class comes from the `class` field in `config/instruments.yaml` (unknown symbols are `other`).
 
 ## License
 

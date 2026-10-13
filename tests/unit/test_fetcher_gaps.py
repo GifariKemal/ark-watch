@@ -83,3 +83,38 @@ def test_stale_pillar_series_drops_out_of_the_regime():
     conn.close()
     assert out["E"]["z"] is None and out["E"]["stale"] and "STALE" in out["E"]["detail"]
     assert out["A"]["z"] == 0.4
+
+
+def test_cot_aggregate_scales_each_contract_by_its_open_interest():
+    from arkwatch import db
+    from arkwatch.signals.cot_signals import _cross_contract_aggregate
+
+    conn = db.get_conn(":memory:", allow_init=True)
+    # a huge-count contract slightly short (-1% of OI) vs two small ones clearly long (+40%)
+    rows = [("13874+", "lev", 0, 50_000, 5_000_000), ("133741", "lev", 400, 0, 1_000),
+            ("099741", "lev", 400, 0, 1_000)]  # fmt: skip
+    conn.executemany(
+        "INSERT INTO cot_raw(report_date, contract_code, report_type, release_ts, category, long,"
+        " short, open_interest_all, source, fetched_at) VALUES ('2026-10-06', ?, 'tff', 'x', ?, ?, ?, ?, 'C', 'x')",
+        rows,
+    )
+    agg = _cross_contract_aggregate(conn)
+    conn.close()
+    assert agg["total_net"] < 0  # the raw sum would have said RISK-OFF
+    assert agg["signal"] == "RISK-ON" and agg["n_contracts"] == 3
+
+
+def test_calibration_leaves_out_markets_already_decided_at_the_horizon():
+    from datetime import UTC, datetime, timedelta
+
+    from arkwatch.signals import calibration
+
+    t = datetime(2026, 9, 30, tzinfo=UTC)
+    snaps = lambda p: [(t - timedelta(days=d), p) for d in range(39, -1, -1)]  # noqa: E731 ascending
+    markets = [
+        {"won": 1, "t": t, "topic": "fed", "snaps": snaps(0.99)},  # public before the close
+        {"won": 0, "t": t, "topic": "fed", "snaps": snaps(0.40)},
+    ]
+    out = calibration.score_binary(markets)
+    h = next(iter(out.values()))
+    assert h["excluded_already_decided"] == 1 and h["n"] == 1

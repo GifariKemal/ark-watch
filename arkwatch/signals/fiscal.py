@@ -80,6 +80,7 @@ TERM_LABELS = {  # short brief labels ("10y b/c 2.31 p35" style)
 # ~2 years of same-term auctions a percentile mostly measures the window's own
 # noise → honest None. Never bites on the full 1979+ history (hundreds of
 # auctions per term); it protects young/partial tables only.
+AUCTION_WINDOW_YEARS = 10
 AUCTION_MIN_HIST = 26
 
 # An auction older than this never fires the weak-demand alert. Auctions are
@@ -210,9 +211,9 @@ def auction_demand(conn: sqlite3.Connection, min_hist: int | None = None) -> dic
     {as_of_date, headline_term, terms: {term: {auction_date, bid_to_cover,
     percentile, n_history}}}
 
-    - percentile = inclusive share of ALL same-term NOMINAL auctions at or
-      below the latest bid-to-cover (the 1979+ full history in fd_auctions is
-      the calibration base); None under AUCTION_MIN_HIST obs (honest).
+    - percentile = inclusive share of same-term NOMINAL auctions of the trailing
+      AUCTION_WINDOW_YEARS at or below the latest bid-to-cover; percentile_full the
+      same over the 1979+ history; None under AUCTION_MIN_HIST obs (honest).
     - headline_term = 10-Year, else 5-Year, else None (other terms are context
       only — the brief/store/alert read the headline).
 
@@ -231,11 +232,20 @@ def auction_demand(conn: sqlite3.Connection, min_hist: int | None = None) -> dic
             continue
         auction_date, btc = h[-1]
         vals = [v for _d, v in h]
+        # the trailing AUCTION_WINDOW_YEARS are the base (decided 2026-10-13, audit L16):
+        # bid-to-cover distributions shifted after 2008 and again after 2020, so p10 of the
+        # 1979+ history is not p10 of today's market. The full-history rank stays alongside.
+        since = (
+            date.fromisoformat(auction_date) - timedelta(days=365 * AUCTION_WINDOW_YEARS)
+        ).isoformat()
+        recent = [v for d, v in h if d >= since]
         terms[term] = {
             "auction_date": auction_date,
             "bid_to_cover": btc,
-            "percentile": _pctile(vals, btc) if len(vals) >= floor else None,
-            "n_history": len(vals),
+            "percentile": _pctile(recent, btc) if len(recent) >= floor else None,
+            "n_history": len(recent),
+            "percentile_full": _pctile(vals, btc) if len(vals) >= floor else None,
+            "n_history_full": len(vals),
         }
     if not terms:
         return {}

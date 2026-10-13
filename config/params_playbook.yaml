@@ -1,0 +1,64 @@
+# params_playbook.yaml: every number the AMT playbook (signals/playbook.py) uses to build a
+# scenario or raise a friction/tailwind note. Moved out of the code 2026-10-13 (audit C10) so a
+# change is visible, reviewable and versioned: the sha256 of this file is stored in every
+# recorded scenario (payload `params_version`), so the scorecard can tell parameter vintages
+# apart. Values are unchanged from the code they replace; provenance per key.
+#
+# Units: "range units" = fractions of the prior-day range (signals/levels.py range_unit).
+
+geometry:
+  # [ENGINEERING] minimum stop distance: a 0.05-unit stop made RR >= 1.5 trivially true
+  min_stop_range_units: 0.25
+  # [ENGINEERING] buffer beyond VAL/VAH/VWAP for expansion invalidation, and the expansion
+  # target floor beyond PDH/PDL
+  expansion_buffer_units: 0.20
+  # [ENGINEERING] fallback target/invalidation distance when no profile level exists
+  fallback_units: 0.35
+  # [ENGINEERING] a sweep scenario exists only while price is within 0.2% of PDH/PDL
+  sweep_proximity_pct: 0.2
+  # [ENGINEERING] a single print is "reachable" within 1.5 ATR(14)
+  single_print_reach_atr: 1.5
+
+reward_risk_floor:
+  # [ENGINEERING] minimum reward/risk to publish a scenario. Primary setups 1.5, the
+  # single-print repair 1.2 (its target is the print itself, a short structural move)
+  default: 1.5
+  single_print: 1.2
+
+friction:
+  # [RISET: Sahm 2019] real-time Sahm rule recession threshold
+  sahm_trigger: 0.50
+  # [ENGINEERING] the playbook's WARNING is deliberately softer than the watcher's ALERT
+  # (params_signals.yaml fd_auction_weak_pct: 10): a p20 10Y auction is worth a caution
+  # line on an index setup, a p10 one is worth a push
+  auction_weak_pct: 20.0
+  # [ENGINEERING] FedWatch: a cut priced >= 70% is a tailwind for index longs; any hike
+  # probability >= 20% is a headwind
+  fed_cut_tailwind_pct: 70.0
+  fed_hike_headwind_pct: 20.0
+  # inflation risk premium: the same threshold expectations.py labels PREMIUM (IRP_PREMIUM_BP)
+  # is read from there; the playbook used 30 bp while the brief said PREMIUM above 25
+  # [RISET: CME FX futures basis] EUR/USD cross-currency basis: below -20 bp the reading is
+  # USD funding strain, below -25 bp a friction note
+  xccy_strain_bp: -20.0
+  xccy_friction_bp: -25.0
+  # [ENGINEERING] S&P 500 breadth: % of constituents advancing
+  breadth_weak_pct: 40.0
+  breadth_strong_pct: 65.0
+  # [ENGINEERING] a high-impact release within this many hours is an event-risk note
+  event_risk_hours: 3.0
+
+# Round-trip trading cost in basis points of the entry price, by asset class (instruments.yaml
+# `class`). [ASSUMPTION, decided 2026-10-13, audit C11] conservative CFD/futures retail costs:
+# spread plus about one tick of slippage per side, taker fees for crypto. The scorecard scores
+# trades NET of this (cost in R = bps x entry / stop distance), so tight-stop setups pay their
+# real share; the tracker keeps the gross paper R. Tune here, a change bumps params_version.
+costs_bps:
+  equity_index: 2.0   # ES/NQ/YM or US index CFD: ~0.5-1 pt spread at 6000-25000
+  metals: 3.0         # gold ~0.25 USD spread at 2400 (~1 bp), silver several bp
+  energy: 4.0         # CL/BZ 1-2 ticks of 0.01 at ~70
+  fx: 2.0             # majors ~1-1.5 pip spread + slippage
+  crypto: 12.0        # ~5 bp taker fee per side + spread
+  rates: 1.0
+  volatility: 5.0
+  other: 5.0

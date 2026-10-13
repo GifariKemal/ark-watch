@@ -1,5 +1,9 @@
 """scorecard.py - per scenario-type track record of the playbook, with evidence tiers.
 
+Scoring is NET of a round-trip cost (config/params_playbook.yaml costs_bps by asset class,
+converted to R with the stop distance); expectancy_gross_r and avg_cost_r show the paper figure
+and what the cost took. The random-entry draws pay the same cost.
+
 A trade is a resolved scenario that was filled (entry_price set) and closed by the tracker's
 rules, the same definition as playbook_tracker.get_playbook_performance_metrics; it scores by its
 realized r_multiple (win > 0). Manual cancels (CANCELLED_MANUAL, an operator-chosen exit) are
@@ -46,8 +50,9 @@ MIN_N, SUPPORT_N = 20, 100
 NULL_SAMPLE = 50  # trades per group replayed for the random-entry null
 DISCLAIMER = (
     "Tiers summarize tracked outcomes of past scenarios; they are not a forecast and do not"
-    " promise future edge. Outcomes are paper fills on 5-minute bars at the level, with no"
-    " spread, slippage or fees: setups with tight stops look better than they would trade."
+    " promise future edge. Outcomes are paper fills on 5-minute bars at the level; the"
+    " statistics are net of an assumed round-trip cost per asset class (params_playbook.yaml),"
+    " not of actual broker fills."
     " ark-watch never trades."
 )
 NO_CALIBRATION = (
@@ -61,6 +66,18 @@ def _classes() -> dict[str, str]:
     return {
         i["symbol"]: i.get("class", "other") for i in _load_yaml("instruments.yaml")["instruments"]
     }
+
+
+@cache
+def _costs_bps() -> dict[str, float]:
+    return dict(_load_yaml("params_playbook.yaml")["costs_bps"])
+
+
+def cost_r(bps: float, entry: float | None, stop: float | None) -> float:
+    """Round-trip cost in R: bps of the entry over the stop distance (0 without geometry)."""
+    if not entry or stop is None or entry == stop:
+        return 0.0
+    return round(bps / 1e4 * entry / abs(entry - stop), 4)
 
 
 def asset_class(symbol: str) -> str:
@@ -91,9 +108,13 @@ def group_stats(
     avg_win = sum(wins) / len(wins) if wins else None
     avg_loss = sum(losses) / len(losses) if losses else None
     be = -avg_loss / (avg_win - avg_loss) if avg_win is not None and avg_loss is not None else None
-    wr_ci = list(wilson_ci(len(wins), decisive)) if decisive else None
+    n_eff_raw = effective_n(rs, sessions) if n else 0.0
+    n_eff = round(n_eff_raw, 1)
+    # trades inside one session move together: the Wilson interval uses design-effect-scaled
+    # counts (x n_eff / n), not the raw n that overstated its precision (audit L7)
+    scale = n_eff_raw / n if n else 1.0
+    wr_ci = list(wilson_ci(len(wins) * scale, decisive * scale)) if decisive else None
     exp_ci = list(cluster_bootstrap_ci(rs, sessions, seed=0)) if n else None
-    n_eff = round(effective_n(rs, sessions), 1) if n else 0.0
     k = len(set(sessions))
     warning = None
     if n >= 2 and (n_eff < n / 2 or k < MIN_CLUSTERS):  # an ICC from <10 sessions is noise
@@ -160,13 +181,16 @@ def compute_scorecard(
         f" AND r_multiple IS NOT NULL{where}",
         (*_OPEN, *params),
     ).fetchall()
+    costs = _costs_bps()
     groups: dict[tuple, list[tuple]] = {}
     for sid, d, h, sym, sess, r, res, uid, created, entry, stop, target in rows:
         cls = _classes().get(sym.upper(), "other")
         if asset_class and cls != asset_class.strip().lower():
             continue
         geo = (uid, sym, d, h, sess, created, entry, stop, target)
-        groups.setdefault((sid, d, h, cls), []).append((r, sess, res, geo))
+        cost = cost_r(costs.get(cls, costs.get("other", 0.0)), entry, stop)
+        # scored NET of the round-trip cost; the gross paper R rides along for display
+        groups.setdefault((sid, d, h, cls), []).append((r - cost, sess, res, geo, cost, r))
 
     # random-entry null only where a tier can be earned, within the MAX_WALKS budget: each group
     # replays a deterministic sample (by uid hash) so the null survives a growing book
@@ -180,13 +204,18 @@ def compute_scorecard(
         if len(trades) < MIN_N or n_draws < K_MIN or not per_group:
             return None
         sample = sorted(trades, key=lambda t: zlib.crc32(t[3][0].encode()))[:per_group]
-        pairs = [(t[0], trade_draws(conn, t[3], n_draws, bar_cache)) for t in sample]
-        pairs = [(r, d) for r, d in pairs if d is not None]
+        # the random entries pay the same cost as the trade they replay: net vs net
+        pairs = [(t[0], trade_draws(conn, t[3], n_draws, bar_cache), t[4]) for t in sample]
+        pairs = [(r, d - c) for r, d, c in pairs if d is not None]
         return null_summary([r for r, _ in pairs], [d for _, d in pairs]) if pairs else None
 
     def stats(trades: list[tuple], with_null: bool = False) -> dict[str, Any]:
         rs, sess, res = ([t[i] for t in trades] for i in range(3))
-        return group_stats(rs, sess, [x for x in res if x], null(trades) if with_null else None)
+        out = group_stats(rs, sess, [x for x in res if x], null(trades) if with_null else None)
+        n = len(trades)
+        out["expectancy_gross_r"] = round(sum(t[5] for t in trades) / n, 4) if n else None
+        out["avg_cost_r"] = round(sum(t[4] for t in trades) / n, 4) if n else None
+        return out
 
     out = [
         {"scenario_type": k[0], "direction": k[1], "horizon": k[2], "asset_class": k[3]}

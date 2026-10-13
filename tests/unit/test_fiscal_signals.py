@@ -664,3 +664,15 @@ def test_fiscal_layer_degrades_without_v10_tables(conn):
     assert auction_demand_weak_alert(conn, weak_pct=10) is None
     assert store_fiscal_signals(conn) == 0
     assert fiscal_brief_line(conn) is None
+
+
+def test_auction_percentile_uses_the_trailing_window(conn):
+    """A b/c of 2.40: weak against the last 10 years (2.5-2.7), unremarkable against a 1990s
+    history of 1.8-2.2. The window rank drives the alert; the full rank rides along."""
+    old = [1.8 + (i % 5) * 0.1 for i in range(60)]  # ~13-14 years ago, weekly spacing
+    for i, btc in enumerate(old):
+        _seed_auction(conn, _day(5000 + i * 7), f"OLD{i:04d}", "Note", "10-Year", btc)
+    _seed_term_history(conn, "10-Year", "Note", [2.5 + (i % 3) * 0.1 for i in range(40)] + [2.4])
+    t = auction_demand(conn)["terms"]["10-Year"]
+    assert t["n_history"] == 41 and t["n_history_full"] == 101
+    assert t["percentile"] < 5 < 50 < t["percentile_full"]

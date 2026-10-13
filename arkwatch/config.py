@@ -110,6 +110,17 @@ def load_params_signals() -> dict:
     return _load_yaml("params_signals.yaml")
 
 
+def load_params_playbook() -> dict:
+    return _load_yaml("params_playbook.yaml")
+
+
+def params_version(name: str) -> str:
+    """sha256 (first 12 hex) of a config file: which parameter vintage produced a record."""
+    import hashlib
+
+    return hashlib.sha256((CONFIG_DIR / name).read_bytes()).hexdigest()[:12]
+
+
 def load_cot_contracts() -> list[dict]:
     data = _load_yaml("cot_contracts.yaml")
     return data if isinstance(data, list) else data.get("contracts", [])

@@ -13,8 +13,9 @@ from collections.abc import Hashable, Sequence
 import numpy as np
 
 
-def wilson_ci(wins: int, n: int, alpha: float = 0.05) -> tuple[float, float]:
-    """Wilson score interval for a binomial proportion."""
+def wilson_ci(wins: float, n: float, alpha: float = 0.05) -> tuple[float, float]:
+    """Wilson score interval for a binomial proportion. Fractional counts are allowed: the
+    scorecard passes design-effect-scaled counts (wins and n times n_eff / n)."""
     from statsmodels.stats.proportion import proportion_confint
 
     lo, hi = proportion_confint(wins, n, alpha=alpha, method="wilson")

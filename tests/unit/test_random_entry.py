@@ -17,7 +17,9 @@ T0 = "13:00:00+00:00"  # scenario creation; the session expires 17:00 ET = 21:00
 
 
 @pytest.fixture()
-def conn(tmp_path):
+def conn(tmp_path, monkeypatch):
+    # the statistics tests run gross; test_costs_are_charged_in_r covers the cost model
+    monkeypatch.setattr(scorecard, "_costs_bps", lambda: {})
     c = db.get_conn(tmp_path / "arkwatch.db", allow_init=True)
     yield c
     c.close()

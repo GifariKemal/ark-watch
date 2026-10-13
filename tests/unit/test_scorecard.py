@@ -14,7 +14,9 @@ SC = "SCENARIO_INTRADAY_SWEEP_SHORT"
 
 
 @pytest.fixture()
-def conn(tmp_path):
+def conn(tmp_path, monkeypatch):
+    # the statistics tests run gross; test_costs_are_charged_in_r covers the cost model
+    monkeypatch.setattr(scorecard, "_costs_bps", lambda: {})
     c = db.get_conn(tmp_path / "arkwatch.db", allow_init=True)
     yield c
     c.close()
@@ -234,3 +236,25 @@ def test_flag_open_past_expiry(conn):
     out = book_risk.compute_book_risk(conn, now=NOW)
     assert any("old" in f and "expiry" in f for f in out["flags"])
     assert next(s for s in out["scenarios"] if s["scenario_uid"] == "old")["expired"] is True
+
+
+def test_costs_are_charged_in_r(tmp_path):
+    """2 bp round trip on a 100 entry with a 1-point stop = 0.02R per trade, net in every stat."""
+    c = db.get_conn(tmp_path / "cost.db", allow_init=True)
+    _trades(c, [2.0, -1.0])  # NQ1 = equity_index (2 bp), entry 100, stop 101
+    g = _only(c)
+    c.close()
+    assert g["avg_cost_r"] == 0.02
+    assert g["expectancy_gross_r"] == 0.5 and g["expectancy_r"] == pytest.approx(0.48)
+    assert scorecard.cost_r(12.0, 50000.0, 49900.0) == pytest.approx(0.6)  # crypto, tight stop
+    assert scorecard.cost_r(2.0, 100.0, None) == 0.0
+
+
+def test_wilson_interval_widens_when_trades_cluster_in_sessions():
+    rs = [2.0, 2.0, -1.0, -1.0] * 10
+    spread = [f"s{i}" for i in range(40)]
+    rs_c = [2.0] * 10 + [-1.0] * 10 + [2.0] * 10 + [-1.0] * 10  # whole sessions win/lose together
+    clustered = [f"w{i // 10}" for i in range(40)]
+    wide = scorecard.group_stats(rs_c, clustered, [])["win_rate_ci95"]
+    narrow = scorecard.group_stats(rs, spread, [])["win_rate_ci95"]
+    assert wide[1] - wide[0] > narrow[1] - narrow[0]

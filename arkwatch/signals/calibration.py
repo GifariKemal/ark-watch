@@ -252,23 +252,31 @@ def resolve_markets(conn: sqlite3.Connection, now: datetime, stats: dict) -> dic
     return out
 
 
+# A "by date X" market often settles in substance before it closes: its price at T-1d is
+# already 0.01 or 0.99 and scoring it inflates skill with outcomes that were public. Prices this
+# close to 0/1 at the horizon are left out and counted (decided 2026-10-13, audit L10).
+DECIDED_BAND = 0.03
+
+
 def score_binary(markets: list[dict]) -> dict[str, dict]:
     """markets: {won, t, topic, snaps} -> per-horizon summary with a per-topic breakdown."""
     out = {}
     for h, days in HORIZONS.items():
-        fc = [
+        at_h = [
             (p, m["won"], m["topic"])
             for m in markets
             if (p := at_horizon(m["snaps"], m["t"], days)) is not None
         ]
+        fc = [f for f in at_h if DECIDED_BAND < f[0] < 1 - DECIDED_BAND]
         topics = sorted({t for _, _, t in fc if t})
         out[h] = summarize([f[0] for f in fc], [f[1] for f in fc]) | {
+            "excluded_already_decided": len(at_h) - len(fc),
             "by_topic": {
                 t: summarize(
                     [f[0] for f in fc if f[2] == t], [f[1] for f in fc if f[2] == t], bins=False
                 )
                 for t in topics
-            }
+            },
         }
     return out
 

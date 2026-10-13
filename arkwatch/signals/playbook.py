@@ -14,12 +14,13 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from ..config import load_params_playbook, params_version
 from ..transforms import xccy
 from . import cot_signals, etf_flows, fiscal, options, vixterm
 from .asof import parse_as_of
 from .crypto import liquidation_summary
 from .dealers import dealers_snapshot
-from .expectations import inflation_risk_premium
+from .expectations import IRP_PREMIUM_BP, inflation_risk_premium
 from .futures_flow import futures_flow_matrix
 from .intraday import session_intraday_intelligence
 from .levels import compute_session_reference_levels
@@ -163,9 +164,13 @@ EMPIRICAL_BREAKOUT_STATS: dict[str, dict[str, Any]] = {
     },
 }
 
-# Sweep / rotation stops sit at least this many range units beyond the level, otherwise a
-# 0.05-unit stop makes RR >= 1.5 trivially true.
-MIN_STOP_RANGE_UNITS = 0.25
+# Every geometry / friction number lives in config/params_playbook.yaml (provenance per key);
+# PARAMS_VERSION (its sha256) is stored with each recorded scenario.
+_PP = load_params_playbook()
+PARAMS_VERSION = params_version("params_playbook.yaml")
+_G, _RRF, _FR = _PP["geometry"], _PP["reward_risk_floor"], _PP["friction"]
+MIN_STOP_RANGE_UNITS = _G["min_stop_range_units"]
+RR_FLOOR = _RRF["default"]
 # Scenarios whose thesis rests on the breakout study above (when the symbol has one)
 EMPIRICAL_SCENARIO_IDS = {
     "SCENARIO_INTRADAY_EXPANSION_LONG",
@@ -324,7 +329,7 @@ def generate_trading_playbook(
         )
     # Sahm Rule Recession Indicator
     sahm_val = latest_before(conn, "FRED:SAHMREALTIME", as_of_iso)
-    if sahm_val is not None and sahm_val >= 0.50:
+    if sahm_val is not None and sahm_val >= _FR["sahm_trigger"]:
         friction_warnings.append(
             f"SAHM_RULE_RECESSION_TRIGGER: Sahm Rule at {sahm_val} (>=0.50 triggers formal US recession indicator)."
         )
@@ -337,7 +342,7 @@ def generate_trading_playbook(
     except Exception:
         auc_pctl = None
 
-    if auc_pctl is not None and auc_pctl <= 20.0 and sym in ("NQ1", "ES1"):
+    if auc_pctl is not None and auc_pctl <= _FR["auction_weak_pct"] and sym in ("NQ1", "ES1"):
         friction_warnings.append(
             f"WEAK_TREASURY_AUCTION: 10Y Auction bid-to-cover at bottom {round(auc_pctl, 1)}% percentile, risks yield spikes."
         )
@@ -383,11 +388,11 @@ def generate_trading_playbook(
             "prob_hike_pct": p_hike,
             "implied_rate_pct": round(fw_row[4], 2),
         }
-        if p_cut >= 70.0 and sym in ("NQ1", "ES1", "YM1"):
+        if p_cut >= _FR["fed_cut_tailwind_pct"] and sym in ("NQ1", "ES1", "YM1"):
             tailwinds.append(
                 f"FEDWATCH_DOVISH: High market consensus ({p_cut}% probability) for rate cut at {fw_row[0]} FOMC meeting."
             )
-        elif p_hike >= 20.0:
+        elif p_hike >= _FR["fed_hike_headwind_pct"]:
             friction_warnings.append(
                 f"FEDWATCH_HAWKISH_PRICING: Non-zero hike probability ({p_hike}%) priced into {fw_row[0]} FOMC meeting."
             )
@@ -436,7 +441,7 @@ def generate_trading_playbook(
             "inflation_risk_premium_bp": irp_bp,
             "tips_liquidity_premium_bp": tips_liq_bp,
         }
-        if irp_bp > 30.0:
+        if irp_bp > IRP_PREMIUM_BP:  # one threshold with the brief's PREMIUM label
             friction_warnings.append(
                 f"INFLATION_RISK_PREMIUM_ELEVATED: IRP at +{irp_bp} bps, market paying high inflation insurance premium."
             )
@@ -465,9 +470,11 @@ def generate_trading_playbook(
         cross_currency_basis = {
             "contract": front_x.contract,
             "basis_spread_bp": round(front_x.basis_bps, 1),
-            "interpretation": "NORMAL" if front_x.basis_bps > -20.0 else "USD_FUNDING_STRAIN",
+            "interpretation": "NORMAL"
+            if front_x.basis_bps > _FR["xccy_strain_bp"]
+            else "USD_FUNDING_STRAIN",
         }
-        if front_x.basis_bps < -25.0:
+        if front_x.basis_bps < _FR["xccy_friction_bp"]:
             friction_warnings.append(
                 f"DOLLAR_LIQUIDITY_STRAIN: Cross-currency basis swap wide at {round(front_x.basis_bps, 1)} bps, global banks paying premium for USD."
             )
@@ -728,7 +735,7 @@ def generate_trading_playbook(
     event_restriction = False
 
     # Event Risk Gate
-    if next_event_row and hours_to_event is not None and hours_to_event <= 3.0:
+    if next_event_row and hours_to_event is not None and hours_to_event <= _FR["event_risk_hours"]:
         event_restriction = True
         friction_warnings.append(
             f"EVENT_RISK_HALT: High-impact '{next_event_row[0]}' in {round(hours_to_event, 1)}h. Pre-event breakout trades restricted."
@@ -747,11 +754,11 @@ def generate_trading_playbook(
         )
 
     # Market Breadth Divergence on Equities
-    if sym in ("NQ1", "ES1") and adv_ratio is not None and adv_ratio < 40.0:
+    if sym in ("NQ1", "ES1") and adv_ratio is not None and adv_ratio < _FR["breadth_weak_pct"]:
         friction_warnings.append(
             f"BREADTH_DIVERGENCE: Market breadth weak ({adv_ratio}% advancing). Rally lacks broad constituent backing."
         )
-    elif sym in ("NQ1", "ES1") and adv_ratio is not None and adv_ratio > 65.0:
+    elif sym in ("NQ1", "ES1") and adv_ratio is not None and adv_ratio > _FR["breadth_strong_pct"]:
         tailwinds.append(
             f"BREADTH_CONFIRMATION: Broad market participation ({adv_ratio}% advancing). Confirms index strength."
         )
@@ -805,12 +812,16 @@ def generate_trading_playbook(
         vwap is None or last_price >= vwap
     ):
         intra_target = round(
-            max(pdh + (0.20 * range_unit), last_price + (cont_atr * range_unit)), 2
+            max(
+                pdh + (_G["expansion_buffer_units"] * range_unit),
+                last_price + (cont_atr * range_unit),
+            ),
+            2,
         )
         intra_inval = round(
             max(
-                val if val else last_price - (0.20 * range_unit),
-                vwap if vwap else last_price - (0.20 * range_unit),
+                val if val else last_price - (_G["expansion_buffer_units"] * range_unit),
+                vwap if vwap else last_price - (_G["expansion_buffer_units"] * range_unit),
             ),
             2,
         )
@@ -818,7 +829,7 @@ def generate_trading_playbook(
         reward_long = abs(intra_target - trig_long)
         risk_long = max(0.01, abs(trig_long - intra_inval))
         rr_long = round(reward_long / risk_long, 2)
-        if rr_long >= 1.5:
+        if rr_long >= RR_FLOOR:
             intraday_scenarios.append(
                 {
                     "id": "SCENARIO_INTRADAY_EXPANSION_LONG",
@@ -859,12 +870,16 @@ def generate_trading_playbook(
         vwap is None or last_price <= vwap
     ):
         intra_target = round(
-            min(pdl - (0.20 * range_unit), last_price - (cont_atr * range_unit)), 2
+            min(
+                pdl - (_G["expansion_buffer_units"] * range_unit),
+                last_price - (cont_atr * range_unit),
+            ),
+            2,
         )
         intra_inval = round(
             min(
-                vah if vah else last_price + (0.20 * range_unit),
-                vwap if vwap else last_price + (0.20 * range_unit),
+                vah if vah else last_price + (_G["expansion_buffer_units"] * range_unit),
+                vwap if vwap else last_price + (_G["expansion_buffer_units"] * range_unit),
             ),
             2,
         )
@@ -872,7 +887,7 @@ def generate_trading_playbook(
         reward_short = abs(trig_short - intra_target)
         risk_short = max(0.01, abs(intra_inval - trig_short))
         rr_short = round(reward_short / risk_short, 2)
-        if rr_short >= 1.5:
+        if rr_short >= RR_FLOOR:
             intraday_scenarios.append(
                 {
                     "id": "SCENARIO_INTRADAY_EXPANSION_SHORT",
@@ -916,7 +931,7 @@ def generate_trading_playbook(
             rot_reward = abs(rot_target - last_price)
             rot_risk = max(0.01, abs(last_price - rot_inval))
             rr_rot = round(rot_reward / rot_risk, 2)
-            if rr_rot >= 1.5:
+            if rr_rot >= RR_FLOOR:
                 intraday_scenarios.append(
                     {
                         "id": "SCENARIO_INTRADAY_VAL_ROTATION_LONG",
@@ -952,7 +967,7 @@ def generate_trading_playbook(
             rot_reward_s = abs(last_price - rot_target_s)
             rot_risk_s = max(0.01, abs(rot_inval_s - last_price))
             rr_rot_s = round(rot_reward_s / rot_risk_s, 2)
-            if rr_rot_s >= 1.5:
+            if rr_rot_s >= RR_FLOOR:
                 intraday_scenarios.append(
                     {
                         "id": "SCENARIO_INTRADAY_VAH_ROTATION_SHORT",
@@ -982,7 +997,7 @@ def generate_trading_playbook(
                 )
     # [B2] INTRADAY SCENARIO: TPO Single Print Imbalance Repair Magnet
     sp = min(single_prints, key=lambda x: abs(x["price_mid"] - last_price), default=None)
-    if sp and abs(last_price - sp["price_mid"]) <= (1.5 * atr_14):
+    if sp and abs(last_price - sp["price_mid"]) <= (_G["single_print_reach_atr"] * atr_14):
         target_sp = round(sp["price_mid"], 2)
         sp_dir = "LONG" if target_sp > last_price else "SHORT"
         # stop must sit on the far side of entry; VAL above price (or VAH below) means no
@@ -991,7 +1006,7 @@ def generate_trading_playbook(
         reward_span = abs(target_sp - last_price)
         risk_span = max(0.01, abs(last_price - sp_inval))
         rr_sp = round(reward_span / risk_span, 2)
-        if rr_sp >= 1.2:
+        if rr_sp >= _RRF["single_print"]:
             intraday_scenarios.append(
                 {
                     "id": "SCENARIO_INTRADAY_SINGLE_PRINT_REPAIR",
@@ -1021,20 +1036,22 @@ def generate_trading_playbook(
             )
 
     # [B] INTRADAY SCENARIO 2: Liquidity Sweep / Failed Auction (Trap Setup)
-    if last_price >= pdh * 0.998 and not is_bullish_open_drive:
+    if last_price >= pdh * (1 - _G["sweep_proximity_pct"] / 100) and not is_bullish_open_drive:
         sweep_inval = round(pdh + (MIN_STOP_RANGE_UNITS * range_unit), 2)
         target_naked = (
             naked_poc_below if isinstance(naked_poc_below, int | float) else (poc if poc else pdc)
         )
         sweep_target = round(
-            target_naked if target_naked < last_price else (last_price - (0.35 * range_unit)),
+            target_naked
+            if target_naked < last_price
+            else (last_price - (_G["fallback_units"] * range_unit)),
             2,
         )
         trig_sweep_s = pdh
         reward_sweep_short = abs(trig_sweep_s - sweep_target)
         risk_sweep_short = max(0.01, abs(sweep_inval - trig_sweep_s))
         rr_sweep_short = round(reward_sweep_short / risk_sweep_short, 2)
-        if rr_sweep_short >= 1.5:
+        if rr_sweep_short >= RR_FLOOR:
             intraday_scenarios.append(
                 {
                     "id": "SCENARIO_INTRADAY_SWEEP_SHORT",
@@ -1071,20 +1088,22 @@ def generate_trading_playbook(
                     },
                 }
             )
-    elif last_price <= pdl * 1.002 and not is_bearish_open_drive:
+    elif last_price <= pdl * (1 + _G["sweep_proximity_pct"] / 100) and not is_bearish_open_drive:
         sweep_inval = round(pdl - (MIN_STOP_RANGE_UNITS * range_unit), 2)
         target_naked = (
             naked_poc_above if isinstance(naked_poc_above, int | float) else (poc if poc else pdc)
         )
         sweep_target = round(
-            target_naked if target_naked > last_price else (last_price + (0.35 * range_unit)),
+            target_naked
+            if target_naked > last_price
+            else (last_price + (_G["fallback_units"] * range_unit)),
             2,
         )
         trig_sweep_l = pdl
         reward_sweep_long = abs(sweep_target - trig_sweep_l)
         risk_sweep_long = max(0.01, abs(trig_sweep_l - sweep_inval))
         rr_sweep_long = round(reward_sweep_long / risk_sweep_long, 2)
-        if rr_sweep_long >= 1.5:
+        if rr_sweep_long >= RR_FLOOR:
             intraday_scenarios.append(
                 {
                     "id": "SCENARIO_INTRADAY_SWEEP_LONG",
@@ -1125,14 +1144,18 @@ def generate_trading_playbook(
     if cva_measured_long and last_price >= (vah or last_price):
         cva_target = round(cva_measured_long, 2)
         cva_inval = round(
-            (levels.get("DYNAMIC_CVA_POC") or poc or (last_price - (0.35 * range_unit))),
+            (
+                levels.get("DYNAMIC_CVA_POC")
+                or poc
+                or (last_price - (_G["fallback_units"] * range_unit))
+            ),
             2,
         )
         trig_cva_l = levels.get("DYNAMIC_CVA_VAH") or last_price
         reward_cva_long = abs(cva_target - trig_cva_l)
         risk_cva_long = max(0.01, abs(trig_cva_l - cva_inval))
         rr_cva_long = round(reward_cva_long / risk_cva_long, 2)
-        if rr_cva_long >= 1.5:
+        if rr_cva_long >= RR_FLOOR:
             swing_scenarios.append(
                 {
                     "id": "SCENARIO_SWING_CVA_EXPANSION_LONG",
@@ -1161,14 +1184,18 @@ def generate_trading_playbook(
     elif cva_measured_short and last_price <= (val or last_price):
         cva_target = round(cva_measured_short, 2)
         cva_inval = round(
-            (levels.get("DYNAMIC_CVA_POC") or poc or (last_price + (0.35 * range_unit))),
+            (
+                levels.get("DYNAMIC_CVA_POC")
+                or poc
+                or (last_price + (_G["fallback_units"] * range_unit))
+            ),
             2,
         )
         trig_cva_s = levels.get("DYNAMIC_CVA_VAL") or last_price
         reward_cva_short = abs(trig_cva_s - cva_target)
         risk_cva_short = max(0.01, abs(cva_inval - trig_cva_s))
         rr_cva_short = round(reward_cva_short / risk_cva_short, 2)
-        if rr_cva_short >= 1.5:
+        if rr_cva_short >= RR_FLOOR:
             swing_scenarios.append(
                 {
                     "id": "SCENARIO_SWING_CVA_EXPANSION_SHORT",
@@ -1201,12 +1228,12 @@ def generate_trading_playbook(
         "OVERLAPPING_LOWER",
     ):
         target_npoc_s = round(naked_poc_below, 2)
-        inval_npoc_s = round((pdh or (last_price + (0.35 * range_unit))), 2)
+        inval_npoc_s = round((pdh or (last_price + (_G["fallback_units"] * range_unit))), 2)
         trig_npoc_s = levels.get("WEEKLY_VWAP") or last_price
         reward_npoc_s = abs(trig_npoc_s - target_npoc_s)
         risk_npoc_s = max(0.01, abs(inval_npoc_s - trig_npoc_s))
         rr_npoc_s = round(reward_npoc_s / risk_npoc_s, 2)
-        if rr_npoc_s >= 1.5:
+        if rr_npoc_s >= RR_FLOOR:
             swing_scenarios.append(
                 {
                     "id": "SCENARIO_SWING_NAKED_POC_TARGET_SHORT",
@@ -1237,12 +1264,12 @@ def generate_trading_playbook(
         "OVERLAPPING_HIGHER",
     ):
         target_npoc_l = round(naked_poc_above, 2)
-        inval_npoc_l = round((pdl or (last_price - (0.35 * range_unit))), 2)
+        inval_npoc_l = round((pdl or (last_price - (_G["fallback_units"] * range_unit))), 2)
         trig_npoc_l = levels.get("WEEKLY_VWAP") or last_price
         reward_npoc_l = abs(target_npoc_l - trig_npoc_l)
         risk_npoc_l = max(0.01, abs(trig_npoc_l - inval_npoc_l))
         rr_npoc_l = round(reward_npoc_l / risk_npoc_l, 2)
-        if rr_npoc_l >= 1.5:
+        if rr_npoc_l >= RR_FLOOR:
             swing_scenarios.append(
                 {
                     "id": "SCENARIO_SWING_NAKED_POC_TARGET_LONG",
@@ -1482,6 +1509,7 @@ def generate_trading_playbook(
             "empirical_dataset": emp.get("source_doc"),
             "cfd_basis_offset": cfd_basis_offset,
             "calculated_at_utc": now_utc,
+            "params_version": PARAMS_VERSION,
         },
     }
 

@@ -8,7 +8,6 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
 import pandas as pd
@@ -18,6 +17,7 @@ from .. import db as _db
 from ..config import PLAN_LIMIT_STATUSES, PlanLimited
 from ..db import default_db_path
 from ..fetchers import yahoo
+from ..timezones import CHICAGO, NEW_YORK
 from .fetch_log import log_collection
 from .okx_market import collect as collect_okx_market
 
@@ -91,8 +91,6 @@ CALENDAR_BY_SYMBOL = {
     **dict.fromkeys(EQUITY_SYMBOLS, "XNYS"),
 }
 FRESHNESS_GRACE = timedelta(minutes=15)
-NEW_YORK = ZoneInfo("America/New_York")
-CHICAGO = ZoneInfo("America/Chicago")
 
 
 @dataclass(frozen=True)
@@ -459,7 +457,7 @@ def _utc_stamp(value, *, source: str, ticker: str) -> str:
         return datetime.fromtimestamp(stamp, UTC).isoformat(timespec="seconds")
     dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     if dt.tzinfo is None:
-        zone = UTC if source == "EODHD" else ZoneInfo("America/New_York")
+        zone = UTC if source == "EODHD" else NEW_YORK
         dt = dt.replace(tzinfo=zone)
     return dt.astimezone(UTC).isoformat(timespec="seconds")
 

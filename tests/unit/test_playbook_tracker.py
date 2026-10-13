@@ -1013,3 +1013,94 @@ def test_fill_rule_defaults_to_touch():
     assert playbook_tracker.fill_rule("SCENARIO_INTRADAY_VAL_ROTATION_LONG") == "touch"
     assert playbook_tracker.fill_rule(None) == "touch"
     assert playbook_tracker.fill_rule("SCENARIO_SWING_CVA_EXPANSION_SHORT") == "close_beyond"
+
+
+def test_tracker_breakdowns_and_detailed_report_formatting(tmp_path):
+    db_file = tmp_path / "arkwatch.db"
+    conn = db.get_conn(db_file, allow_init=True)
+    payload = {
+        "symbol": "NQ1",
+        "as_of": "2026-10-05T14:00:00+00:00",
+        "last_price": 31000.0,
+        "reference_levels": {"active_session_current": "2026-10-05"},
+        "scenarios": [
+            {
+                "id": "SCENARIO_INTRADAY_VAL_ROTATION_LONG",
+                "horizon": "INTRADAY",
+                "title": "Rotation Long",
+                "direction": "LONG",
+                "trigger_condition": "VAL support holds",
+                "trigger_price": 31000.0,
+                "target_profit": 31200.0,
+                "invalidation_level": 30900.0,
+                "risk_reward_ratio": 2.0,
+            }
+        ],
+    }
+    uids = playbook_tracker.record_playbook_scenarios(conn, payload)
+    uid = uids[0]
+
+    # Update trade to winning outcome with a decision log
+    import json
+
+    decision_log = [
+        {"ts_utc": "2026-10-05T14:00:00+00:00", "event": "CREATED_PENDING", "details": "Created"},
+        {"ts_utc": "2026-10-05T14:05:00+00:00", "event": "TRIGGERED_ACTIVE", "details": "Active"},
+        {
+            "ts_utc": "2026-10-05T14:15:00+00:00",
+            "event": "HIT_FULL_TARGET",
+            "details": "Target reached",
+        },
+    ]
+    conn.execute(
+        """
+        UPDATE playbook_scenarios
+        SET state='HIT_TARGET_WIN', entry_price=31000.0, exit_price=31200.0, pnl_points=200.0, r_multiple=2.0,
+            mfe_points=200.0, mae_points=0.0, triggered_at_utc='2026-10-05T14:05:00+00:00',
+            resolved_at_utc='2026-10-05T14:15:00+00:00', payload_json=?
+        WHERE scenario_uid=?
+        """,
+        (json.dumps({"decision_log": decision_log}), uid),
+    )
+    conn.commit()
+
+    # 1. Test get_playbook_performance_metrics with detail=True
+    metrics = playbook_tracker.get_playbook_performance_metrics(conn, detail=True)
+    assert metrics["total_scenarios"] == 1
+    assert metrics["wins"] == 1
+    assert "breakdown_by_symbol" in metrics
+    assert len(metrics["breakdown_by_symbol"]) == 1
+    assert metrics["breakdown_by_symbol"][0]["symbol"] == "NQ1"
+    assert "breakdown_by_scenario" in metrics
+
+    # 2. Test format_tracker_detailed_report
+    report_text = playbook_tracker.format_tracker_detailed_report(metrics)
+    assert "ARK-WATCH PLAYBOOK PERFORMANCE TRACKER REPORT" in report_text
+    assert "ASSET BREAKDOWN" in report_text
+    assert "NQ1" in report_text
+    assert "Rotation Long" in report_text
+
+    # 3. Test get_trade_by_uid & format_trade_decision_log
+    trade_info = playbook_tracker.get_trade_by_uid(conn, uid)
+    assert trade_info is not None
+    assert trade_info["symbol"] == "NQ1"
+    assert len(trade_info["decision_log"]) == 3
+
+    log_text = playbook_tracker.format_trade_decision_log(trade_info)
+    assert "DETAIL AUDIT TRANSAKSI" in log_text
+    assert "HIT_FULL_TARGET" in log_text
+
+    conn.close()
+
+
+def test_telegram_is_not_sent_for_replayed_history(tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        playbook_tracker, "dispatch_telegram_trading_signal", lambda c, uid: sent.append(uid)
+    )
+    conn = db.get_conn(tmp_path / "a.db", allow_init=True)
+    (uid,) = _record(conn, ("L", "LONG", 100.0, 95.0, 110.0))
+    _bars(conn, (5, 99.0, 100.5, 99.0, 100.2))
+    playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(5))
+    assert _row(conn, uid)["state"] == "ACTIVE"
+    assert sent == []  # the fill is days old: a catch-up must not spam the channel

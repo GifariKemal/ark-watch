@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..config import load_params_playbook, params_version
+from ..timezones import format_ts_display, resolve_timezone
 from ..transforms import xccy
 from . import cot_signals, etf_flows, fiscal, options, vixterm
 from .asof import parse_as_of
@@ -35,7 +36,6 @@ from .sentiment import (
 )
 
 OPTIONS_PRODUCT_MAP: dict[str, str] = {
-    "NQ1": "NQ",
     "ES1": "ES",
     "YM1": "YM",
     "GC1": "OG",
@@ -229,11 +229,13 @@ def generate_trading_playbook(
     as_of: datetime | str | None = None,
     cfd_basis_offset: float = 0.0,
     record: bool | None = None,
+    display_tz: str | None = None,
 ) -> dict[str, Any] | None:
     """Generate an actionable probabilistic trading playbook with target profits and invalidation levels.
 
     record: write the scenarios into the tracked book. Default: only for a live call (as_of
-    within the last hour); a historical replay mixes vintages, see below."""
+    within the last hour); a historical replay mixes vintages, see below.
+    display_tz: timezone of the human-readable as_of_display (default ET)."""
     sym = symbol.strip().upper()
 
     target_dt = parse_as_of(as_of)
@@ -276,6 +278,22 @@ def generate_trading_playbook(
     micro_role = qt_ctx.get("micro_cycle_role", "MICRO_DIRECTIONAL_RUN")
     w_quarter = qt_ctx.get("weekly_quarter", {})
     m_quarter = qt_ctx.get("monthly_quarter", {})
+    h_npoc = ctx.get("hierarchical_naked_pocs", {})
+    npoc_90m = h_npoc.get("intraday_90m_naked_pocs", {})
+    npoc_sess = h_npoc.get("session_naked_pocs", {})
+    npoc_week = h_npoc.get("weekly_virgin_pocs", {})
+    npoc_month = h_npoc.get("monthly_virgin_pocs", {})
+    npoc_year = h_npoc.get("yearly_virgin_pocs", {})
+    multi_ib = ctx.get("multi_desk_initial_balance", {})
+    m_open_types = ctx.get("multi_horizon_open_types", {})
+    m_structure = ctx.get("multi_timeframe_market_structure", {})
+    m15_struct = m_structure.get("m15_structure", {})
+    h1_struct = m_structure.get("h1_structure", {})
+    h4_struct = m_structure.get("h4_structure", {})
+
+    m_acceptance = ctx.get("multi_horizon_time_acceptance", {})
+    cva_map = ctx.get("multi_horizon_cva_map", {})
+    on_cva = ctx.get("overnight_cva", {})
     # 2. Fetch Intraday Price Action (VWAP and ATR)
     pa = session_intraday_intelligence(conn, sym, as_of=as_of)
     vwap = (pa.get("session_vwap") or pa.get("vwap")) if pa else None
@@ -1295,6 +1313,197 @@ def generate_trading_playbook(
                     },
                 }
             )
+    # [G] INTRADAY SCENARIO: Overnight CVA 100% Measured Move (Asia + London Balance Breakout)
+    if on_cva and on_cva.get("status") == "COMPLETED":
+        on_vah = on_cva.get("c_vah")
+        on_val = on_cva.get("c_val")
+        on_poc = on_cva.get("c_poc")
+        mm = on_cva.get("dalton_measured_move", {})
+        if on_vah and last_price >= on_vah:
+            target_on = mm.get("upside_breakout_target")
+            if isinstance(target_on, int | float):
+                trig_on = round(on_vah, 2)
+                inval_on = round((on_poc if on_poc else (on_vah - 0.2 * range_unit)), 2)
+                reward_on = abs(target_on - trig_on)
+                risk_on = max(0.01, abs(trig_on - inval_on))
+                rr_on = round(reward_on / risk_on, 2)
+                if rr_on >= RR_FLOOR:
+                    intraday_scenarios.append(
+                        {
+                            "id": "SCENARIO_INTRADAY_OVERNIGHT_CVA_EXPANSION_LONG",
+                            "horizon": "INTRADAY",
+                            "title": "Overnight CVA (Asia+London) 100% Measured Move Long",
+                            "direction": "LONG",
+                            "trigger_condition": f"5m candle accepts above Overnight CVA VAH ({on_vah}); price expands toward Dalton target",
+                            "trigger_price": trig_on,
+                            "target_profit": round(target_on, 2),
+                            "invalidation_level": inval_on,
+                            "risk_reward_ratio": rr_on,
+                            "timing_gate": {
+                                "recommended_quarter": "Q3_NY_AM",
+                                "recommended_sub_quarter": "Sub-3 or Sub-4",
+                                "recommended_micro_cycle": "Micro-3",
+                                "current_cycle": f"{active_q} | {active_sub} | {active_micro}",
+                                "is_optimal_window": bool(active_sub in ("Sub-3", "Sub-4")),
+                                "execution_notes": "Overnight balance breakout confirmed as regular trading volume enters.",
+                            },
+                            "invalidation_rationale": "Loss of Overnight CVA POC indicates false breakout.",
+                            "empirical_support": {
+                                "rule": "Dalton 100% Measured Move of Overnight Range",
+                                "source": "Auction Market Theory Markets in Profile",
+                            },
+                        }
+                    )
+        elif on_val and last_price <= on_val:
+            target_on_s = mm.get("downside_breakout_target")
+            if isinstance(target_on_s, int | float):
+                trig_on_s = round(on_val, 2)
+                inval_on_s = round((on_poc if on_poc else (on_val + 0.2 * range_unit)), 2)
+                reward_on_s = abs(trig_on_s - target_on_s)
+                risk_on_s = max(0.01, abs(inval_on_s - trig_on_s))
+                rr_on_s = round(reward_on_s / risk_on_s, 2)
+                if rr_on_s >= RR_FLOOR:
+                    intraday_scenarios.append(
+                        {
+                            "id": "SCENARIO_INTRADAY_OVERNIGHT_CVA_EXPANSION_SHORT",
+                            "horizon": "INTRADAY",
+                            "title": "Overnight CVA (Asia+London) 100% Measured Move Short",
+                            "direction": "SHORT",
+                            "trigger_condition": f"5m candle accepts below Overnight CVA VAL ({on_val}); price expands toward Dalton target",
+                            "trigger_price": trig_on_s,
+                            "target_profit": round(target_on_s, 2),
+                            "invalidation_level": inval_on_s,
+                            "risk_reward_ratio": rr_on_s,
+                            "timing_gate": {
+                                "recommended_quarter": "Q3_NY_AM",
+                                "recommended_sub_quarter": "Sub-3 or Sub-4",
+                                "recommended_micro_cycle": "Micro-3",
+                                "current_cycle": f"{active_q} | {active_sub} | {active_micro}",
+                                "is_optimal_window": bool(active_sub in ("Sub-3", "Sub-4")),
+                                "execution_notes": "Overnight balance breakdown confirmed as regular trading volume enters.",
+                            },
+                            "invalidation_rationale": "Reclaim of Overnight CVA POC indicates false breakdown.",
+                            "empirical_support": {
+                                "rule": "Dalton 100% Measured Move of Overnight Range",
+                                "source": "Auction Market Theory Markets in Profile",
+                            },
+                        }
+                    )
+
+    # [H] SWING SCENARIO: Weekly Virgin POC Magnet
+    wpoc_below = npoc_week.get("nearest_naked_poc_below")
+    if isinstance(wpoc_below, dict) and isinstance(wpoc_below.get("poc"), int | float):
+        w_target = round(wpoc_below["poc"], 2)
+        if last_price > w_target:
+            trig_w = round(val if val and val < last_price else last_price, 2)
+            inval_w = round((pdh if pdh else last_price + 0.35 * range_unit), 2)
+            reward_w = abs(trig_w - w_target)
+            risk_w = max(0.01, abs(inval_w - trig_w))
+            rr_w = round(reward_w / risk_w, 2)
+            if rr_w >= RR_FLOOR:
+                swing_scenarios.append(
+                    {
+                        "id": "SCENARIO_SWING_WEEKLY_VIRGIN_POC_MAGNET_SHORT",
+                        "horizon": "SWING",
+                        "title": f"Swing Expansion to Weekly Virgin POC ({w_target})",
+                        "direction": "SHORT",
+                        "trigger_condition": f"Price holds below Prior Day VAL ({val}); seeks Weekly Virgin POC at {w_target}",
+                        "trigger_price": trig_w,
+                        "target_profit": w_target,
+                        "invalidation_level": inval_w,
+                        "risk_reward_ratio": rr_w,
+                        "timing_gate": {
+                            "recommended_window": f"{w_quarter.get('weekday', 'Thursday')} ({w_quarter.get('quarter', 'Q4')})",
+                            "current_cycle": f"Weekly {w_quarter.get('quarter', 'Q4')} | Monthly {m_quarter.get('quarter', 'Q1')}",
+                            "is_optimal_window": True,
+                            "execution_notes": "Weekly virgin POC acts as high-probability magnet on multi-day trend expansion.",
+                        },
+                        "invalidation_rationale": "Break above prior day high invalidates downward weekly magnet pull.",
+                        "empirical_support": {
+                            "target_type": "Weekly Virgin / Naked POC Magnet",
+                            "session_origin": wpoc_below.get("session_id", "Prior_Week"),
+                            "source": "Auction Market Theory Unretested Liquidity Nodes",
+                        },
+                    }
+                )
+
+    # Decision System Validation Post-Processor: Enrich EVERY scenario with all decision layers
+    def _enrich_scenario_decision(sc: dict[str, Any]) -> dict[str, Any]:
+        dir_str = sc.get("direction", "NEUTRAL")
+        m15_t = str(m15_struct.get("trend", "UNKNOWN"))
+        h1_t = str(h1_struct.get("trend", "UNKNOWN"))
+        is_aligned = (dir_str == "LONG" and ("BULLISH" in m15_t or "BULLISH" in h1_t)) or (
+            dir_str == "SHORT" and ("BEARISH" in m15_t or "BEARISH" in h1_t)
+        )
+
+        def _safe_m(val: Any) -> Any:
+            return val if val is not None else "NONE_IN_LOOKBACK"
+
+        sc["decision_system_validation"] = {
+            "market_structure": {
+                "m15_trend": m15_t,
+                "h1_trend": h1_t,
+                "h4_trend": str(h4_struct.get("trend", "UNKNOWN")),
+                "structural_confluence": "CONFIRMED_ALIGNED"
+                if is_aligned
+                else "COUNTER_STRUCTURE_PROBE",
+            },
+            "multi_horizon_acceptance": {
+                "prior_day": str(m_acceptance.get("prior_day_value_acceptance", "UNKNOWN")),
+                "london_desk": str(m_acceptance.get("london_desk_value_acceptance", "UNKNOWN")),
+                "midweek_72h": str(m_acceptance.get("midweek_72h_value_acceptance", "UNKNOWN")),
+                "weekly": str(m_acceptance.get("weekly_value_acceptance", "UNKNOWN")),
+            },
+            "open_type_confluence": {
+                "sub_quarter_90m": str(m_open_types.get("sub_quarter_90m_open_type", "UNKNOWN")),
+                "daily_globex": str(m_open_types.get("daily_globex_open_type", "UNKNOWN")),
+                "us_cash": str(m_open_types.get("us_cash_open_type", "UNKNOWN")),
+                "weekly": str(m_open_types.get("weekly_open_type", "UNKNOWN")),
+            },
+            "liquidity_magnets": {
+                "tier1_90m_npoc": _safe_m(
+                    npoc_90m.get(
+                        "nearest_naked_poc_above"
+                        if dir_str == "LONG"
+                        else "nearest_naked_poc_below"
+                    )
+                ),
+                "tier2_session_npoc": _safe_m(
+                    npoc_sess.get(
+                        "nearest_naked_poc_above"
+                        if dir_str == "LONG"
+                        else "nearest_naked_poc_below"
+                    )
+                ),
+                "tier3_weekly_virgin_poc": _safe_m(
+                    npoc_week.get(
+                        "nearest_naked_poc_above"
+                        if dir_str == "LONG"
+                        else "nearest_naked_poc_below"
+                    )
+                ),
+                "tier4_monthly_virgin_poc": _safe_m(
+                    npoc_month.get(
+                        "nearest_naked_poc_above"
+                        if dir_str == "LONG"
+                        else "nearest_naked_poc_below"
+                    )
+                ),
+                "tier5_yearly_virgin_poc": _safe_m(
+                    npoc_year.get(
+                        "nearest_naked_poc_above"
+                        if dir_str == "LONG"
+                        else "nearest_naked_poc_below"
+                    )
+                ),
+            },
+            "initial_balance_context": multi_ib,
+            "cva_confluence_map": cva_map,
+        }
+        return sc
+
+    intraday_scenarios = [_enrich_scenario_decision(s) for s in intraday_scenarios]
+    swing_scenarios = [_enrich_scenario_decision(s) for s in swing_scenarios]
 
     # One geometry gate for every scenario; failures are reported, not tracked
     rejected = [
@@ -1318,6 +1527,8 @@ def generate_trading_playbook(
     out_dict = {
         "symbol": sym,
         "as_of": as_of_iso,
+        "as_of_display": format_ts_display(target_dt, display_tz),
+        "display_timezone": resolve_timezone(display_tz)[1],
         "session_id": ref["active_session_current"],  # CME trading date, keys the tracker
         "last_price": round(last_price, 4),
         "reference_levels": {

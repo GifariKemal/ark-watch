@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
-from zoneinfo import ZoneInfo
 
+from ..timezones import ET, WIB
 from ..transforms.core import (
     annualize_3m,
     momentum,
@@ -38,8 +38,7 @@ except Exception:
 REGIME_RISK_ON = float(_PS.get("regime_risk_on", 0.3))
 REGIME_RISK_OFF = float(_PS.get("regime_risk_off", -0.3))
 
-WIB = ZoneInfo("Asia/Jakarta")
-ET = ZoneInfo("America/New_York")
+__all__ = ["ET", "WIB"]
 
 # Regime score weights per pillar
 PILLAR_WEIGHTS = {"A": 0.20, "B": 0.20, "C": 0.15, "D": 0.15, "E": 0.15, "F": 0.15}

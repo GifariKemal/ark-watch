@@ -24,9 +24,9 @@ import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from .qa.redact import _redact, job_env
+from .timezones import LONDON, NEW_YORK, WIB
 
 ROOT = Path(__file__).resolve().parent.parent
 # Docker sets ARKWATCH_DATA_DIR=/data: DB, state, logs and backups on the volume
@@ -39,9 +39,6 @@ LOG_DIR = DATA_DIR / "logs" if _DATA_ENV else ROOT / "logs"
 LOG_RETENTION_DAYS = 14
 HEALTH_MAX_AGE_S = 300  # the 5-minute staleness contract (D-018c)
 HEARTBEAT_EVERY_S = 30.0  # heartbeat cadence while a job subprocess runs
-WIB = ZoneInfo("Asia/Jakarta")
-LONDON = ZoneInfo("Europe/London")
-NEW_YORK = ZoneInfo("America/New_York")
 
 # Schedule entries: (hour, minute, day, job_cmd, description)
 # day: daily | hourly | monday..saturday | sunday — literal day tokens as used below
@@ -784,6 +781,9 @@ def run_loop():
         _bootstrap(last_run)
         for lane in lanes:
             lane.start()
+        from .senders.telegram_bot import start_bot_background_thread
+
+        start_bot_background_thread(DB_PATH)  # no-op without TELEGRAM_BOT_TOKEN
         while True:
             _heartbeat()
             last_ping = _maybe_ping(last_ping)

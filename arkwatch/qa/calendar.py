@@ -15,16 +15,15 @@ import os
 import re
 import sys
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from .. import db
 from ..config import load_curated_calendar
 from ..db import default_db_path
 from ..fetchers import calendar as cal
+from ..timezones import ET
 from .redact import _redact
 
 DEFAULT_DB = default_db_path()
-ET = ZoneInfo("America/New_York")
 
 TIME_PRECEDENCE = {"CURATED": 0, "TV": 1, "CME": 2, "FMP": 3, "EODHD": 4}
 VALUE_PRECEDENCE = {"FMP": 0, "EODHD": 1, "CME": 2, "TV": 3}

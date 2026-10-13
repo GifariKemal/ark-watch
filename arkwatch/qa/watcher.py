@@ -18,10 +18,10 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from .. import db
 from ..db import default_db_path
+from ..timezones import WIB, now_wib
 from ..transforms.core import percentile_rank
 
 DEFAULT_DB = default_db_path()
@@ -284,11 +284,11 @@ def _fire(
     if _cooldown_active(conn, key, permanent=cooldown_key is not None):
         return False
     now = datetime.now(UTC).isoformat(timespec="seconds")
-    now_wib = datetime.now(ZoneInfo("Asia/Jakarta"))
+    wib_dt = now_wib()
     priority = "urgent" if alert_type in URGENT else "normal"
     # Display stamp in WIB (triggered_at stays UTC-based)
     msg = (
-        f"⚠ WIB {now_wib.strftime('%H:%M')} · {alert_type.upper()}\n"
+        f"⚠ WIB {wib_dt.strftime('%H:%M')} · {alert_type.upper()}\n"
         f"{condition}\n{context}\n💡 {action}"
     )
     conn.execute("BEGIN IMMEDIATE")
@@ -365,7 +365,7 @@ def scenario_events(conn, now: datetime | None = None) -> list[tuple[str, str, s
     filled trade closed within the window. Keys are per scenario, so each event pushes once."""
     now = now or datetime.now(UTC)
     since = (now - timedelta(hours=SCENARIO_EVENT_WINDOW_H)).isoformat(timespec="seconds")
-    wib = ZoneInfo("Asia/Jakarta")
+    wib = WIB
 
     def px(v):
         return f"{v:,.2f}" if isinstance(v, int | float) else "n/a"

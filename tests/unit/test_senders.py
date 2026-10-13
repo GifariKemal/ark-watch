@@ -42,7 +42,7 @@ def test_telegram_splits_escapes_and_returns_ids(tg, monkeypatch):
 def test_telegram_partial_failure_is_none_and_token_never_printed(tg, monkeypatch, capsys):
     def post(url, json, timeout):
         tg.append(1)
-        if len(tg) == 2:
+        if len(tg) >= 2:  # the second chunk fails on every retry
             raise ConnectionError(f"HTTPSConnectionPool: {url}")
         return Resp(body={"ok": True, "result": {"message_id": 1}})
 

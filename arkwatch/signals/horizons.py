@@ -6,10 +6,9 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from ..timezones import LONDON_TZ, NY_TZ  # noqa: F401 (LONDON_TZ re-exported to amt)
 from .asof import parse_as_of
 
-NY_TZ = ZoneInfo("America/New_York")
-LONDON_TZ = ZoneInfo("Europe/London")
 FRANKFURT_TZ = ZoneInfo("Europe/Berlin")
 
 SESSION_HOURS_ET: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {

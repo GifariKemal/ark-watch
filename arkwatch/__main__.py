@@ -166,11 +166,18 @@ def main() -> int:
         p.add_argument(
             "--cfd-offset", type=float, default=0.0, help="offset in points to match CFD quotes"
         )
+        p.add_argument(
+            "--tz",
+            type=str,
+            default=None,
+            help="timezone for display (default: ET / UTC-4, or WIB, UTC, etc.)",
+        )
         p.add_argument("--db", default=str(_DEFAULT_DB))
         a = p.parse_args(sys.argv[2:])
         conn = db.get_conn(a.db, allow_init=True)
-        res = generate_trading_playbook(conn, a.symbol, cfd_basis_offset=a.cfd_offset)
-        conn.close()
+        res = generate_trading_playbook(
+            conn, a.symbol, cfd_basis_offset=a.cfd_offset, display_tz=a.tz
+        )
         if not res:
             print(f"No intraday bars found for {a.symbol}")
             return 1
@@ -185,28 +192,107 @@ def main() -> int:
         load_dotenv()
 
         from . import db
-        from .signals.playbook_tracker import get_playbook_performance_metrics
+        from .signals.playbook_tracker import (
+            dispatch_telegram_trading_signal,
+            format_tracker_detailed_report,
+            format_trade_decision_log,
+            get_playbook_performance_metrics,
+            get_trade_by_uid,
+        )
 
         p = argparse.ArgumentParser(prog="arkwatch tracker")
-        p.add_argument("symbol", nargs="?", default=None, help="filter by symbol")
+        p.add_argument("symbol", nargs="?", default=None, help="filter by symbol (e.g. NQ1, ES1)")
+        p.add_argument(
+            "--id", type=str, default=None, help="inspect trade by short ID number (e.g. 85)"
+        )
+        p.add_argument(
+            "--uid", type=str, default=None, help="inspect trade by ID number or scenario UID"
+        )
         p.add_argument("--horizon", choices=["INTRADAY", "SWING"], default=None)
+        p.add_argument("--win", "--wins", action="store_true", help="filter only winning trades")
+        p.add_argument(
+            "--loss", "--lose", "--losses", action="store_true", help="filter only losing trades"
+        )
+        p.add_argument(
+            "--be", "--breakeven", action="store_true", help="filter only breakeven trades"
+        )
+        p.add_argument("--pending", action="store_true", help="filter only pending trigger trades")
+        p.add_argument("--active", action="store_true", help="filter only active running trades")
         p.add_argument(
             "--detail", action="store_true", help="show individual trade details and decision logs"
         )
         p.add_argument("--report", action="store_true", help="human-readable tables, not JSON")
+        p.add_argument(
+            "--tz",
+            type=str,
+            default=None,
+            help="display timezone (default: ET / UTC-4, or WIB, UTC)",
+        )
+        p.add_argument(
+            "--tele",
+            "--send-tele",
+            action="store_true",
+            help="send trade signal directly to Telegram",
+        )
+        p.add_argument("--json", action="store_true", help="output as raw JSON")
+        p.add_argument("--limit", type=int, default=20, help="limit recent trades shown in table")
         p.add_argument("--db", default=str(_DEFAULT_DB))
         a = p.parse_args(sys.argv[2:])
         conn = db.get_conn(a.db, allow_init=True)
+
+        target_id = a.id or a.uid
+        if target_id:
+            trade = get_trade_by_uid(conn, target_id)
+            if not trade:
+                conn.close()
+                print(f"Trade #{target_id} not found in database.")
+                return 1
+            if a.tele:
+                ok = dispatch_telegram_trading_signal(conn, trade["uid"], display_tz=a.tz)
+                conn.close()
+                if ok:
+                    print(
+                        f"✅ Sinyal trading #{trade['id']} ({trade['symbol']} {trade['direction']}) berhasil dikirim ke Telegram!"
+                    )
+                else:
+                    print(
+                        "⚠ Gagal mengirim sinyal ke Telegram (periksa TELEGRAM_BOT_TOKEN dan TELEGRAM_CHAT_ID di .env)."
+                    )
+                return 0
+            conn.close()
+            if a.json:
+                print(json.dumps(trade, indent=2))
+            else:
+                print(format_trade_decision_log(trade, display_tz=a.tz))
+            return 0
+
+        outcome_filter = None
+        if a.win:
+            outcome_filter = "WIN"
+        elif a.loss:
+            outcome_filter = "LOSS"
+        elif a.be:
+            outcome_filter = "BE"
+        elif a.pending:
+            outcome_filter = "PENDING"
+        elif a.active:
+            outcome_filter = "ACTIVE"
+
         res = get_playbook_performance_metrics(
-            conn, symbol=a.symbol, horizon=a.horizon, detail=a.detail or a.report
+            conn, symbol=a.symbol, horizon=a.horizon, outcome=outcome_filter, detail=True
         )
         conn.close()
-        if a.report:
+
+        if a.json:
+            if not a.detail and not outcome_filter:
+                res.pop("trades", None)
+            print(json.dumps(res, indent=2))
+        elif a.report:
             from .signals.playbook_tracker import format_report
 
             print(format_report(res))
-            return 0
-        print(json.dumps(res, indent=2))
+        else:
+            print(format_tracker_detailed_report(res, display_tz=a.tz, limit_trades=a.limit))
         return 0
     if cmd == "scanner":
         import argparse
@@ -332,12 +418,11 @@ def main() -> int:
         return 2
     if cmd == "brief":
         import sqlite3
-        from datetime import datetime as _dt
-        from zoneinfo import ZoneInfo as _ZI
 
         from dotenv import load_dotenv
 
         from .signals.compute import run as brief_run
+        from .timezones import now_wib
 
         load_dotenv()
         dbp = _DEFAULT_DB if len(sys.argv) < 3 else sys.argv[2]
@@ -350,7 +435,7 @@ def main() -> int:
             conn = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
             gen = conn.execute(
                 "SELECT 1 FROM brief_log WHERE date=?",
-                (_dt.now(_ZI("Asia/Jakarta")).date().isoformat(),),
+                (now_wib().date().isoformat(),),
             ).fetchone()
             conn.close()
         except sqlite3.Error:
@@ -429,6 +514,14 @@ def main() -> int:
         from .qa.explore import main as ex_main
 
         return ex_main(sys.argv[2:])
+    if cmd == "bot":
+        from dotenv import load_dotenv
+
+        load_dotenv()
+        from .senders.telegram_bot import run_bot_polling
+
+        run_bot_polling(_DEFAULT_DB)
+        return 0
     print(f"arkwatch: perintah '{cmd}' tidak dikenali. Ketik 'arkwatch help' untuk panduan.")
     return 2
 

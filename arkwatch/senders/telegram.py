@@ -30,23 +30,43 @@ def _chat_id() -> str:
     return c
 
 
-def _send_message(text: str, chat_id: str) -> int | None:
-    """Send one message; return message_id or None."""
-    r = requests.post(
-        API.format(token=_token(), method="sendMessage"),
-        json={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML",
-            "protect_content": True,
-        },
-        timeout=(10, 30),
-    )
-    j = r.json()
-    if not j.get("ok"):
-        print(f"  ⚠ Telegram: {j.get('description', 'unknown')}")
-        return None
-    return j["result"]["message_id"]
+def redact_telegram_secrets(msg: str) -> str:
+    """Scrub any Telegram bot token or URL path from error strings."""
+    import re
+
+    out = re.sub(r"/bot[^/\s'\"<>]+", "/bot[REDACTED]", str(msg))
+    tok = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if tok:
+        out = out.replace(tok, "[REDACTED]")
+    return out
+
+
+def _send_message(text: str, chat_id: str, max_attempts: int = 3) -> int | None:
+    """Send one message with automatic retry on transient network drops; return message_id or None."""
+    url = API.format(token=_token(), method="sendMessage")
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "protect_content": False,
+    }
+    for attempt in range(max_attempts):
+        try:
+            r = requests.post(url, json=payload, timeout=(10, 30))
+            j = r.json()
+            if not j.get("ok"):
+                print(f"  ⚠ Telegram: {j.get('description', 'unknown')}")
+                return None
+            return j["result"]["message_id"]
+        except Exception as e:
+            if attempt < max_attempts - 1:
+                time.sleep(0.8 * (attempt + 1))
+                continue
+            print(
+                f"  ⚠ Telegram network error after {max_attempts} attempts: {redact_telegram_secrets(str(e))[:100]}"
+            )
+            return None
+    return None
 
 
 def _split_message(text: str, max_len: int = 4000) -> list[str]:
@@ -109,3 +129,40 @@ class TelegramChannel:
         if not all_ok:
             return None
         return json.dumps(msg_ids)
+
+
+def get_subscribed_chat_ids(conn) -> list[str]:
+    """Return list of all active Telegram subscriber chat_ids plus default TELEGRAM_CHAT_ID."""
+    chat_ids = set()
+    default_cid = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if default_cid:
+        chat_ids.add(default_cid)
+
+    if conn is not None:
+        try:
+            rows = conn.execute(
+                "SELECT chat_id FROM telegram_subscribers WHERE subscribed = 1"
+            ).fetchall()
+            for r in rows:
+                if r and r[0]:
+                    chat_ids.add(str(r[0]).strip())
+        except Exception:
+            pass
+
+    return sorted(chat_ids)
+
+
+def broadcast_message(conn, text: str) -> list[int]:
+    """Broadcast a formatted HTML message to all subscribed chat_ids."""
+    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+        return []
+    chat_ids = get_subscribed_chat_ids(conn)
+    sent_ids = []
+    for cid in chat_ids:
+        try:
+            mid = _send_message(text, cid)
+            if mid:
+                sent_ids.append(mid)
+        except Exception:
+            pass
+    return sent_ids

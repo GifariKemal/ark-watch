@@ -32,6 +32,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from ..timezones import format_session_id, format_ts_display, resolve_timezone
 from .asof import parse_as_of
 from .horizons import cme_session_date
 
@@ -52,6 +53,8 @@ FILL_RULES = {
     "SCENARIO_INTRADAY_EXPANSION_SHORT": "close_beyond",
     "SCENARIO_SWING_CVA_EXPANSION_LONG": "close_beyond",
     "SCENARIO_SWING_CVA_EXPANSION_SHORT": "close_beyond",
+    "SCENARIO_INTRADAY_OVERNIGHT_CVA_EXPANSION_LONG": "close_beyond",
+    "SCENARIO_INTRADAY_OVERNIGHT_CVA_EXPANSION_SHORT": "close_beyond",
     "SCENARIO_INTRADAY_SWEEP_SHORT": "sweep_reclaim",
     "SCENARIO_INTRADAY_SWEEP_LONG": "sweep_reclaim",
 }
@@ -203,7 +206,9 @@ def _pnl(direction: str, entry: float, exit_p: float, risk: float, partial: bool
     return 0.5 * risk + 0.5 * raw if partial else raw
 
 
-def _close_trade(conn, uid, outcome, sim, direction, entry, stop, exit_p, ts, stats, note=""):
+def _close_trade(
+    conn, uid, outcome, sim, direction, entry, stop, exit_p, ts, stats, note="", notify=None
+):
     """Resolve a filled scenario; R is measured against the risk at the fill (original stop)."""
     risk = abs(entry - stop) or 1.0
     pnl = _pnl(direction, entry, exit_p, risk, bool(sim["partial_ts"]))
@@ -225,6 +230,8 @@ def _close_trade(conn, uid, outcome, sim, direction, entry, stop, exit_p, ts, st
         stats[
             "resolved_wins" if r > 0 else "resolved_losses" if r < 0 else "resolved_breakeven"
         ] += 1
+        if notify is not None:
+            notify.append((uid, outcome, ts, f"Closed at {exit_p} ({round(pnl, 2)} pts / {r}R)"))
 
 
 def _shock_ts(events: list[dict]) -> str | None:
@@ -393,6 +400,7 @@ def evaluate_active_playbooks(
         ),
         0,
     )
+    notify: list[tuple] = []  # (uid, outcome or None for an activation, ts, summary)
     # ponytail: rows are processed in creation order; two opposite scenarios triggering in the
     # same evaluation window are not interleaved bar by bar.
     rows = conn.execute(
@@ -499,6 +507,7 @@ def evaluate_active_playbooks(
             ):
                 continue  # resolved concurrently (manual cancel): no flip, no supersede
             stats["activated"] += 1
+            notify.append((uid, None, trig_time, ""))
             state, triggered_at = "ACTIVE", trig_time
             opposite = "SHORT" if direction == "LONG" else "LONG"
 
@@ -537,6 +546,7 @@ def evaluate_active_playbooks(
                         trig_time,
                         stats,
                         note=f"Opposing setup {uid} triggered. ",
+                        notify=notify,
                     )
 
             # 2. Cancel opposite-direction pending scenarios on the same symbol/session/horizon
@@ -583,6 +593,7 @@ def evaluate_active_playbooks(
                 sim["exit"],
                 sim["ts"],
                 stats,
+                notify=notify,
             )
         elif expired:
             _close_trade(
@@ -597,6 +608,7 @@ def evaluate_active_playbooks(
                 end_ts,
                 stats,
                 note="Session expired. ",
+                notify=notify,
             )
         else:
             _update(
@@ -629,6 +641,17 @@ def evaluate_active_playbooks(
                         " tightened to 0.5R for subsequent bars",
                     )
     conn.commit()
+    # Telegram after the commit (no network call while holding the write lock), and only for
+    # events of the last hour: a replay or a catch-up after downtime must not spam old trades.
+    live_from = (datetime.now(UTC) - timedelta(hours=1)).isoformat(timespec="seconds")
+    for n_uid, n_outcome, n_ts, n_summary in notify:
+        if n_ts < live_from:
+            continue
+        with contextlib.suppress(Exception):
+            if n_outcome is None:
+                dispatch_telegram_trading_signal(conn, n_uid)
+            else:
+                dispatch_telegram_outcome_update(conn, n_uid, n_outcome, n_summary)
     return stats
 
 
@@ -645,9 +668,9 @@ def _wilson(k: int, n: int, z: float = 1.96) -> list[float] | None:
 
 def get_playbook_performance_metrics(
     conn: sqlite3.Connection,
-    *,
     symbol: str | None = None,
     horizon: str | None = None,
+    outcome: str | None = None,
     detail: bool = False,
 ) -> dict[str, Any]:
     """Trade statistics. A trade = resolved scenario with a fill; every trade is scored by its
@@ -660,9 +683,25 @@ def get_playbook_performance_metrics(
     if horizon:
         where_clauses.append("horizon = ?")
         params.append(horizon.strip().upper())
+    if outcome:
+        out_u = outcome.strip().upper()
+        # a trade = filled and resolved, scored by its realized R (as in the totals below)
+        trade_sql = (
+            "entry_price IS NOT NULL AND state NOT IN ('PENDING_TRIGGER', 'ACTIVE',"
+            " 'CANCELLED_MANUAL') AND "
+        )
+        if out_u in ("WIN", "WINS"):
+            where_clauses.append(trade_sql + "r_multiple > 0")
+        elif out_u in ("LOSS", "LOSE", "LOSSES"):
+            where_clauses.append(trade_sql + "r_multiple < 0")
+        elif out_u in ("BE", "BREAKEVEN"):
+            where_clauses.append(trade_sql + "COALESCE(r_multiple, 0) = 0")
+        elif out_u == "PENDING":
+            where_clauses.append("state = 'PENDING_TRIGGER'")
+        elif out_u == "ACTIVE":
+            where_clauses.append("state = 'ACTIVE'")
 
     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-
     rows = conn.execute(
         f"""
         SELECT state, entry_price, r_multiple, mfe_points, mae_points,
@@ -714,51 +753,542 @@ def get_playbook_performance_metrics(
     if detail:
         trade_rows = conn.execute(
             f"""
-            SELECT scenario_uid, symbol, horizon, direction, scenario_id, title,
+            SELECT rowid, scenario_uid, symbol, horizon, direction, scenario_id, title,
                    trigger_price, target_profit, invalidation_level, risk_reward_ratio,
                    state, entry_price, exit_price, pnl_points, r_multiple,
                    mfe_points, mae_points, created_at_utc, triggered_at_utc, resolved_at_utc, payload_json
             FROM playbook_scenarios
             {where_sql}
-            ORDER BY created_at_utc DESC
+            ORDER BY rowid DESC
             """,
             params,
         ).fetchall()
         trades_out = []
         for t in trade_rows:
             try:
-                p_data = json.loads(t[20]) if t[20] else {}
+                p_data = json.loads(t[21]) if t[21] else {}
             except Exception:
                 p_data = {}
             trades_out.append(
                 {
-                    "uid": t[0],
-                    "symbol": t[1],
-                    "horizon": t[2],
-                    "direction": t[3],
-                    "scenario_id": t[4],
-                    "title": t[5],
-                    "trigger_price": t[6],
-                    "target_profit": t[7],
-                    "invalidation_level": t[8],
-                    "risk_reward_ratio": t[9],
-                    "state": t[10],
+                    "id": t[0],
+                    "uid": t[1],
+                    "symbol": t[2],
+                    "horizon": t[3],
+                    "direction": t[4],
+                    "scenario_id": t[5],
+                    "title": t[6],
+                    "trigger_price": t[7],
+                    "target_profit": t[8],
+                    "invalidation_level": t[9],
+                    "risk_reward_ratio": t[10],
+                    "state": t[11],
                     "outcome": p_data.get("outcome"),
-                    "entry_price": t[11],
-                    "exit_price": t[12],
-                    "pnl_points": t[13],
-                    "r_multiple": t[14],
-                    "mfe_points": t[15],
-                    "mae_points": t[16],
-                    "created_at_utc": t[17],
-                    "triggered_at_utc": t[18],
-                    "resolved_at_utc": t[19],
+                    "entry_price": t[12],
+                    "exit_price": t[13],
+                    "pnl_points": t[14],
+                    "r_multiple": t[15],
+                    "mfe_points": t[16],
+                    "mae_points": t[17],
+                    "created_at_utc": t[18],
+                    "triggered_at_utc": t[19],
+                    "resolved_at_utc": t[20],
                     "decision_log": p_data.get("decision_log", []),
                 }
             )
+        breakdowns = build_tracker_breakdowns(trades_out)
+        res["breakdown_by_symbol"] = breakdowns["by_symbol"]
+        res["breakdown_by_scenario"] = breakdowns["by_scenario"]
         res["trades"] = trades_out
 
     return res
+
+
+def build_tracker_breakdowns(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Calculate granular breakdowns by asset symbol and by scenario pattern."""
+    from collections import defaultdict
+
+    by_sym = defaultdict(
+        lambda: {
+            "total": 0,
+            "completed": 0,
+            "wins": 0,
+            "losses": 0,
+            "breakevens": 0,
+            "net_pnl": 0.0,
+            "gross_win": 0.0,
+            "gross_loss": 0.0,
+            "r_list": [],
+        }
+    )
+    by_sc = defaultdict(
+        lambda: {
+            "total": 0,
+            "completed": 0,
+            "wins": 0,
+            "losses": 0,
+            "breakevens": 0,
+            "r_list": [],
+        }
+    )
+
+    for t in trades:
+        s = t.get("symbol", "UNKNOWN")
+        st = t.get("state", "UNKNOWN")
+        pnl = t.get("pnl_points") or 0.0
+        r = t.get("r_multiple")
+        sc = t.get("scenario_id", "UNKNOWN").replace("SCENARIO_", "")
+
+        by_sym[s]["total"] += 1
+        by_sc[sc]["total"] += 1
+
+        if st == "HIT_TARGET_WIN":
+            by_sym[s]["wins"] += 1
+            by_sym[s]["completed"] += 1
+            by_sc[sc]["wins"] += 1
+            by_sc[sc]["completed"] += 1
+            if pnl > 0:
+                by_sym[s]["gross_win"] += pnl
+        elif st == "HIT_STOP_LOSS":
+            by_sym[s]["losses"] += 1
+            by_sym[s]["completed"] += 1
+            by_sc[sc]["losses"] += 1
+            by_sc[sc]["completed"] += 1
+            if pnl < 0:
+                by_sym[s]["gross_loss"] += abs(pnl)
+        elif pnl == 0.0 and (t.get("mfe_points") or 0.0) > 0:
+            by_sym[s]["breakevens"] += 1
+            by_sym[s]["completed"] += 1
+            by_sc[sc]["breakevens"] += 1
+            by_sc[sc]["completed"] += 1
+
+        by_sym[s]["net_pnl"] += pnl
+        if r is not None and st in ("HIT_TARGET_WIN", "HIT_STOP_LOSS"):
+            by_sym[s]["r_list"].append(r)
+            by_sc[sc]["r_list"].append(r)
+
+    symbol_table = []
+    for s, d in sorted(by_sym.items(), key=lambda x: x[1]["total"], reverse=True):
+        comp = d["completed"]
+        wr = round((d["wins"] / comp * 100), 1) if comp > 0 else 0.0
+        avg_r = round(sum(d["r_list"]) / len(d["r_list"]), 2) if d["r_list"] else 0.0
+        pf = (
+            round(d["gross_win"] / d["gross_loss"], 2)
+            if d["gross_loss"] > 0
+            else (9.9 if d["gross_win"] > 0 else 0.0)
+        )
+        symbol_table.append(
+            {
+                "symbol": s,
+                "total_scenarios": d["total"],
+                "completed_trades": comp,
+                "wins": d["wins"],
+                "losses": d["losses"],
+                "breakevens": d["breakevens"],
+                "win_rate_pct": wr,
+                "net_pnl_points": round(d["net_pnl"], 2),
+                "profit_factor": pf,
+                "avg_r_multiple": avg_r,
+            }
+        )
+
+    scenario_table = []
+    for sc, d in sorted(by_sc.items(), key=lambda x: x[1]["total"], reverse=True):
+        comp = d["completed"]
+        wr = round((d["wins"] / comp * 100), 1) if comp > 0 else 0.0
+        avg_r = round(sum(d["r_list"]) / len(d["r_list"]), 2) if d["r_list"] else 0.0
+        scenario_table.append(
+            {
+                "scenario": sc,
+                "total_scenarios": d["total"],
+                "completed_trades": comp,
+                "wins": d["wins"],
+                "losses": d["losses"],
+                "breakevens": d["breakevens"],
+                "win_rate_pct": wr,
+                "avg_r_multiple": avg_r,
+            }
+        )
+
+    return {"by_symbol": symbol_table, "by_scenario": scenario_table}
+
+
+def get_trade_by_uid(conn: sqlite3.Connection, identifier: str | int) -> dict[str, Any] | None:
+    """Fetch exact trade row and parsed decision log by short numeric ID or scenario UID."""
+    raw_str = str(identifier).strip().lstrip("#")
+    if raw_str.isdigit():
+        row = conn.execute(
+            """
+            SELECT rowid, scenario_uid, symbol, horizon, direction, scenario_id, title,
+                   trigger_price, target_profit, invalidation_level, risk_reward_ratio,
+                   state, entry_price, exit_price, pnl_points, r_multiple,
+                   mfe_points, mae_points, created_at_utc, triggered_at_utc, resolved_at_utc, payload_json
+            FROM playbook_scenarios
+            WHERE rowid = ?
+            """,
+            (int(raw_str),),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT rowid, scenario_uid, symbol, horizon, direction, scenario_id, title,
+                   trigger_price, target_profit, invalidation_level, risk_reward_ratio,
+                   state, entry_price, exit_price, pnl_points, r_multiple,
+                   mfe_points, mae_points, created_at_utc, triggered_at_utc, resolved_at_utc, payload_json
+            FROM playbook_scenarios
+            WHERE scenario_uid = ? OR scenario_uid LIKE ?
+            """,
+            (raw_str, f"%{raw_str}%"),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        p_data = json.loads(row[21]) if row[21] else {}
+    except Exception:
+        p_data = {}
+    return {
+        "id": row[0],
+        "uid": row[1],
+        "symbol": row[2],
+        "horizon": row[3],
+        "direction": row[4],
+        "scenario_id": row[5],
+        "title": row[6],
+        "trigger_price": row[7],
+        "target_profit": row[8],
+        "invalidation_level": row[9],
+        "risk_reward_ratio": row[10],
+        "state": row[11],
+        "entry_price": row[12],
+        "exit_price": row[13],
+        "pnl_points": row[14],
+        "r_multiple": row[15],
+        "mfe_points": row[16],
+        "mae_points": row[17],
+        "created_at_utc": row[18],
+        "triggered_at_utc": row[19],
+        "resolved_at_utc": row[20],
+        "decision_log": p_data.get("decision_log", []),
+    }
+
+
+def format_tracker_detailed_report(
+    res: dict[str, Any],
+    display_tz: str | None = None,
+    limit_trades: int = 15,
+) -> str:
+    """Format full tracker metrics, asset breakdown, setup breakdown, and journal into terminal dashboard."""
+    _, tz_lbl = resolve_timezone(display_tz)
+
+    lines = []
+    lines.append("=" * 105)
+    lines.append(
+        f"                    ARK-WATCH PLAYBOOK PERFORMANCE TRACKER REPORT (TZ: {tz_lbl})"
+    )
+    lines.append("=" * 105)
+    lines.append(
+        f"  Total Skenario   : {res.get('total_scenarios', 0):<4}                    "
+        f"Win Rate        : {res.get('win_rate_pct', 0.0)}% ({res.get('wins', 0)}W / {res.get('losses', 0)}L / {res.get('breakevens', 0)}BE)"
+    )
+    lines.append(
+        f"  Completed Trades : {res.get('completed_trades', 0):<4}                    "
+        f"Profit Factor   : {res.get('profit_factor', 0.0)}"
+    )
+    lines.append(
+        f"  Pending Trigger  : {res.get('pending', 0):<4}                    "
+        f"Avg R-Multiple  : {res.get('avg_r_multiple') or 0.0:+.2f}R"
+    )
+    lines.append(
+        f"  Active Running   : {res.get('active', 0):<4}                    "
+        f"Avg MFE / MAE   : +{res.get('avg_mfe', 0.0)} pts / -{res.get('avg_mae', 0.0)} pts"
+    )
+    lines.append(f"  Invalidated/Exp  : {res.get('invalidated', 0):<4}")
+    lines.append("-" * 105)
+
+    # 1. Asset Breakdown
+    by_sym = res.get("breakdown_by_symbol", [])
+    if by_sym:
+        lines.append("📈 PERFORMA PER INSTRUMEN (ASSET BREAKDOWN):")
+        lines.append(
+            f"  {'Simbol':<8} | {'Total':>5} | {'Done':>5} | {'Win':>4} | {'Loss':>4} | {'BE':>3} | {'WinRate':>7} | {'Net PnL':>11} | {'ProfitFac':>9} | {'Avg R':>7}"
+        )
+        lines.append("  " + "-" * 95)
+        for d in by_sym:
+            lines.append(
+                f"  {d['symbol']:<8} | {d['total_scenarios']:>5} | {d['completed_trades']:>5} | {d['wins']:>4} | {d['losses']:>4} | {d['breakevens']:>3} | {d['win_rate_pct']:>6.1f}% | {d['net_pnl_points']:>11.2f} | {d['profit_factor']:>9.2f} | {d['avg_r_multiple']:>+6.2f}R"
+            )
+        lines.append("-" * 105)
+
+    # 2. Setup Breakdown
+    by_sc = res.get("breakdown_by_scenario", [])
+    if by_sc:
+        lines.append("🎯 PERFORMA PER TIPE SETUP / SKENARIO LELANG (SETUP BREAKDOWN):")
+        lines.append(
+            f"  {'Setup Pattern':<44} | {'Trades':>6} | {'Done':>5} | {'Win':>4} | {'Loss':>4} | {'BE':>3} | {'WinRate':>7} | {'Avg R':>7}"
+        )
+        lines.append("  " + "-" * 95)
+        for d in by_sc:
+            lines.append(
+                f"  {d['scenario']:<44} | {d['total_scenarios']:>6} | {d['completed_trades']:>5} | {d['wins']:>4} | {d['losses']:>4} | {d['breakevens']:>3} | {d['win_rate_pct']:>6.1f}% | {d['avg_r_multiple']:>+6.2f}R"
+            )
+        lines.append("-" * 105)
+
+    # 3. Recent Trades Journal
+    trades = res.get("trades", [])
+    if trades:
+        lines.append(f"📜 JURNAL TRANSAKSI TERAKHIR (RECENT TRADES JOURNAL - Waktu: {tz_lbl}):")
+        lines.append(
+            f"  {'#ID':<5} | {'Waktu Selesai':<18} | {'Sym':<6} | {'Dir':<5} | {'Setup Name':<28} | {'Entry':>9} | {'Exit':>9} | {'PnL Pts':>8} | {'R-Mult':>6} | {'Status':<14}"
+        )
+        lines.append("  " + "-" * 120)
+        for t in trades[:limit_trades]:
+            t_id = f"#{t.get('id', '-')}"
+            ts_res = t.get("resolved_at_utc")
+            ts_str = format_session_id(ts_res, display_tz) if ts_res else "RUNNING"
+            sym = t.get("symbol", "-")
+            d = t.get("direction", "-")
+            title = t.get("title", t.get("scenario_id", "-"))[:28]
+            ent = f"{t['entry_price']:.2f}" if t.get("entry_price") is not None else "-"
+            ex = f"{t['exit_price']:.2f}" if t.get("exit_price") is not None else "-"
+            pnl = f"{t['pnl_points']:+.2f}" if t.get("pnl_points") is not None else "-"
+            r = f"{t['r_multiple']:+.2f}R" if t.get("r_multiple") is not None else "-"
+            st = t.get("state", "-").replace("HIT_TARGET_", "").replace("CANCELLED_", "")
+            lines.append(
+                f"  {t_id:<5} | {ts_str:<18} | {sym:<6} | {d:<5} | {title:<28} | {ent:>9} | {ex:>9} | {pnl:>8} | {r:>6} | {st:<14}"
+            )
+        lines.append("=" * 105)
+
+    return "\n".join(lines)
+
+
+def format_trade_decision_log(trade: dict[str, Any], display_tz: str | None = None) -> str:
+    """Format comprehensive chronological decision log for a single trade scenario."""
+    _, tz_lbl = resolve_timezone(display_tz)
+    lines = []
+    lines.append("=" * 95)
+    lines.append(
+        f"                    DETAIL AUDIT TRANSAKSI #{trade.get('id')}: {trade.get('uid')}"
+    )
+    lines.append(
+        f"  Simbol    : {trade.get('symbol')} ({trade.get('horizon')})           "
+        f"Arah       : {trade.get('direction')}"
+    )
+    lines.append(f"  Setup     : {trade.get('title')}")
+    lines.append(
+        f"  Status    : {trade.get('state')}                     "
+        f"Risk/Reward: 1 : {trade.get('risk_reward_ratio')}"
+    )
+    lines.append(
+        f"  Trigger   : {trade.get('trigger_price')}                  "
+        f"Take Profit: {trade.get('target_profit')}  |  Stop Loss: {trade.get('invalidation_level')}"
+    )
+    ent = f"{trade['entry_price']:.2f}" if trade.get("entry_price") is not None else "-"
+    ex = f"{trade['exit_price']:.2f}" if trade.get("exit_price") is not None else "-"
+    pnl = f"{trade['pnl_points']:+.2f}" if trade.get("pnl_points") is not None else "-"
+    r_val = f"{trade['r_multiple']:+.2f}R" if trade.get("r_multiple") is not None else "-"
+    lines.append(f"  Eksekusi  : Entry {ent} -> Exit {ex} | PnL: {pnl} pts ({r_val})")
+    lines.append(
+        f"  Ekskursi  : MFE (Max Run-up) +{trade.get('mfe_points', 0)} pts  |  MAE (Max Drawdown) -{trade.get('mae_points', 0)} pts"
+    )
+    lines.append("-" * 95)
+    lines.append(f"📜 KRONOLOGI DECISION LOG RIIL (Waktu: {tz_lbl}):")
+    logs = trade.get("decision_log", [])
+    if logs:
+        for item in logs:
+            ts_str = format_session_id(item.get("ts_utc", ""), display_tz)
+            lines.append(f"  [{ts_str}] {item.get('event', ''):<20} -> {item.get('details', '')}")
+    else:
+        lines.append("  (Belum ada decision log tercatat)")
+    lines.append("=" * 95)
+    return "\n".join(lines)
+
+
+def dispatch_telegram_trading_signal(
+    conn: sqlite3.Connection,
+    scenario_uid: str,
+    *,
+    display_tz: str | None = None,
+) -> bool:
+    """Send an institutional formatted trading signal directly to Telegram when a scenario becomes ACTIVE."""
+    import html
+    import os
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat:
+        return False
+
+    trade = get_trade_by_uid(conn, scenario_uid)
+    if not trade:
+        return False
+
+    trade_id = trade.get("id", "-")
+    sym = trade.get("symbol", "-")
+    direction = str(trade.get("direction", "-")).upper()
+    dir_emoji = (
+        "🟢 LONG" if direction == "LONG" else ("🔴 SHORT" if direction == "SHORT" else direction)
+    )
+    title = html.escape(str(trade.get("title", "Trading Setup")))
+    horizon = trade.get("horizon", "INTRADAY")
+    trig_time = trade.get("triggered_at_utc") or trade.get("created_at_utc")
+    time_str = format_ts_display(trig_time, display_tz) if trig_time else "Just Now"
+
+    entry_p = trade.get("entry_price") or trade.get("trigger_price")
+    target_p = trade.get("target_profit")
+    inval_p = trade.get("invalidation_level")
+    rr = trade.get("risk_reward_ratio")
+
+    ent_str = f"{entry_p:,.2f}" if isinstance(entry_p, int | float) else str(entry_p)
+    tp_str = f"{target_p:,.2f}" if isinstance(target_p, int | float) else str(target_p)
+    sl_str = f"{inval_p:,.2f}" if isinstance(inval_p, int | float) else str(inval_p)
+
+    payload = conn.execute(
+        "SELECT payload_json FROM playbook_scenarios WHERE scenario_uid = ?", (scenario_uid,)
+    ).fetchone()
+    p_data = json.loads(payload[0]) if payload and payload[0] else {}
+    sc_data = p_data.get("scenario", {})
+    decision_val = sc_data.get("decision_system_validation", {})
+    m_struct = decision_val.get("market_structure", {})
+    m15_trend = m_struct.get("m15_trend", "N/A")
+    struct_conf = m_struct.get("structural_confluence", "N/A")
+    m_accept = decision_val.get("multi_horizon_acceptance", {})
+    accept_lon = m_accept.get("london_desk", "N/A")
+    tg = sc_data.get("timing_gate", {})
+    timing_cycle = tg.get("current_cycle") or tg.get("recommended_quarter") or "Active Session"
+    magnets = decision_val.get("liquidity_magnets", {})
+    t1_npoc = magnets.get("tier1_90m_npoc")
+    npoc_str = (
+        f"90m NPOC at {t1_npoc.get('poc', 'N/A')}"
+        if isinstance(t1_npoc, dict)
+        else "Dynamic Target"
+    )
+
+    trig_cond = html.escape(
+        str(
+            trade.get("trigger_condition")
+            or sc_data.get("trigger_condition", "Level Breakout / Acceptance")
+        )
+    )
+
+    msg = (
+        f"🚨 <b>ARK-WATCH TRADING SIGNAL [ACTIVE]</b> 🚨\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 <b>Aset :</b> <code>{sym}</code> (#{trade_id})\n"
+        f"⚡ <b>Arah :</b> <b>{dir_emoji}</b>\n"
+        f"🎯 <b>Setup :</b> {title}\n"
+        f"⏱ <b>Horizon :</b> {horizon}\n"
+        f"🕒 <b>Waktu Masuk :</b> {time_str}\n\n"
+        f"📊 <b>LEVEL EKSEKUSI:</b>\n"
+        f"  • <b>Entry Price :</b> <code>{ent_str}</code>\n"
+        f"  • <b>Take Profit :</b> <code>{tp_str}</code>\n"
+        f"  • <b>Stop Loss   :</b> <code>{sl_str}</code>\n"
+        f"  • <b>Risk/Reward :</b> <b>1 : {rr}</b>\n\n"
+        f"🧠 <b>VALIDASI SISTEM (AMT & STRUKTUR):</b>\n"
+        f"  • <b>Struktur M15 :</b> {m15_trend} ({struct_conf})\n"
+        f"  • <b>Penerimaan   :</b> {accept_lon}\n"
+        f"  • <b>Pintu Waktu  :</b> {timing_cycle}\n"
+        f"  • <b>Magnet POC   :</b> {npoc_str}\n\n"
+        f"💡 <b>Pemicu:</b>\n"
+        f"<i>{trig_cond}</i>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 <i>ark-watch auto-signal engine</i>"
+    )
+
+    try:
+        from ..senders.telegram import broadcast_message
+
+        mids = broadcast_message(conn, msg)
+        if mids:
+            p_data.setdefault("decision_log", []).append(
+                {
+                    "ts_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+                    "event": "TELEGRAM_SIGNAL_DISPATCHED",
+                    "details": f"Telegram trading signal broadcasted to {len(mids)} subscriber(s) (Msg IDs: {mids})",
+                }
+            )
+            p_data["telegram_message_ids"] = mids
+            p_data["telegram_sent_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+            conn.execute(
+                "UPDATE playbook_scenarios SET payload_json = ? WHERE scenario_uid = ?",
+                (json.dumps(p_data), scenario_uid),
+            )
+            return True
+    except Exception as e:
+        print(f"  ⚠ Telegram dispatch error: {e}")
+        return False
+    return False
+
+
+def dispatch_telegram_outcome_update(
+    conn: sqlite3.Connection,
+    scenario_uid: str,
+    outcome_event: str,
+    details_str: str,
+    *,
+    display_tz: str | None = None,
+) -> bool:
+    """Send outcome / exit notification directly to Telegram when a trade closes."""
+    import html
+    import os
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat:
+        return False
+
+    trade = get_trade_by_uid(conn, scenario_uid)
+    if not trade:
+        return False
+
+    trade_id = trade.get("id", "-")
+    sym = trade.get("symbol", "-")
+    direction = str(trade.get("direction", "-")).upper()
+    dir_emoji = (
+        "🟢 LONG" if direction == "LONG" else ("🔴 SHORT" if direction == "SHORT" else direction)
+    )
+    title = html.escape(str(trade.get("title", "Trading Setup")))
+    pnl = trade.get("pnl_points") or 0.0
+    r_mult = trade.get("r_multiple") or 0.0
+
+    if outcome_event in ("HIT_TARGET_WIN", "EARLY_FULL_TP", "PARTIAL_TP_50"):
+        head = "🎯 <b>TRADE UPDATE: TAKE PROFIT HIT [WIN]</b>"
+        pnl_str = f"<b>+{pnl:,.2f} pts (+{r_mult:.2f}R)</b>"
+    elif outcome_event == "HIT_BREAKEVEN":
+        head = "🛡 <b>TRADE UPDATE: BREAK-EVEN EXIT [BE]</b>"
+        pnl_str = f"<b>+{pnl:,.2f} pts (+{r_mult:.2f}R)</b>"
+    elif outcome_event == "HIT_STOP_LOSS":
+        head = "🛑 <b>TRADE UPDATE: STOP LOSS HIT [LOSS]</b>"
+        pnl_str = f"<b>{pnl:,.2f} pts ({r_mult:.2f}R)</b>"
+    else:  # FLIPPED / TIME_EXIT: exit at market, labelled by its realized R
+        tag = "WIN" if r_mult > 0 else "LOSS" if r_mult < 0 else "BE"
+        head = f"🔁 <b>TRADE UPDATE: {html.escape(outcome_event)} [{tag}]</b>"
+        pnl_str = f"<b>{pnl:+,.2f} pts ({r_mult:+.2f}R)</b>"
+
+    exit_p = trade.get("exit_price")
+    exit_str = f"{exit_p:,.2f}" if isinstance(exit_p, int | float) else str(exit_p)
+
+    msg = (
+        f"{head}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 <b>Aset :</b> <code>{sym}</code> (#{trade_id})\n"
+        f"⚡ <b>Arah :</b> <b>{dir_emoji}</b>\n"
+        f"🎯 <b>Setup :</b> {title}\n"
+        f"🚪 <b>Exit Price :</b> <code>{exit_str}</code>\n"
+        f"💰 <b>Hasil PnL  :</b> {pnl_str}\n\n"
+        f"📋 <b>Detail:</b>\n"
+        f"<i>{html.escape(details_str)}</i>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 <i>ark-watch auto-signal engine</i>"
+    )
+
+    try:
+        from ..senders.telegram import broadcast_message
+
+        mids = broadcast_message(conn, msg)
+        return bool(mids)
+    except Exception as e:
+        print(f"  ⚠ Telegram outcome update error: {e}")
+        return False
 
 
 def evaluate_counterfactual_outcomes(

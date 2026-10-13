@@ -57,3 +57,29 @@ def test_yahoo_daily_is_dated_in_the_exchange_time_zone(monkeypatch):
     monkeypatch.setattr(yahoo.SESSION, "get", lambda *a, **k: R())
     monkeypatch.setattr(yahoo, "_throttle", lambda: None)
     assert yahoo.fetch_daily("EURUSD=X")[0]["ts"] == "2026-10-12"
+
+
+def test_stale_pillar_series_drops_out_of_the_regime():
+    from datetime import UTC, datetime, timedelta
+
+    from arkwatch import db
+    from arkwatch.signals import pillars
+
+    conn = db.get_conn(":memory:", allow_init=True)
+    fresh = (datetime.now(UTC) - timedelta(days=2)).date().isoformat()
+    for sid, ts in (("FRED:WALCL", "2026-01-07"), ("FRED:T10Y3M", fresh)):
+        conn.execute(
+            "INSERT INTO series_registry(series_id, name, block, tier, unit, value_format, freq,"
+            " primary_source) VALUES (?, ?, 'A', 0, 'x', 'x', 'D', 'FRED')",
+            (sid, sid),
+        )
+        conn.execute(
+            "INSERT INTO raw_observations(series_id, ts, value, source, fetched_at)"
+            " VALUES (?, ?, 1.0, 'FRED', 'x')",
+            (sid, ts),
+        )
+    out = {"E": {"z": 1.2, "detail": "WALCL"}, "A": {"z": 0.4, "detail": "curve"}}
+    pillars._gate_stale(conn, out)
+    conn.close()
+    assert out["E"]["z"] is None and out["E"]["stale"] and "STALE" in out["E"]["detail"]
+    assert out["A"]["z"] == 0.4

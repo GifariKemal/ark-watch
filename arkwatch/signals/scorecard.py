@@ -46,7 +46,9 @@ MIN_N, SUPPORT_N = 20, 100
 NULL_SAMPLE = 50  # trades per group replayed for the random-entry null
 DISCLAIMER = (
     "Tiers summarize tracked outcomes of past scenarios; they are not a forecast and do not"
-    " promise future edge. ark-watch never trades."
+    " promise future edge. Outcomes are paper fills on 5-minute bars at the level, with no"
+    " spread, slippage or fees: setups with tight stops look better than they would trade."
+    " ark-watch never trades."
 )
 NO_CALIBRATION = (
     "scenarios carry no claimed win probability (empirical_support rates describe the setup,"

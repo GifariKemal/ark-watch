@@ -322,7 +322,40 @@ def compute_pillars(conn: sqlite3.Connection, *, reader=None) -> dict[str, dict]
         "z": -_zf if _zf is not None else None,
     }
 
+    if isinstance(reader, _RealtimeReader):  # as-of replays are point-in-time already
+        _gate_stale(conn, out)
     return out
+
+
+# The series that carries each pillar's z, and the age past which it no longer describes
+# today: release cadence plus a publication lag (daily ~3 business days, weekly ~1-2 weeks,
+# monthly CPI ~6 weeks after the month). A stale z must not keep voting in the regime score
+# (a 3-week-old WALCL still read EXPANDING); it drops out and regime_label degrades to
+# INSUFFICIENT DATA when fewer than 4 pillars remain (2026-10-12 audit, C13).
+PILLAR_FRESHNESS = {
+    "A": ("FRED:T10Y3M", 10),
+    "B": ("FRED:DFII10", 10),
+    "C": ("FRED:CPIAUCSL", 100),  # obs dated the 1st, released ~6 weeks after the month
+    "D": ("FRED:ICSA", 21),
+    "E": ("FRED:WALCL", 21),
+    "F": ("FRED:BAMLH0A0HYM2", 10),
+}
+
+
+def _gate_stale(conn: sqlite3.Connection, out: dict[str, dict]) -> None:
+    from datetime import UTC, date, datetime
+
+    today = datetime.now(UTC).date()
+    for blk, (sid, max_age) in PILLAR_FRESHNESS.items():
+        p = out.get(blk)
+        if not p or p.get("z") is None:
+            continue
+        last = _latest(conn, sid)
+        age = (today - date.fromisoformat(str(last[0])[:10])).days if last else None
+        if age is None or age > max_age:
+            p["z"] = None
+            p["stale"] = True
+            p["detail"] = f"{p.get('detail', '')} [STALE: {sid} {age}d old]".strip()
 
 
 def compute_regime_score(pillars: dict[str, dict]) -> float:

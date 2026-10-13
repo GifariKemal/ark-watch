@@ -38,7 +38,8 @@ fixtures/    captured API responses for parser tests
 ## Notes
 
 - Keys go in `.env` only (see `.env.example`); never commit them.
-- Some sources are unofficial CDN endpoints; every source is degradable, so one going down never breaks the brief. A multi-source job exits 1 (and pages) only on a broad outage: no success, or as many failures as successes. A single failing series is an ERROR row in `fetch_log`, visible in `GET /v1/health/fetchers`.
+- Some sources are unofficial CDN endpoints; every source is degradable, so one going down never breaks the brief. A multi-source job exits 1 (and pages) only on a broad outage: no success, or as many failures as successes. A single failing series is an ERROR row in `fetch_log`, visible in `GET /v1/health/fetchers`. The harvest skips the rest of a source after 3 consecutive network errors and stops at a 20-minute budget (both logged as SKIPPED and counted as failures).
+- The regime score only uses fresh pillars: a pillar whose series is older than its cadence allows (daily 10 days, weekly 21, CPI 100) drops out and is marked stale; with fewer than 4 pillars the label is INSUFFICIENT DATA.
 - Optional news source: set `ARGUS_TOKEN` (and `ARGUS_URL` if not the default) to add headlines from the self-hosted Argus MCP server; unset = SKIPPED.
 - News text reaches an LLM for the sentiment radar. It is framed as untrusted data, off-schema output is dropped, and only official sources (Fed, BoE, Treasury, SEC, OilPrice RSS) can carry the OBSERVED evidence weight.
 - This is a personal research tool, **not** investment advice.
@@ -74,7 +75,7 @@ flowchart LR
   V --> L
 ```
 
-The api has no public domain: Zonelab reaches it as `http://arkwatch-api:8000` on the external `arkwatch-internal` network.
+The api has no public domain: Zonelab reaches it as `http://arkwatch-api:8000` on the external `arkwatch-internal` network. The `warp` SOCKS proxy has no auth and sits on its own `warp-net`, shared only with the daemon.
 
 | Service | Command | Limits | Health |
 |---|---|---|---|
@@ -147,7 +148,7 @@ Drill it once a quarter on a throwaway container from the newest backup.
 
 ## API
 
-Every `/v1` route except `/v1/health` needs the `x-arkwatch-key` header; write requests are refused before their body is read without it, and bodies over 16 KB are 413. Paginated lists return `{items, next_cursor}`; `/v1/cot/{contract}` and `/v1/health/fetchers` return plain lists, `/v1/odds` `{generated_at, items}` and `/v1/sentiment` a map keyed by asset. Errors are `{error, code, detail}`, except a `/v1/health` 503 which returns the health body with `status: down`. Responses are `Cache-Control: no-store`. All strings that come from third-party sources (news titles, summaries, quotes, market questions) are untrusted text for the consumer to escape; news URLs are http(s) only.
+Every `/v1` route except `/v1/health` needs the `x-arkwatch-key` header; write requests are refused before their body is read without it, and bodies over 16 KB are 413. Set `ARKWATCH_WRITE_KEY` (32+ chars) to require a separate key for the write routes, so the read key held by Zonelab cannot write. A write that meets the daemon's lock answers 503 `db_busy` (retry). Paginated lists return `{items, next_cursor}`; `/v1/cot/{contract}` and `/v1/health/fetchers` return plain lists, `/v1/odds` `{generated_at, items}` and `/v1/sentiment` a map keyed by asset. Errors are `{error, code, detail}`, except a `/v1/health` 503 which returns the health body with `status: down`. Responses are `Cache-Control: no-store`. All strings that come from third-party sources (news titles, summaries, quotes, market questions) are untrusted text for the consumer to escape; news URLs are http(s) only.
 
 The full contract is the OpenAPI document: `python -m arkwatch.server.export_openapi` (32 paths, 34 operations, including the reads below plus series, signals, regime, levels, playbooks, calendar, news, sentiment, COT, prices, outbox, freshness and jobs). Writes are audited in `audit_log` and clear the API cache: `POST /v1/playbooks/{uid}/cancel`, `POST /v1/outbox/{id}/retry`, `PATCH /v1/series/{id}`, `POST /v1/jobs` (allowlisted job kinds, `x-arkwatch-actor` header).
 

@@ -29,8 +29,7 @@ confirm_pct: 5.0
   # dating-sensitive, driven by the 1972-80 era → directional prior, not a return
   # forecast.
 
-confirm_on_3m_ann: true
-confirm_on_yoy: true
+# (confirm_on_3m_ann / confirm_on_yoy removed 2026-10-13: never read, both measures always apply)
   # Confirmation sticks when 3m-ann OR YoY >= confirm_pct. The two
   # measures are deliberate: 3m-ann = fast/leading path, YoY = comparability anchor to
   # the paper's definition. Brief rendering must state which measure fired. Confirmation

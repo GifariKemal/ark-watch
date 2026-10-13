@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 from datetime import UTC, datetime
+from datetime import date as _date
 
 import requests
 from curl_cffi import requests as creq
@@ -87,6 +88,9 @@ def fetch_gld_tonnes(arch: list[dict] | None = None) -> dict:
 
     if arch is None:
         arch = fetch_gld_archive()
+    # weekdays only, as in the window loop: SPDR printed a weekend row once (the 09-12/13
+    # "1006.2t phantom") and a Saturday run wrote it
+    arch = [r for r in arch if _date.fromisoformat(r["ts"]).weekday() < 5] or arch
     rows = [r for r in arch if r["tonnes"] is not None]
     last = rows[-1] if rows else arch[-1]
     if last["tonnes"] is not None:
@@ -127,5 +131,8 @@ def fetch_slv_shares() -> dict:
     if isinstance(j, list) and j:
         shares = j[0].get("outstandingShares")
         if shares:
-            return {"ts": datetime.now(UTC).date().isoformat(), "shares": int(shares)}
+            # the filing's own date when FMP gives one: the fetch date made a dead upstream
+            # look fresh forever
+            ts = str(j[0].get("date") or datetime.now(UTC).date().isoformat())[:10]
+            return {"ts": ts, "shares": int(shares)}
     raise RuntimeError("SLV: outstandingShares missing")

@@ -8,17 +8,17 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 import requests
 
 from .. import db
 from ..config import load_registry
+from ..db import default_db_path
 from ..fetchers import fred
 from ..fetchers.fiscal import BASE as FISCAL_BASE
 from ..fetchers.fiscal import ERAS
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 
 
 def sync_registry(conn) -> int:

@@ -105,14 +105,22 @@ def fetch_daily(symbol: str, *, start_ts: int = 0, end_ts: int = 9999999999) -> 
     q = (res.get("indicators", {}).get("quote") or [{}])[0]
     out = []
     import datetime as _dt
+    from zoneinfo import ZoneInfo
 
+    # A daily bar's timestamp is its session start in the EXCHANGE time zone: London FX bars
+    # start 23:00 UTC in summer, so the UTC date put Monday's bar on Sunday (and every other
+    # day one day early). Date it where it trades.
+    try:
+        tz = ZoneInfo(res.get("meta", {}).get("exchangeTimezoneName") or "UTC")
+    except (KeyError, ValueError):
+        tz = _dt.UTC
     for i, t in enumerate(ts):
         close = q.get("close", [None] * len(ts))[i]
         if close is None:  # null bar (including the live last bar) -> drop
             continue
         out.append(
             {
-                "ts": _dt.datetime.fromtimestamp(t, tz=_dt.UTC).date().isoformat(),
+                "ts": _dt.datetime.fromtimestamp(t, tz=tz).date().isoformat(),
                 "open": q.get("open", [None] * len(ts))[i],
                 "high": q.get("high", [None] * len(ts))[i],
                 "low": q.get("low", [None] * len(ts))[i],

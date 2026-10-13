@@ -16,14 +16,14 @@ import sqlite3
 import sys
 import time
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from .. import db
+from ..db import default_db_path
 from ..fetchers.fred import fetch_observations
 from . import fetch_log
 from .redact import _redact
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 
 CLASS_A_VINTAGE_SERIES: tuple[str, ...] = (
     "PAYEMS",
@@ -40,7 +40,9 @@ CLASS_A_VINTAGE_SERIES: tuple[str, ...] = (
 
 def maintenance(conn) -> dict:
     out = {}
-    out["wal_checkpoint"] = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+    # (busy, wal frames, checkpointed frames): with okxws writing every few seconds TRUNCATE is
+    # usually busy; the frame counts show how far the checkpoint actually got
+    out["wal_checkpoint"] = tuple(conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone())
     conn.execute("ANALYZE")
     conn.commit()
     out["integrity"] = conn.execute("PRAGMA integrity_check").fetchone()[0]
@@ -167,12 +169,13 @@ def main(argv: list[str] | None = None) -> int:
         results = harvest_alfred_vintages(conn, a.series, start=a.start, end=a.end)
         conn.close()
         failed = [s for s, c in results.items() if c < 0]
-        return 1 if failed else 0
+        return fetch_log.exit_code(len(results) - len(failed), len(failed))
 
     r = maintenance(conn)
     conn.close()
     print("=== weekly maintenance ===")
-    print(f"  wal_checkpoint: {r['wal_checkpoint']} (0=ok, 1=retry, -1=busy)")
+    busy, log, done = r["wal_checkpoint"]
+    print(f"  wal_checkpoint: busy={busy} wal_frames={log} checkpointed={done}")
     print(f"  integrity: {r['integrity']}")
     print(f"  fk_violations: {r['fk_violations']}")
     print(f"  vintage rows last 7 days: {r['vintage_rows_week']} (>0 = FRED revisions captured ✓)")

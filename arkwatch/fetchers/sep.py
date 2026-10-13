@@ -115,6 +115,9 @@ def _parse_fed_funds_median(text: str) -> dict[str, float]:
     # format. If a future SEP ever carries a genuine longer column, that
     # dash alignment breaks FIRST — treat any 'longer' emission as a
     # parse-drift signal, verify against the page before trusting it.
+    if not years or len(vals) < len(years):
+        # a layout change that loses the header or cells must fail loudly, not misalign years
+        raise SepError(f"SEP: {len(years)} header years vs {len(vals)} median cells")
     out: dict[str, float] = {}
     for yr, v in zip(years, vals[: len(years)], strict=False):
         if v is not None:
@@ -155,13 +158,18 @@ def series_rows() -> list[dict]:
     series_suffix: the target year ('2026', '2027', ...) or 'LONGER'.
     ts = the SEP release date (the vintage — revisions live in the date key).
     """
-    return [r for d in sep_dates() for r in _vintage_rows(d)]
+    dates = sep_dates()
+    return [r for i, d in enumerate(dates) for r in _vintage_rows(d, strict=i == 0)]
 
 
-def _vintage_rows(d: str) -> list[dict]:
+def _vintage_rows(d: str, strict: bool = False) -> list[dict]:
+    """strict (the newest SEP): a parse failure raises. Swallowing it let fetch_latest fall back
+    to the previous vintage with its old date and an OK status."""
     try:
         parsed = parse_sep(d)
     except Exception as ex:
+        if strict:
+            raise
         print(f"  ⚠ SEP {d}: {str(ex)[:70]}")
         return []
     return [

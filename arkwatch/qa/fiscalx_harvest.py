@@ -19,12 +19,12 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from pathlib import Path
 
 from .. import db
+from ..db import default_db_path
 from ..fetchers import fiscal
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 DATASET_PAUSE_S = 0.3  # [KEPUTUSAN: pacing antar dataset — konvensi soma/nyfed]
 AUCTIONS_WINDOW_DAYS = 120  # [KEPUTUSAN: jendela increment — menangkap announcement
 # (record_date = issue date bisa MASA DEPAN) + hasil lelang terbaru; koreksi lama

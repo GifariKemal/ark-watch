@@ -235,7 +235,7 @@ class TestXccyFormula:
         """Find the next IMM quarterly month >=60 days out (guaranteed quarterly)."""
         import datetime as _dt
 
-        today = _dt.date.today()
+        today = _dt.datetime.now(_dt.UTC).date()  # xccy dates with the UTC clock
         quarters = [3, 6, 9, 12]  # MAR, JUN, SEP, DEC
         names = {3: "MAR", 6: "JUN", 9: "SEP", 12: "DEC"}
         for y in (today.year, today.year + 1):
@@ -250,7 +250,7 @@ class TestXccyFormula:
         from arkwatch.transforms.xccy import compute_xccy
 
         conn = db.get_conn(tmp_path / "t.db", allow_init=True)
-        td = __import__("datetime").date.today().isoformat()
+        td = __import__("datetime").datetime.now(__import__("datetime").UTC).date().isoformat()
         month = self._quarterly_month_out()
         rows = []
         for pid, settle in ((8462, 95.91), (10247, 97.36), (58, 1.1628)):
@@ -277,7 +277,7 @@ class TestXccyFormula:
         from arkwatch.transforms.xccy import compute_xccy
 
         conn = db.get_conn(tmp_path / "t.db", allow_init=True)
-        td = __import__("datetime").date.today().isoformat()
+        td = __import__("datetime").datetime.now(__import__("datetime").UTC).date().isoformat()
         month = self._quarterly_month_out()
         rows = [(td, 8462, month, 95.91), (td, 10247, month, 97.36), (td, 58, month, 1.1580)]
         conn.executemany(

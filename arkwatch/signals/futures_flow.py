@@ -31,7 +31,7 @@ def futures_flow_matrix(
         return None
 
     # Query last 2 trade dates for front contract of this product
-    date_filter = f"AND trade_date <= '{as_of}'" if as_of else ""
+    date_filter = "AND trade_date <= ?" if as_of else ""
     query = f"""
         SELECT trade_date, month, settle, open_interest, volume
         FROM cme_settlements
@@ -39,7 +39,7 @@ def futures_flow_matrix(
         ORDER BY trade_date DESC, month ASC
         LIMIT 20
     """
-    rows = conn.execute(query, (pid,)).fetchall()
+    rows = conn.execute(query, (pid, str(as_of)) if as_of else (pid,)).fetchall()
     if not rows:
         return None
 

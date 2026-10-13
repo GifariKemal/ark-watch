@@ -11,12 +11,12 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from pathlib import Path
 
 from .. import db
+from ..db import default_db_path
 from ..fetchers import nyfed, soma
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 DEFAULT_BACKFILL_WEEKS = 104  # 2 years of weekly snapshots
 BACKFILL_PAUSE_S = 0.3  # pacing: polite pause between per-date requests
 

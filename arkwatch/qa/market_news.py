@@ -8,7 +8,7 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -18,6 +18,7 @@ from urllib3.util.retry import Retry
 
 from .. import db as _db
 from ..config import PLAN_LIMIT_STATUSES, PlanLimited, missing_env
+from ..db import default_db_path
 from ..gdelt_storage import compress_record
 from . import gdelt_archive
 from .fetch_log import log_collection
@@ -191,14 +192,28 @@ def _canonical_url(url: str | None) -> str | None:
     )
 
 
-def _cluster(conn, title: str) -> tuple[str, float]:
+def _recent_titles(conn) -> list[tuple[set, str]]:
+    """Tokenized titles of the last 48 h, loaded once per run (the per-item reload re-tokenized
+    up to 1000 titles for each of a few hundred items). The cutoff is an ISO string like the
+    stored stamps: datetime('now', ...) has a space and compared wrong against the 'T'."""
+    cutoff = (datetime.now(UTC) - timedelta(hours=48)).isoformat(timespec="seconds")
+    return [
+        (_tokens(t), cid)
+        for t, cid in conn.execute(
+            "SELECT title, cluster_id FROM market_news WHERE published_at_utc >= ?"
+            " ORDER BY published_at_utc DESC LIMIT 1000",
+            (cutoff,),
+        )
+    ]
+
+
+def _cluster(conn, title: str, recent: list[tuple[set, str]] | None = None) -> tuple[str, float]:
     tokens = _tokens(title)
     best = None
     best_score = 0.0
-    for old_title, cluster_id in conn.execute(
-        "SELECT title,cluster_id FROM market_news WHERE published_at_utc >= datetime('now','-48 hours') ORDER BY published_at_utc DESC LIMIT 1000"
-    ):
-        other = _tokens(old_title)
+    if recent is None:
+        recent = _recent_titles(conn)
+    for other, cluster_id in recent:
         score = len(tokens & other) / max(1, len(tokens | other))
         if score > best_score:
             best, best_score = cluster_id, score
@@ -210,6 +225,7 @@ def _cluster(conn, title: str) -> tuple[str, float]:
     count = conn.execute(
         "SELECT COUNT(*) FROM market_news WHERE cluster_id=?", (cluster_id,)
     ).fetchone()[0]
+    recent.insert(0, (tokens, cluster_id))  # later items of this run cluster with this one
     return cluster_id, 1.0 / (count + 1)
 
 
@@ -470,6 +486,7 @@ def run(db_path: str) -> dict[str, int]:
         "CRYPTOPANIC": "CRYPTOPANIC_API_KEY",
         "ARGUS": "ARGUS_TOKEN",
     }
+    recent = _recent_titles(conn)
     for name, fetch in sources:
         reason = missing_env(needs_env[name]) if name in needs_env else None
         if reason:
@@ -490,7 +507,7 @@ def run(db_path: str) -> dict[str, int]:
                     published, bad_time = now, bad_time + 1
                 title = str(row["title"]).strip()
                 url = _canonical_url(row.get("url"))
-                cluster, novelty = _cluster(conn, title)
+                cluster, novelty = _cluster(conn, title, recent)
                 uid = hashlib.sha256(f"{row['source']}|{url}|{title}".encode()).hexdigest()
                 relevance = (
                     1.0
@@ -633,7 +650,7 @@ def main(argv=None):
 
     load_dotenv()
     p = argparse.ArgumentParser(prog="arkwatch market-news")
-    p.add_argument("--db", default="data/arkwatch.db")
+    p.add_argument("--db", default=str(default_db_path()))
     result = run(p.parse_args(argv).db)
     print(result)
     return _exit_code(result)

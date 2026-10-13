@@ -7,15 +7,15 @@ import json
 import sqlite3
 import sys
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
 
 from .. import db
 from ..config import PlanLimited, load_cot_contracts
+from ..db import default_db_path
 from ..fetchers import bybit, cot, spdr
 from ..transforms import xccy
 from .fetch_log import log_collection as _log_collection
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 
 
 def harvest_cot(conn, weeks: int = 156) -> dict[str, int]:

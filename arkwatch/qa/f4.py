@@ -16,13 +16,13 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import cast
 
 from .. import db
+from ..db import default_db_path
 from ..fetchers import fred
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 VINTAGE_TAG = "first"  # marker for first-print rows in raw_observations
 
 

@@ -8,7 +8,6 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
@@ -17,11 +16,12 @@ import requests
 
 from .. import db as _db
 from ..config import PLAN_LIMIT_STATUSES, PlanLimited
+from ..db import default_db_path
 from ..fetchers import yahoo
 from .fetch_log import log_collection
 from .okx_market import collect as collect_okx_market
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 INTERVAL = "5m"
 TRACKED = {
     "NQ1": "NQ=F",

@@ -163,6 +163,8 @@ def fetch_scoos(yyyymm: str | None = None) -> dict:
     else:
         url = f"{BASE}/data/scoos/scoos-{yyyymm}.htm"
     text = _clean(_fetch(url))
+    if len(text) < 500:  # same guard as SLOOS/Beige: a short 200 error page must not get a tone
+        raise FedSurveyError(f"SCOOS: page too short ({len(text)} chars)")
     return {"text": text, "ts": f"{yyyymm[:4]}-{yyyymm[4:]}-01", "source": "scoos", "url": url}
 
 
@@ -223,7 +225,11 @@ def fetch_chargeoff() -> list[dict]:
 
     zf = zipfile.ZipFile(io.BytesIO(r.content))
     # the DATA file is CHGDEL_data.xml (first file is the XSD schema)
-    data_xml = next(n for n in zf.namelist() if "data" in n.lower())
+    data_xml = next((n for n in zf.namelist() if "data" in n.lower()), None)
+    if data_xml is None:
+        raise FedSurveyError("Charge-off: no data file in the zip")
+    if zf.getinfo(data_xml).file_size > 200 * 1024 * 1024:  # the real file is a few MB
+        raise FedSurveyError("Charge-off: data file over 200 MB uncompressed (zip bomb?)")
     root = parse_xml(zf.read(data_xml))
 
     # SDMX namespace — actual codes (live-verified from the XML):

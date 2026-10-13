@@ -11,6 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .. import db as _db
+from ..db import default_db_path
 from .backup import BACKUP_DIR
 
 TABLES = ("gdelt_mentions", "gdelt_gkg", "gdelt_events")
@@ -270,7 +271,7 @@ def _require_database(path: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="arkwatch gdelt-retention")
-    parser.add_argument("--db", default="data/arkwatch.db")
+    parser.add_argument("--db", default=str(default_db_path()))
     parser.add_argument("--apply", action="store_true", help="delete eligible records")
     args = parser.parse_args(argv)
     result = clean(args.db, apply=args.apply)

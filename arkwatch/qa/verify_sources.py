@@ -20,6 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 import requests
 
 from ..config import PROVIDER_ENV, PlanLimited, load_anchors, load_registry, missing_env
+from ..db import default_db_path
 from ..fetchers import (
     atl,
     caldist,
@@ -283,14 +284,10 @@ def verify(
             # bounded series is checked by SOMEONE. Depth/anchor stay '·'.
             smin, smax = e.get("sanity_min"), e.get("sanity_max")
             if smin is not None and smax is not None:
-                from pathlib import Path
-
                 from .. import db as _db
 
                 if _db_conn is None:
-                    _db_conn = _db.get_conn(
-                        str(Path(__file__).resolve().parents[2] / "data" / "arkwatch.db")
-                    )
+                    _db_conn = _db.get_conn(str(default_db_path()))
                 row = _db_conn.execute(
                     "SELECT ts, value FROM raw_observations WHERE series_id=?"
                     " AND vintage_ts='realtime' ORDER BY ts DESC LIMIT 1",

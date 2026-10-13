@@ -18,12 +18,13 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .. import db
+from ..db import default_db_path
+from ..transforms.core import percentile_rank
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 
 URGENT = {"net_liq_reversal", "vix_backwardation", "fx_swap_draw"}
 
@@ -459,9 +460,11 @@ def check_all(conn) -> list[str]:
     with _trigger("hy_extreme"):
         hy = recent_values(conn, "FRED:BAMLH0A0HYM2", 756)  # 3y window
         hy_lv = latest_value(conn, "FRED:BAMLH0A0HYM2")
-        if len(hy) > 100:
+        # labelled "3y": percentile_rank needs 80% of the 756-obs window (a young DB fired
+        # "very tight/wide" from five months of history)
+        pct = percentile_rank(hy, 756)
+        if pct is not None:
             cur = hy[-1]
-            pct = sum(1 for v in hy if v <= cur) / len(hy) * 100
             if pct < HY_EXTREME_PCT_LOW:
                 if _fire(
                     conn,

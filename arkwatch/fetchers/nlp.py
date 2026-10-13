@@ -80,7 +80,15 @@ def _config() -> dict:
             load_dotenv()
         except ImportError:
             pass
-    provider = os.environ.get("NLP_PROVIDER", "zai").lower()
+    # no explicit provider: follow the key that is set. config.nlp_missing() accepts an
+    # OPENAI/ANTHROPIC key alone, but the zai default then found no key and every call failed
+    default = "zai"
+    if not any(os.environ.get(k) for k in ("NLP_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY")):
+        if os.environ.get("OPENAI_API_KEY"):
+            default = "openai"
+        elif os.environ.get("ANTHROPIC_API_KEY"):
+            default = "anthropic"
+    provider = os.environ.get("NLP_PROVIDER", default).lower()
     model = os.environ.get("NLP_MODEL", "")
     base_url = os.environ.get("NLP_BASE_URL", "")
     api_key = (

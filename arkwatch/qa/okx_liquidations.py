@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import websocket
 
 from .. import db as _db
+from ..db import default_db_path
 from .fetch_log import log_collection
 from .okx_market import (
     REST_GAP_WARNING,
@@ -289,7 +290,7 @@ def run_forever(db_path: str) -> None:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="arkwatch liquidations")
-    parser.add_argument("--db", default="data/arkwatch.db")
+    parser.add_argument("--db", default=str(default_db_path()))
     parser.add_argument("--seconds", type=int)
     args = parser.parse_args(argv)
     if args.seconds:

@@ -17,11 +17,13 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from ..db import default_db_path
+
 _ROOT = Path(__file__).resolve().parent.parent.parent
 # Docker: ARKWATCH_DATA_DIR=/data keeps backups on the volume next to the DB.
 # Local only - offsite is Litestream's job, no upload hook here.
 _DATA_ENV = os.environ.get("ARKWATCH_DATA_DIR")
-DEFAULT_DB = (Path(_DATA_ENV) if _DATA_ENV else _ROOT / "data") / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 BACKUP_DIR = Path(_DATA_ENV) / "backups" if _DATA_ENV else _ROOT / "backups"
 KEY_TABLES = ("raw_observations", "instrument_prices", "events")
 DAILIES, MONTHLIES = 7, 6

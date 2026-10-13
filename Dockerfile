@@ -46,8 +46,8 @@ COPY --chmod=a+rX arkwatch ./arkwatch
 RUN python -m compileall -q /app/arkwatch
 COPY --chmod=a+rX config ./config
 
-# /app/data -> /data: ~25 job modules still resolve ROOT/data/arkwatch.db
-# (or cwd-relative data/arkwatch.db); the symlink keeps every path on the volume
+# /app/data -> /data: every module resolves the DB through db.default_db_path() (ARKWATCH_DB,
+# else ARKWATCH_DATA_DIR); the symlink only catches a stray relative data/ path
 RUN groupadd -g 10001 arkwatch \
  && useradd -u 10001 -g arkwatch -M -d /app -s /usr/sbin/nologin arkwatch \
  && chmod -R a+rX /app/arkwatch /app/config \

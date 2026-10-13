@@ -5,13 +5,12 @@ from __future__ import annotations
 import argparse
 import sqlite3
 import sys
-from pathlib import Path
 
 from ..config import load_registry
-from ..db import get_conn
+from ..db import default_db_path, get_conn
 from ..transforms.core import zscore
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 _TRACE_WINDOWS = {"D": 1260, "W": 260, "M": 60, "Q": 20, "A": 5}
 
 

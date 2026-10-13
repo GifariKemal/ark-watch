@@ -118,6 +118,12 @@ async def lifespan(app: FastAPI):
             "(ARKWATCH_ALLOW_NO_AUTH=1 disables auth, tests only)"
         )
     app.state.api_key = key or None
+    # optional separate key for the four write routes: the read key (also held by Zonelab, which
+    # only reads) then cannot cancel playbooks, toggle series or queue jobs
+    write_key = os.environ.get("ARKWATCH_WRITE_KEY", "").strip()
+    if write_key and len(write_key) < MIN_KEY_LEN:
+        raise RuntimeError(f"ARKWATCH_WRITE_KEY must be >= {MIN_KEY_LEN} chars when set")
+    app.state.write_key = write_key or None
     app.state.db_path = db.default_db_path()
     app.state.cache, app.state.cache_lock, app.state.flights = {}, threading.Lock(), {}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
@@ -178,6 +184,15 @@ def _bad_request(_: Request, exc: api.ApiBadRequest) -> JSONResponse:
     return _err(400, "bad_request", str(exc))
 
 
+@app.exception_handler(sqlite3.OperationalError)
+def _db_operational(_: Request, exc: sqlite3.OperationalError) -> JSONResponse:
+    # a write behind the daemon's lock (busy_timeout spent) is transient: retryable 503
+    if "locked" in str(exc) or "busy" in str(exc):
+        return _err(503, "db_busy", "database busy, retry")
+    log.exception("sqlite error", exc_info=exc)
+    return _err(500, "internal", "internal server error")
+
+
 @app.exception_handler(Exception)
 def _internal(_: Request, exc: Exception) -> JSONResponse:
     log.exception("unhandled error", exc_info=exc)
@@ -196,7 +211,9 @@ def _key_ok(expected: str | None, key: str | None) -> bool:
 
 
 def require_key(request: Request, key: Annotated[str | None, Security(_key_header)]) -> None:
-    if not _key_ok(request.app.state.api_key, key):
+    st = request.app.state
+    write = request.method not in ("GET", "HEAD", "OPTIONS") and st.write_key
+    if not _key_ok(st.write_key if write else st.api_key, key):
         raise ServerError(401, "unauthorized", "missing or invalid API key")
 
 
@@ -207,7 +224,8 @@ async def _edge(request: Request, call_next):
     therefore keyed and size-capped here. Every response is no-store / nosniff (no shared
     cache may keep an authenticated body)."""
     if request.method in ("POST", "PATCH", "PUT", "DELETE") and request.url.path.startswith("/v1/"):
-        if not _key_ok(request.app.state.api_key, request.headers.get("x-arkwatch-key")):
+        st = request.app.state
+        if not _key_ok(st.write_key or st.api_key, request.headers.get("x-arkwatch-key")):
             return _err(401, "unauthorized", "missing or invalid API key")
         length = request.headers.get("content-length", "0")
         if not length.isdigit() or int(length) > MAX_BODY_BYTES:
@@ -349,6 +367,8 @@ def health(request: Request):
                 jobs_last_status={r[0]: r[1] for r in jobs},
                 freshness=dict(Counter(r["status"] for r in fresh)),
             )
+        except sqlite3.Error as ex:  # locked/busy mid-probe: the documented 503 body, not a 500
+            reason = f"db error: {type(ex).__name__}"
         finally:
             c.close()
     body = HealthOut(**base, status="down", db_readable=False, detail=reason)
@@ -520,11 +540,19 @@ def risk_book(c: Conn):
 
 @v1.get("/playbook/performance", response_model=PerformanceOut, tags=["playbooks"])
 def playbook_performance(
+    request: Request,
     c: Conn,
     symbol: Annotated[str | None, Query(max_length=16)] = None,
     horizon: Annotated[str | None, Query(max_length=16)] = None,
 ):
-    return api.get_playbook_performance(symbol=symbol, horizon=horizon, conn=c)
+    # a full scan + JSON parse of every scenario: cached like the scorecard
+    sym, hor = (v.strip().upper() if v else None for v in (symbol, horizon))
+    return cached(
+        request,
+        "performance",
+        (sym, hor),
+        lambda: api.get_playbook_performance(symbol=sym, horizon=hor, conn=c),
+    )
 
 
 @v1.get("/calendar", response_model=Page[CalendarEventOut], tags=["markets"])

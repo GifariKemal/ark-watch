@@ -493,9 +493,9 @@ def test_playbook_cfd_offset_applied_exactly_once(tmp_path):
     now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
     _seed_breakout(tmp_path / "raw.db", now)
     _seed_breakout(tmp_path / "cfd.db", now)
-    raw = api.get_trading_playbook("NQ1", db_path=tmp_path / "raw.db", as_of=now)
+    raw = api.get_trading_playbook("NQ1", db_path=tmp_path / "raw.db", as_of=now, record=True)
     cfd = api.get_trading_playbook(
-        "NQ1", db_path=tmp_path / "cfd.db", as_of=now, cfd_basis_offset=10.0
+        "NQ1", db_path=tmp_path / "cfd.db", as_of=now, cfd_basis_offset=10.0, record=True
     )
     for a, b in zip(raw["scenarios"], cfd["scenarios"], strict=True):
         for k in ("trigger_price", "target_profit", "invalidation_level"):
@@ -538,7 +538,7 @@ def test_playbook_session_id_is_the_cme_session_not_the_utc_date(tmp_path):
     ):
         f = tmp_path / f"{want}.db"
         _seed_breakout(f, now)
-        pb = api.get_trading_playbook("NQ1", db_path=f, as_of=now)
+        pb = api.get_trading_playbook("NQ1", db_path=f, as_of=now, record=True)
         assert pb["session_id"] == want
         conn = db.get_conn(f)
         rows = conn.execute(
@@ -549,3 +549,15 @@ def test_playbook_session_id_is_the_cme_session_not_the_utc_date(tmp_path):
         for uid, sess, state in rows:
             assert sess == want and f"-{want}-" in uid
             assert state == "PENDING_TRIGGER", uid
+
+
+def test_a_historical_replay_does_not_write_the_track_record(tmp_path):
+    """C8: a replay reads today's macro context with old bars; its scenarios must not enter
+    the scored book unless the caller asks (record=True)."""
+    now = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
+    f = tmp_path / "replay.db"
+    _seed_breakout(f, now)
+    assert api.get_trading_playbook("NQ1", db_path=f, as_of=now)["scenarios"]
+    conn = db.get_conn(f)
+    assert conn.execute("SELECT COUNT(*) FROM playbook_scenarios").fetchone()[0] == 0
+    conn.close()

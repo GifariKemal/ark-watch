@@ -18,12 +18,12 @@ import math
 import sys
 import time
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from .. import db
+from ..db import default_db_path
 from .calendar import indicator_key, norm
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 
 # Engine parameters come from config (params_signals.yaml); the literals below
 # are only the fallback if the file is unreadable. Values must stay identical
@@ -441,6 +441,14 @@ def store_esi(conn) -> float | None:
     esi, inputs = _esi_inputs(conn, now, 365)
     if esi is None:
         return None
+    # the watcher calls this every minute: skip the write when today's value is unchanged (a
+    # per-minute INSERT OR REPLACE was pure write-lock churn)
+    prev = conn.execute(
+        "SELECT value FROM computed_signals WHERE signal_id='esi' AND ts=?",
+        (now.date().isoformat(),),
+    ).fetchone()
+    if prev and prev[0] == round(esi, 4):
+        return esi
     conn.execute("BEGIN IMMEDIATE")
     conn.execute(
         "INSERT OR REPLACE INTO computed_signals"

@@ -11,12 +11,12 @@ import argparse
 import sys
 import time
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from .. import db
+from ..db import default_db_path
 from ..fetchers import cme
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 
 OPTIONS_N_EXPIRATIONS = 6  # [KEPUTUSAN: expiry bulanan terdekat per produk/hari — est. 10-13k baris/hari utk 7 produk (PLAN-CME-OPTIONS §2.3); 2026-09-03]
 OPTIONS_PAUSE_S = 0.3  # [KEPUTUSAN: pacing antar kontrak — sama dgn backfill SOMA; 2026-09-03]

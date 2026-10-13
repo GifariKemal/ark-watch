@@ -435,6 +435,11 @@ def soma_net_liquidity(conn: sqlite3.Connection) -> dict:
         "tga_change_b": tga_change_b,
         "tga_contribution_b": tga_contribution_b,  # −ΔTGA (liquidity-sign)
         "net_change_b": net,  # FR-34 Δnet-liquidity ($B/wk)
+        # False when the RRP or TGA leg is missing and net carries only the anchor: a reader
+        # must not take a 0 contribution for a measured one
+        "net_complete": net is not None
+        and rrp_contribution_b is not None
+        and tga_contribution_b is not None,
         "state": None if net is None else ("DRAINING" if net < 0 else "INJECTING"),
     }
 
@@ -637,6 +642,7 @@ def store_soma_signals(conn: sqlite3.Connection) -> int:
                         "other_b": _r(liq.get("other_b")),
                         "rrp_contribution_b": _r(liq.get("rrp_contribution_b")),
                         "tga_contribution_b": _r(liq.get("tga_contribution_b")),
+                        "net_complete": liq.get("net_complete"),
                         "convention": "Δnet = ΔWALCL − ΔRRP − ΔTGA (FR-34)",
                     }
                 ),

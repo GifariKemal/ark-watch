@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # Docker sets ARKWATCH_DATA_DIR=/data: DB, state, logs and backups on the volume
 _DATA_ENV = os.environ.get("ARKWATCH_DATA_DIR")
 DATA_DIR = Path(_DATA_ENV) if _DATA_ENV else ROOT / "data"
-DB_PATH = DATA_DIR / "arkwatch.db"
+DB_PATH = Path(os.environ.get("ARKWATCH_DB") or DATA_DIR / "arkwatch.db")  # = db.default_db_path()
 HEARTBEAT = DATA_DIR / "daemon_heartbeat"
 LOCKFILE = DATA_DIR / "daemon.lock"
 LOG_DIR = DATA_DIR / "logs" if _DATA_ENV else ROOT / "logs"

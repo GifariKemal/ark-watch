@@ -131,7 +131,7 @@ def _price_oi_quadrant(conn: sqlite3.Connection, symbol: str, source: str) -> st
     # weekly price change
     prices = conn.execute(
         "SELECT ts, close FROM instrument_prices WHERE symbol=? AND source=? "
-        "AND close IS NOT NULL ORDER BY ts DESC LIMIT 10",
+        "AND close IS NOT NULL AND ts < date('now') ORDER BY ts DESC LIMIT 10",
         (symbol, source),
     ).fetchall()
     if len(prices) < 6:
@@ -287,15 +287,21 @@ def _fx_turning_point(conn: sqlite3.Connection, contract_code: str) -> str | Non
 def _silver_52wk_gate(conn: sqlite3.Connection) -> bool:
     """Silver 52wk-high × Commercial Δ — the only metal signal that survived
     the skeptical Laubsch 2025 study."""
-    # check XAGUSD price against the 52-week high
-    prices = conn.execute(
-        "SELECT close FROM instrument_prices WHERE symbol='XAGUSD' "
-        "AND source='EODHD' AND close IS NOT NULL "
-        "AND (SELECT MAX(ts) FROM instrument_prices WHERE symbol='XAGUSD' "
-        "AND source='EODHD' AND close IS NOT NULL) >= date('now','-4 day') "
-        "ORDER BY ts DESC LIMIT 260"
-    ).fetchall()
-    if len(prices) < 52:
+    # silver against its 52-week high: XAGUSD spot (EODHD, off since 2026-10-10) or COMEX SI1;
+    # completed days only. The old floor of 52 ROWS was 52 days, not weeks.
+    prices: list = []
+    for sym, src in (("XAGUSD", "EODHD"), ("SI1", "YAHOO")):
+        prices = conn.execute(
+            "SELECT close FROM instrument_prices WHERE symbol=? AND source=? "
+            "AND close IS NOT NULL AND ts < date('now') "
+            "AND (SELECT MAX(ts) FROM instrument_prices WHERE symbol=? "
+            "AND source=? AND close IS NOT NULL) >= date('now','-4 day') "
+            "ORDER BY ts DESC LIMIT 260",
+            (sym, src, sym, src),
+        ).fetchall()
+        if len(prices) >= 240:
+            break
+    if len(prices) < 240:  # ~48 weeks of sessions
         return False
     cur = prices[0][0]
     high_52w = max(p[0] for p in prices)
@@ -328,7 +334,7 @@ def _price_positioning_divergence(
     # price: new 20-week high/low?
     prices = conn.execute(
         "SELECT close FROM instrument_prices WHERE symbol=? AND source=? "
-        "AND close IS NOT NULL ORDER BY ts DESC LIMIT 100",
+        "AND close IS NOT NULL AND ts < date('now') ORDER BY ts DESC LIMIT 100",
         (symbol, source),
     ).fetchall()
     if len(prices) < 60:
@@ -556,11 +562,12 @@ def store_cot_signals(conn: sqlite3.Connection, score: float) -> int:
                 {"n_contracts": agg.get("n_contracts"), "signal": "#9"},
             )
         # silver 52wk gate
+        silver_fired = _silver_52wk_gate(conn)
         _add(
             "cot_silver_52wk_gate",
             latest,
-            1.0 if _silver_52wk_gate(conn) else 0.0,
-            "FIRED" if _silver_52wk_gate(conn) else "QUIET",
+            1.0 if silver_fired else 0.0,
+            "FIRED" if silver_fired else "QUIET",
             {"signal": "#10"},
         )
         # spread-share conviction (Gold)

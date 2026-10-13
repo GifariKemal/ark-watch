@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -30,6 +31,18 @@ QUERIES = (
     "US dollar DXY",
     "Bitcoin ETF flows",
 )
+
+
+class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib copies the Authorization header onto a redirect, to any host: never follow one
+    (the MCP endpoint answers in place; a redirect means a misconfiguration or a hijack)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: PLR0913
+        raise urllib.error.HTTPError(newurl, code, f"argus redirect refused: {msg}", headers, fp)
+
+
+_NO_REDIRECT = urllib.request.build_opener(_RefuseRedirect)
+MAX_RESPONSE_BYTES = 20 * 1024 * 1024
 
 
 class Client:
@@ -52,9 +65,11 @@ class Client:
         if self.sid:
             headers["mcp-session-id"] = self.sid
         req = urllib.request.Request(self.url, data=json.dumps(body).encode(), headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _NO_REDIRECT.open(req, timeout=timeout) as r:
             self.sid = r.headers.get("mcp-session-id") or self.sid
-            raw = r.read().decode("utf-8", "replace")
+            raw = r.read(MAX_RESPONSE_BYTES + 1).decode("utf-8", "replace")
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise ValueError(f"argus response over {MAX_RESPONSE_BYTES} bytes")
         msgs = [json.loads(ln[5:]) for ln in raw.splitlines() if ln.startswith("data:")]
         return msgs or ([json.loads(raw)] if raw.strip() else [])
 

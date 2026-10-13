@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import cast
 
 from .. import db
+from ..db import default_db_path
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 
 MONTH_CODES = "FGHJKMNQUVXZ"
 MONTH_NAMES = {

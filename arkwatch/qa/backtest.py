@@ -24,14 +24,14 @@ import bisect
 import sqlite3
 import sys
 from datetime import date, timedelta
-from pathlib import Path
 
 import numpy as np
 
 from .. import db
+from ..db import default_db_path
 from . import stats
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 
 INSTRUMENTS = {
     "XAUUSD": ("XAUUSD", "EODHD"),

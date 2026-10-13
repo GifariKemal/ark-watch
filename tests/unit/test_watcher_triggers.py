@@ -38,10 +38,10 @@ def _fires_once(c, name):
 
 
 def test_hy_extreme_high_and_low(conn):
-    _series(conn, "FRED:BAMLH0A0HYM2", [3.0 + i * 0.001 for i in range(200)])  # newest = widest
+    _series(conn, "FRED:BAMLH0A0HYM2", [3.0 + i * 0.001 for i in range(800)])  # newest = widest
     _fires_once(conn, "hy_extreme_high")
     c2 = db.get_conn(":memory:", allow_init=True)
-    _series(c2, "FRED:BAMLH0A0HYM2", [5.0 - i * 0.001 for i in range(200)])  # newest = tightest
+    _series(c2, "FRED:BAMLH0A0HYM2", [5.0 - i * 0.001 for i in range(800)])  # newest = tightest
     _fires_once(c2, "hy_extreme_low")
     c2.close()
 
@@ -133,3 +133,8 @@ def test_vix_stress_shortens_the_cooldown(conn):
     assert watcher._dynamic_cooldown_hours(conn) == watcher.COOLDOWN_HOURS_DEFAULT
     _series(conn, "FRED:VIXCLS", [15.0] * 60 + [watcher.VIX_STRESS_LEVEL + 10.0])
     assert watcher._dynamic_cooldown_hours(conn) == watcher.COOLDOWN_HOURS_STRESS
+
+
+def test_hy_extreme_needs_three_years_of_history(conn):
+    _series(conn, "FRED:BAMLH0A0HYM2", [3.0 + i * 0.001 for i in range(200)])  # ~9 months
+    assert "hy_extreme_high" not in watcher.check_all(conn)

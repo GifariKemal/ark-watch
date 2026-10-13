@@ -10,6 +10,7 @@ import zlib
 from pathlib import Path
 
 from . import db as _db
+from .db import default_db_path
 
 TABLE_KEYS = {
     "gdelt_events": "event_id",
@@ -201,7 +202,7 @@ def compact_database(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="arkwatch gdelt-storage")
-    parser.add_argument("--db", default="data/arkwatch.db")
+    parser.add_argument("--db", default=str(default_db_path()))
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument(
         "--apply", action="store_true", help="compress existing raw payloads in place"

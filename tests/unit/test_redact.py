@@ -56,3 +56,11 @@ def test_job_env_drops_secrets_no_job_reads(monkeypatch):
     env = job_env()
     assert "ARKWATCH_API_KEY" not in env and "LITESTREAM_SECRET_ACCESS_KEY" not in env
     assert env["FRED_API_KEY"] == "f"  # what the fetchers need stays
+
+
+def test_nlp_provider_follows_the_only_key_set(monkeypatch):
+    from arkwatch.fetchers import nlp
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg = nlp._config()
+    assert cfg["api_key"] == "sk-test" and "openai.com" in cfg["endpoint"]

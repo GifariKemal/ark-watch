@@ -1,0 +1,3 @@
+# captured upstream responses: byte-exact on every OS (autocrlf rewrote the HTML fixtures on
+# Windows checkouts, so parsers saw different bytes than in CI)
+fixtures/** -text

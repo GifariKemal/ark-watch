@@ -238,3 +238,31 @@ def test_fetch_news_week_window_and_drops_degraded(monkeypatch):
     rows = argus.fetch_news(("good", "bad"))
     assert [a["since"] for a in seen] == ["week", "week"]
     assert [r["url"] for r in rows] == ["https://ok.test/1"]
+
+
+def test_redirect_is_refused_so_the_bearer_never_leaves(monkeypatch):
+    """urllib re-sends Authorization to a redirect target on any host: the client must not
+    follow one at all."""
+    seen = []
+
+    class Redirector(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(self.headers.get("Authorization"))
+            self.send_response(307)
+            self.send_header("Location", "http://127.0.0.1:9/steal")
+            self.end_headers()
+
+        def log_message(self, *_a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Redirector)
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+    monkeypatch.setenv("ARGUS_URL", f"http://127.0.0.1:{srv.server_port}/mcp")
+    monkeypatch.setenv("ARGUS_TOKEN", TOKEN)
+    try:
+        with pytest.raises(Exception, match="redirect refused"):
+            argus.Client().call("news_sentiment_feed", {"query": "x"})
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert seen  # the request reached our server, and no second hop was attempted

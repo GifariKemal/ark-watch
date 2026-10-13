@@ -10,6 +10,7 @@ import argparse
 import sys
 
 from ..config import load_anchors, load_cot_contracts, load_curated_calendar, load_registry
+from ..db import default_db_path
 from ..qa.verify_sources import ROUTES
 
 REQUIRED = ("unit", "value_format", "freq", "primary_source")
@@ -101,11 +102,10 @@ def main(argv: list[str] | None = None) -> int:
     # >=MIN_ACTUALS actuals AND a high-importance release, so ~120 minor
     # families (EIA stocks, regional surveys, twin MoM/YoY splits) do not
     # bury the real gaps on day one.
-    from pathlib import Path
 
     from .. import db as _db
 
-    db_path = str(Path(__file__).resolve().parents[2] / "data" / "arkwatch.db")
+    db_path = str(default_db_path())
     _conn = _db.get_conn(db_path)
     gaps = _conn.execute(
         """

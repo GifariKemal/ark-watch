@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import functools
 import os
 from pathlib import Path
 from typing import Any
@@ -45,10 +47,18 @@ class PlanLimited(RuntimeError):
 
 
 def _load_yaml(name: str) -> Any:  # dict or list; each caller knows its file's shape
+    # a deep copy per call: callers may mutate what they get, the cached parse must not change
+    return copy.deepcopy(_parse_yaml(name))
+
+
+@functools.cache
+def _parse_yaml(name: str) -> Any:
+    """Parsed once per process (the registry alone took ~200 ms per load with the pure-Python
+    loader, several loads per job); the C loader when libyaml is present."""
     # An empty or comment-only file safe_loads to None → an opaque
     # AttributeError in the caller; fail loudly with the file name instead
     with open(CONFIG_DIR / name, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+        data = yaml.load(f, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
     if data is None:
         raise ValueError(f"{name}: empty or comments only")
     return data

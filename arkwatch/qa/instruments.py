@@ -11,15 +11,15 @@ import argparse
 import sys
 import time
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import requests
 
 from .. import db as _db
 from ..config import _load_yaml, missing_env
+from ..db import default_db_path
 from . import fetch_log
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 RETRY_PAUSE_S = 5.0  # pause before the single retry pass of errored symbols
 UA = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36"

@@ -21,7 +21,9 @@ import re
 import sqlite3
 from pathlib import Path
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+from ..db import default_db_path
+
+DEFAULT_DB = default_db_path()
 
 # series_id suffix → (indicator_key family, release convention)
 # convention "m_minus_1" = reference month is the month BEFORE release (ISM);

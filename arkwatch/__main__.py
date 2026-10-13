@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import sys
-from pathlib import Path
 
-_DEFAULT_DB = str(
-    Path(os.environ.get("ARKWATCH_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
-    / "arkwatch.db"
-)
+from .db import default_db_path
+
+_DEFAULT_DB = str(default_db_path())
 
 
 def print_help() -> int:

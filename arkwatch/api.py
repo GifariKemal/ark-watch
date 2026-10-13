@@ -30,7 +30,9 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "arkwatch.db"
+from .db import default_db_path
+
+DEFAULT_DB = default_db_path()
 
 
 @contextmanager
@@ -350,6 +352,7 @@ def get_trading_playbook(
     db_path: str | Path | None = None,
     as_of: datetime | str | None = None,
     cfd_basis_offset: float = 0.0,
+    record: bool | None = None,
 ) -> dict | None:
     """Retrieve actionable if-then trading playbook with target profits and invalidation levels."""
     from .signals.playbook import generate_trading_playbook
@@ -357,7 +360,9 @@ def get_trading_playbook(
     # generation records scenarios and evaluates trackers, so it needs a writer
     # (the HTTP server never calls this; it serves stored scenarios read-only)
     with _get_connection(conn, db_path, write=True) as c:
-        return generate_trading_playbook(c, symbol, as_of=as_of, cfd_basis_offset=cfd_basis_offset)
+        return generate_trading_playbook(
+            c, symbol, as_of=as_of, cfd_basis_offset=cfd_basis_offset, record=record
+        )
 
 
 def get_playbook_performance(
@@ -651,8 +656,9 @@ def get_observations(
         where += " AND ts >= ?"
         params.append(start)
     if end:
-        where += " AND ts <= ?"
-        params.append(end)
+        clause, bound = _until("ts", end)
+        where += clause
+        params.append(bound)
     inner = (
         "SELECT ts, source, value, NULLIF(release_ts, 'na') AS release_ts, vintage_ts"
         f" FROM raw_observations WHERE series_id = ? AND vintage_ts = ?{where}"
@@ -734,8 +740,9 @@ def signal_history(
         where += " AND ts >= ?"
         params.append(start)
     if end:
-        where += " AND ts <= ?"
-        params.append(end)
+        clause, bound = _until("ts", end)
+        where += clause
+        params.append(bound)
     inner = (
         "SELECT ts, value, state, run_id, computed_at FROM computed_signals"
         f" WHERE signal_id = ?{where}"
@@ -792,9 +799,21 @@ def get_prices(
         inner += f" AND {col} >= ?"
         params.append(start)
     if end:
-        inner += f" AND {col} <= ?"
-        params.append(end)
+        clause, bound = _until(col, end)
+        inner += clause
+        params.append(bound)
     return _page(c, inner, params, ["ts", "source"], cursor=cursor, limit=limit)
+
+
+def _until(col: str, end: str) -> tuple[str, str]:
+    """`to=` is inclusive. A bare date must cover the whole day: compared as `<= 'YYYY-MM-DD'`
+    it dropped every intraday stamp of that day ('2026-10-02T14:35' sorts after '2026-10-02')."""
+    try:
+        if len(end) == 10:
+            return f" AND {col} < ?", (date.fromisoformat(end) + timedelta(days=1)).isoformat()
+    except ValueError:
+        pass
+    return f" AND {col} <= ?", end
 
 
 _PLAYBOOK_COLS = (

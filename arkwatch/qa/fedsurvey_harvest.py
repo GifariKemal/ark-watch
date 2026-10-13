@@ -27,13 +27,13 @@ import argparse
 import math
 import sys
 from datetime import UTC, datetime
-from pathlib import Path
 
 from .. import db
+from ..db import default_db_path
 from ..fetchers import fedsurvey
 from . import fetch_log
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 
 
 def _latest_stored(conn, kind: str) -> str:

@@ -31,7 +31,7 @@ def etf_flow_momentum(
         return None
 
     asset_key = asset.upper()
-    date_filter = f"WHERE date <= '{as_of}'" if as_of else ""
+    date_filter = "WHERE date <= ?" if as_of else ""
 
     if asset_key == "GOLD":
         col = "gld_tonnes"
@@ -55,7 +55,7 @@ def etf_flow_momentum(
         ORDER BY date DESC
         LIMIT 260
     """
-    rows = conn.execute(query).fetchall()
+    rows = conn.execute(query, (str(as_of),) if as_of else ()).fetchall()
     # Filter valid rows
     valid = [(r[0], float(r[1])) for r in rows if r[1] is not None][::-1]
     if len(valid) < 5:

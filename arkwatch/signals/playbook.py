@@ -223,8 +223,12 @@ def generate_trading_playbook(
     *,
     as_of: datetime | str | None = None,
     cfd_basis_offset: float = 0.0,
+    record: bool | None = None,
 ) -> dict[str, Any] | None:
-    """Generate an actionable probabilistic trading playbook with target profits and invalidation levels."""
+    """Generate an actionable probabilistic trading playbook with target profits and invalidation levels.
+
+    record: write the scenarios into the tracked book. Default: only for a live call (as_of
+    within the last hour); a historical replay mixes vintages, see below."""
     sym = symbol.strip().upper()
 
     target_dt = parse_as_of(as_of)
@@ -1481,7 +1485,11 @@ def generate_trading_playbook(
         },
     }
 
-    track_scenarios(conn, out_dict, as_of=target_dt, cfd_basis_offset=cfd_basis_offset)
+    # A replay (as_of in the past) reads macro, positioning and flow context as of NOW: its
+    # scenarios mix vintages and would be scored against bars already known. Only a live
+    # call records into the track record (2026-10-12 audit, C8).
+    if record if record is not None else datetime.now(UTC) - target_dt <= timedelta(hours=1):
+        track_scenarios(conn, out_dict, as_of=target_dt, cfd_basis_offset=cfd_basis_offset)
     for sc in all_scenarios:  # the single place the CFD basis is applied (display only)
         for k in ("trigger_price", "target_profit", "invalidation_level"):
             sc[k] = round(sc[k] + cfd_basis_offset, 2)

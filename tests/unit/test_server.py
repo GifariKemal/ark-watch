@@ -688,9 +688,12 @@ def test_export_openapi(tmp_path):
 
 
 def test_wal_stress_writer_and_8_readers(client, seeded):
-    """One writer inserting + 8 readers polling observations for ~10s: zero
-    'database is locked', and every reader only ever sees its high-water mark grow."""
-    stop = time.monotonic() + 10
+    """One writer inserting WRITES rows + 8 readers polling until it is done: zero 'database is
+    locked', and every reader only ever sees its high-water mark grow. Bounded by work, not a
+    10 s wall clock (it was 9% of the suite and load-sensitive)."""
+    writes = 2000
+    finished = threading.Event()
+    deadline = time.monotonic() + 60  # safety net only
     errors: list[str] = []
     done = {"writes": 0, "reads": 0}
     base = datetime(2030, 1, 1)
@@ -699,7 +702,7 @@ def test_wal_stress_writer_and_8_readers(client, seeded):
         w = db.get_conn(seeded)
         i = 0
         try:
-            while time.monotonic() < stop:
+            while i < writes and time.monotonic() < deadline:
                 ts = (base + timedelta(seconds=i)).isoformat()
                 db.insert_observations(w, [("T:DAILY", ts, float(i), "S")])
                 i += 1
@@ -708,11 +711,12 @@ def test_wal_stress_writer_and_8_readers(client, seeded):
             errors.append(f"writer: {ex}")
         finally:
             w.close()
+            finished.set()
 
     def reader():
         high = base.isoformat()
         try:
-            while time.monotonic() < stop:
+            while not finished.is_set() and time.monotonic() < deadline:
                 r = client.get(
                     "/v1/series/T:DAILY/observations", params={"from": high, "limit": 50}
                 )
@@ -738,7 +742,7 @@ def test_wal_stress_writer_and_8_readers(client, seeded):
         t.join(timeout=60)
     assert not [e for e in errors if "locked" in e], errors
     assert errors == []
-    assert done["writes"] > 100 and done["reads"] > 100
+    assert done["writes"] == writes and done["reads"] > 20  # readers overlapped the writer
 
 
 def test_odds_serves_question_volume_and_end_date(client, seeded):
@@ -941,3 +945,69 @@ def test_every_v1_route_requires_the_key(client):
             assert r.status_code == 401, (method, path, r.status_code)
             checked += 1
     assert checked >= 30  # the inventory itself must not silently shrink to nothing
+
+
+def test_intraday_to_date_includes_the_whole_day(client, seeded):
+    w = db.get_conn(seeded)
+    w.executemany(
+        "INSERT INTO intraday_bars(symbol, bar_ts_utc, interval, source, close, fetched_at)"
+        " VALUES ('NQ1', ?, '5m', 'YAHOO', 1.0, 'x')",
+        [
+            ("2026-10-01T14:35:00+00:00",),
+            ("2026-10-02T14:35:00+00:00",),
+            ("2026-10-03T00:00:00+00:00",),
+        ],
+    )
+    w.commit()
+    w.close()
+    r = client.get(
+        "/v1/prices/NQ1", params={"interval": "5m", "from": "2026-10-01", "to": "2026-10-02"}
+    )
+    assert [i["ts"][:10] for i in r.json()["items"]] == ["2026-10-01", "2026-10-02"]
+
+
+def test_locked_db_on_a_write_is_a_retryable_503(client, monkeypatch):
+    from arkwatch import api
+
+    def locked(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(api, "enqueue_job", locked)
+    r = client.post("/v1/jobs", json={"kind": "harvest"})
+    assert r.status_code == 503 and r.json()["code"] == "db_busy"
+
+
+def test_zscore_of_a_constant_series_is_none():
+    from arkwatch.transforms.core import zscore
+
+    assert zscore([3.63] * 1260) is None
+
+
+@pytest.mark.parametrize("limit", [0, 1001])
+def test_page_limit_bounds_are_422(client, limit):
+    r = client.get("/v1/series", params={"limit": limit})
+    assert r.status_code == 422 and r.json()["code"] == "validation_error"
+
+
+def test_cursor_walk_ends_with_a_null_cursor_and_rejects_garbage(client):
+    seen, cursor = [], None
+    for _ in range(20):
+        params = {"limit": 1} | ({"cursor": cursor} if cursor else {})
+        body = client.get("/v1/series", params=params).json()
+        seen += [i["series_id"] for i in body["items"]]
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+    assert cursor is None and len(seen) == len(set(seen)) >= 2  # no repeats, it terminates
+    assert client.get("/v1/series", params={"cursor": "not-base64!"}).status_code == 400
+
+
+def test_optional_write_key_separates_writes_from_reads(seeded, monkeypatch):
+    wkey = "w" * 40
+    monkeypatch.setenv("ARKWATCH_WRITE_KEY", wkey)
+    with TestClient(app) as cl:
+        cl.headers["x-arkwatch-key"] = KEY
+        assert cl.get("/v1/regime").status_code == 200  # the read key still reads
+        assert cl.post("/v1/jobs", json={"kind": "harvest"}).status_code == 401
+        r = cl.post("/v1/jobs", json={"kind": "harvest"}, headers={"x-arkwatch-key": wkey})
+        assert r.status_code == 202

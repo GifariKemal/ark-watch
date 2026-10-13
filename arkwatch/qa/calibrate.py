@@ -12,11 +12,11 @@ import sqlite3
 import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
 
 from ..config import load_anchors, load_registry
+from ..db import default_db_path
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 
 
 @dataclass

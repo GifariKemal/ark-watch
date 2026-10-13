@@ -11,6 +11,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .. import db as _db
+from ..db import default_db_path
 from .fetch_log import log_collection
 
 if TYPE_CHECKING:
@@ -319,7 +320,7 @@ def main(argv=None):
     import argparse
 
     parser = argparse.ArgumentParser(prog="arkwatch okx-market")
-    parser.add_argument("--db", default="data/arkwatch.db")
+    parser.add_argument("--db", default=str(default_db_path()))
     result = collect(parser.parse_args(argv).db)
     print(result)
     return 1 if all(value < 0 for value in result.values()) else 0

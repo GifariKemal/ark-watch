@@ -11,6 +11,7 @@ import requests
 
 from .. import db as _db
 from ..config import PLAN_LIMIT_STATUSES, PlanLimited
+from ..db import default_db_path
 from .fetch_log import log_collection
 
 
@@ -74,7 +75,7 @@ def _plan_limited_recently(conn) -> bool:
     return conn.execute(sql, (since,)).fetchone() is not None
 
 
-def run(db_path: str = "data/arkwatch.db") -> dict:
+def run(db_path: str | None = None) -> dict:
     key = os.environ.get("FMP_API_KEY", "")
     if not key:
         raise RuntimeError("FMP_API_KEY not set")
@@ -101,7 +102,7 @@ def run(db_path: str = "data/arkwatch.db") -> dict:
     declines = sum(change < 0 for change, _ in returns)
     total_cap = sum(cap for _, cap in returns)
     cap_return = sum(change * cap for change, cap in returns) / total_cap if total_cap else None
-    conn = _db.get_conn(db_path, allow_init=True)
+    conn = _db.get_conn(db_path or default_db_path(), allow_init=True)
     conn.executemany(
         "INSERT OR REPLACE INTO equity_breadth_components VALUES (?,?,?,?,?,?)", components
     )
@@ -130,7 +131,7 @@ def main(argv=None):
 
     load_dotenv()
     parser = argparse.ArgumentParser(prog="arkwatch breadth")
-    parser.add_argument("--db", default="data/arkwatch.db")
+    parser.add_argument("--db", default=str(default_db_path()))
     db_path = parser.parse_args(argv).db
     conn = _db.get_conn(db_path, allow_init=True)
     try:

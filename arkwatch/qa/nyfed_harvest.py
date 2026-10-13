@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 from .. import db
+from ..db import default_db_path
 from ..fetchers import nyfed
 from . import fetch_log
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "arkwatch.db"
+DEFAULT_DB = default_db_path()
 OPS_COLUMNS = (
     "operation_id, family, operation_date, settlement_date, operation_type, direction,"
     " maturity_start, maturity_end, status, amount, details_json"

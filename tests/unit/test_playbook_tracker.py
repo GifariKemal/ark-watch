@@ -1104,3 +1104,30 @@ def test_telegram_is_not_sent_for_replayed_history(tmp_path, monkeypatch):
     playbook_tracker.evaluate_active_playbooks(conn, as_of=_ts(5))
     assert _row(conn, uid)["state"] == "ACTIVE"
     assert sent == []  # the fill is days old: a catch-up must not spam the channel
+
+
+def test_breakdowns_use_the_realized_r_trade_definition():
+    from arkwatch.signals.playbook_tracker import build_tracker_breakdowns
+
+    def t(state, r, entry=1.0):
+        return {
+            "symbol": "NQ1",
+            "scenario_id": "SCENARIO_X",
+            "state": state,
+            "entry_price": entry,
+            "r_multiple": r,
+            "pnl_points": r,
+        }
+
+    rows = [
+        t("HIT_TARGET_WIN", 2.0),
+        t("TIME_EXIT", 0.5),
+        t("HIT_STOP_LOSS", -1.0),
+        t("CANCELLED_MANUAL", 3.0),
+        t("INVALIDATED_PRE_ENTRY", None, None),
+        t("PENDING_TRIGGER", None, None),
+    ]
+    sym = build_tracker_breakdowns(rows)["by_symbol"][0]
+    assert (sym["total_scenarios"], sym["completed_trades"]) == (6, 3)
+    assert (sym["wins"], sym["losses"], sym["breakevens"]) == (2, 1, 0)
+    assert sym["profit_factor"] == 2.5 and sym["avg_r_multiple"] == 0.5

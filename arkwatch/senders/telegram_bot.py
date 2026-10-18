@@ -372,7 +372,7 @@ def handle_incoming_message(conn: sqlite3.Connection, message: dict[str, Any]) -
     if not chat_id or chat_id not in _allowed_chat_ids():
         return  # closed by default: the playbooks and the journal are proprietary
 
-    text = (message.get("text") or "").strip()
+    text = str(message.get("text") or "").strip()
     if not text.startswith("/"):
         return
 

@@ -806,110 +806,47 @@ def get_playbook_performance_metrics(
 
 
 def build_tracker_breakdowns(trades: list[dict[str, Any]]) -> dict[str, Any]:
-    """Calculate granular breakdowns by asset symbol and by scenario pattern."""
+    """Breakdowns by symbol and by scenario. Same trade definition as the totals: a filled,
+    resolved scenario (manual cancels excluded), scored by its realized R."""
     from collections import defaultdict
 
-    by_sym = defaultdict(
-        lambda: {
-            "total": 0,
-            "completed": 0,
-            "wins": 0,
-            "losses": 0,
-            "breakevens": 0,
-            "net_pnl": 0.0,
-            "gross_win": 0.0,
-            "gross_loss": 0.0,
-            "r_list": [],
-        }
-    )
-    by_sc = defaultdict(
-        lambda: {
-            "total": 0,
-            "completed": 0,
-            "wins": 0,
-            "losses": 0,
-            "breakevens": 0,
-            "r_list": [],
-        }
-    )
+    def _table(key: str, label: str) -> list[dict[str, Any]]:
+        groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for t in trades:
+            groups[str(t.get(key) or "UNKNOWN").replace("SCENARIO_", "")].append(t)
+        out = []
+        for name, ts in sorted(groups.items(), key=lambda x: len(x[1]), reverse=True):
+            done = [
+                t
+                for t in ts
+                if t.get("state") not in _OPEN
+                and t.get("entry_price") is not None
+                and t.get("state") != "CANCELLED_MANUAL"
+            ]
+            rs = [t.get("r_multiple") or 0.0 for t in done]
+            wins, losses = sum(r > 0 for r in rs), sum(r < 0 for r in rs)
+            gross_loss = -sum(r for r in rs if r < 0)
+            out.append(
+                {
+                    label: name,
+                    "total_scenarios": len(ts),
+                    "completed_trades": len(rs),
+                    "wins": wins,
+                    "losses": losses,
+                    "breakevens": len(rs) - wins - losses,
+                    "win_rate_pct": round(100 * wins / len(rs), 1) if rs else 0.0,
+                    "net_pnl_points": round(sum(t.get("pnl_points") or 0.0 for t in done), 2),
+                    # in R, as in the totals; None when undefined (no losing trade)
+                    "profit_factor": round(sum(r for r in rs if r > 0) / gross_loss, 2)
+                    if gross_loss
+                    else None,
+                    "avg_r_multiple": round(sum(rs) / len(rs), 2) if rs else 0.0,
+                }
+            )
+        return out
 
-    for t in trades:
-        s = t.get("symbol", "UNKNOWN")
-        st = t.get("state", "UNKNOWN")
-        pnl = t.get("pnl_points") or 0.0
-        r = t.get("r_multiple")
-        sc = t.get("scenario_id", "UNKNOWN").replace("SCENARIO_", "")
-
-        by_sym[s]["total"] += 1
-        by_sc[sc]["total"] += 1
-
-        if st == "HIT_TARGET_WIN":
-            by_sym[s]["wins"] += 1
-            by_sym[s]["completed"] += 1
-            by_sc[sc]["wins"] += 1
-            by_sc[sc]["completed"] += 1
-            if pnl > 0:
-                by_sym[s]["gross_win"] += pnl
-        elif st == "HIT_STOP_LOSS":
-            by_sym[s]["losses"] += 1
-            by_sym[s]["completed"] += 1
-            by_sc[sc]["losses"] += 1
-            by_sc[sc]["completed"] += 1
-            if pnl < 0:
-                by_sym[s]["gross_loss"] += abs(pnl)
-        elif pnl == 0.0 and (t.get("mfe_points") or 0.0) > 0:
-            by_sym[s]["breakevens"] += 1
-            by_sym[s]["completed"] += 1
-            by_sc[sc]["breakevens"] += 1
-            by_sc[sc]["completed"] += 1
-
-        by_sym[s]["net_pnl"] += pnl
-        if r is not None and st in ("HIT_TARGET_WIN", "HIT_STOP_LOSS"):
-            by_sym[s]["r_list"].append(r)
-            by_sc[sc]["r_list"].append(r)
-
-    symbol_table = []
-    for s, d in sorted(by_sym.items(), key=lambda x: x[1]["total"], reverse=True):
-        comp = d["completed"]
-        wr = round((d["wins"] / comp * 100), 1) if comp > 0 else 0.0
-        avg_r = round(sum(d["r_list"]) / len(d["r_list"]), 2) if d["r_list"] else 0.0
-        pf = (
-            round(d["gross_win"] / d["gross_loss"], 2)
-            if d["gross_loss"] > 0
-            else (9.9 if d["gross_win"] > 0 else 0.0)
-        )
-        symbol_table.append(
-            {
-                "symbol": s,
-                "total_scenarios": d["total"],
-                "completed_trades": comp,
-                "wins": d["wins"],
-                "losses": d["losses"],
-                "breakevens": d["breakevens"],
-                "win_rate_pct": wr,
-                "net_pnl_points": round(d["net_pnl"], 2),
-                "profit_factor": pf,
-                "avg_r_multiple": avg_r,
-            }
-        )
-
-    scenario_table = []
-    for sc, d in sorted(by_sc.items(), key=lambda x: x[1]["total"], reverse=True):
-        comp = d["completed"]
-        wr = round((d["wins"] / comp * 100), 1) if comp > 0 else 0.0
-        avg_r = round(sum(d["r_list"]) / len(d["r_list"]), 2) if d["r_list"] else 0.0
-        scenario_table.append(
-            {
-                "scenario": sc,
-                "total_scenarios": d["total"],
-                "completed_trades": comp,
-                "wins": d["wins"],
-                "losses": d["losses"],
-                "breakevens": d["breakevens"],
-                "win_rate_pct": wr,
-                "avg_r_multiple": avg_r,
-            }
-        )
+    symbol_table = _table("symbol", "symbol")
+    scenario_table = _table("scenario_id", "scenario")
 
     return {"by_symbol": symbol_table, "by_scenario": scenario_table}
 
@@ -1016,7 +953,7 @@ def format_tracker_detailed_report(
         lines.append("  " + "-" * 95)
         for d in by_sym:
             lines.append(
-                f"  {d['symbol']:<8} | {d['total_scenarios']:>5} | {d['completed_trades']:>5} | {d['wins']:>4} | {d['losses']:>4} | {d['breakevens']:>3} | {d['win_rate_pct']:>6.1f}% | {d['net_pnl_points']:>11.2f} | {d['profit_factor']:>9.2f} | {d['avg_r_multiple']:>+6.2f}R"
+                f"  {d['symbol']:<8} | {d['total_scenarios']:>5} | {d['completed_trades']:>5} | {d['wins']:>4} | {d['losses']:>4} | {d['breakevens']:>3} | {d['win_rate_pct']:>6.1f}% | {d['net_pnl_points']:>11.2f} | {'-' if d['profit_factor'] is None else format(d['profit_factor'], '.2f'):>9} | {d['avg_r_multiple']:>+6.2f}R"
             )
         lines.append("-" * 105)
 

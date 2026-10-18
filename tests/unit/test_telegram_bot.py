@@ -31,8 +31,16 @@ def test_handle_incoming_commands(tmp_path, monkeypatch):
         return 999
 
     monkeypatch.setattr(telegram_bot, "_send_message", fake_send)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "10001")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "55555, 66666")
 
-    # 1. /start command from any user
+    # 0. a chat outside the allowlist gets no reply and is not registered
+    telegram_bot.handle_incoming_message(
+        conn, {"chat": {"id": 77777}, "from": {"first_name": "X"}, "text": "/start"}
+    )
+    assert sent_messages == []
+
+    # 1. /start command from an allowlisted chat
     telegram_bot.handle_incoming_message(
         conn,
         {

@@ -652,6 +652,7 @@ def evaluate_active_playbooks(
                 dispatch_telegram_trading_signal(conn, n_uid)
             else:
                 dispatch_telegram_outcome_update(conn, n_uid, n_outcome, n_summary)
+    conn.commit()  # the dispatch stores the message ids; do not leave the write lock open
     return stats
 
 

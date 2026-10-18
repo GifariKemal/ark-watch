@@ -1,7 +1,7 @@
 """telegram_bot.py — Interactive Multi-User Telegram Bot Engine for ark-watch.
 
-Allows ANY Telegram user or group to interact with @ark_trading_bot on demand
-and subscribe to real-time trading signals:
+Allows allowlisted Telegram chats (TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_CHAT_IDS) to
+interact with @ark_trading_bot on demand and subscribe to real-time trading signals:
   - /start, /help        -> Register subscriber & show command menu
   - /playbook [SYMBOL]   -> Live AMT Playbook, levels, structure & scenarios
   - /tracker [SYM] [WIN] -> Performance dashboard, breakdowns & recent trades
@@ -359,12 +359,18 @@ def _handle_scanner_cmd(conn: sqlite3.Connection, user_tz: str) -> str:
     return "\n".join(lines)
 
 
+def _allowed_chat_ids() -> set[str]:
+    """TELEGRAM_CHAT_ID plus the comma-separated TELEGRAM_ALLOWED_CHAT_IDS."""
+    raw = f"{os.environ.get('TELEGRAM_CHAT_ID', '')},{os.environ.get('TELEGRAM_ALLOWED_CHAT_IDS', '')}"
+    return {c.strip() for c in raw.split(",") if c.strip()}
+
+
 def handle_incoming_message(conn: sqlite3.Connection, message: dict[str, Any]) -> None:
-    """Process a single incoming Telegram message from any user or group."""
+    """Process a single incoming Telegram message from an allowlisted chat; others are ignored."""
     chat = message.get("chat", {})
     chat_id = str(chat.get("id", ""))
-    if not chat_id:
-        return
+    if not chat_id or chat_id not in _allowed_chat_ids():
+        return  # closed by default: the playbooks and the journal are proprietary
 
     text = (message.get("text") or "").strip()
     if not text.startswith("/"):
@@ -423,7 +429,7 @@ def handle_incoming_message(conn: sqlite3.Connection, message: dict[str, Any]) -
     except Exception as e:
         safe_err = redact_telegram_secrets(str(e))
         logger.error(f"Error handling command {cmd_raw} for chat {chat_id}: {safe_err}")
-        reply = f"⚠ Terjadi kesalahan saat memproses perintah: <code>{html.escape(safe_err[:120])}</code>"
+        reply = "⚠ Terjadi kesalahan saat memproses perintah."
 
     _send_message(reply, chat_id)
 

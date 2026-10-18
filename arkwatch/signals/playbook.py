@@ -36,6 +36,7 @@ from .sentiment import (
 )
 
 OPTIONS_PRODUCT_MAP: dict[str, str] = {
+    "NQ1": "NQ",
     "ES1": "ES",
     "YM1": "YM",
     "GC1": "OG",

@@ -48,7 +48,7 @@ def _send_message(text: str, chat_id: str, max_attempts: int = 3) -> int | None:
         "chat_id": chat_id,
         "text": text,
         "parse_mode": "HTML",
-        "protect_content": False,
+        "protect_content": True,
     }
     for attempt in range(max_attempts):
         try:

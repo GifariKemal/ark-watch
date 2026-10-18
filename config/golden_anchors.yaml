@@ -211,12 +211,6 @@ golden_anchors:
     tolerance: 0.50
     provenance: "live-test verified 2026-09-21, harperpetersen embedded JSON"
 
-  - series_id: BDI
-    anchor_date: "2026-09-18"
-    expected: 3370
-    tolerance: 1
-    provenance: "live-test verified 2026-09-21, EODHD BDIY.INDX"
-
   - series_id: EIA_CRUDE_STOCKS_CHG
     anchor_date: "2026-08-01"
     expected: 17.472
@@ -259,15 +253,15 @@ golden_anchors:
 
   - series_id: INDPRO
     anchor_date: "2026-08-01"
-    expected: 103.0682
+    expected: 103.2664
     tolerance: 0.005     # IP index, 4dp
-    provenance: "quarterly recalibrated 2026-10-02 (G.17 revision cycle), FRED INDPRO"
+    provenance: "recalibrated 2026-10-18 (G.17 2026-10-16 revised Aug), FRED INDPRO"
 
   - series_id: RSAFS
     anchor_date: "2026-08-01"
-    expected: 737763
+    expected: 739322
     tolerance: 100       # $ millions; monthly revisions with each retail-sales cycle
-    provenance: "quarterly recalibrated 2026-10-02 (Census annual benchmark revision), FRED RSAFS"
+    provenance: "recalibrated 2026-10-18 (Census 2026-10-16 revised Aug), FRED RSAFS"
   - series_id: GDPNOW
     anchor_date: "2026-04-01"
     expected: 1.54

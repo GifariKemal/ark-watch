@@ -15,6 +15,22 @@ from arkwatch.transforms.core import (
 from arkwatch.transforms.fedwatch import compute, month_code
 
 
+@pytest.fixture
+def fedwatch_on_soak_day(monkeypatch):
+    """Pin fedwatch's clock to the 2026-09-18 soak day: compute() keeps only
+    meetings >= today, so these fixtures expire once Oct-28 is in the past."""
+    import datetime as _dt
+
+    from arkwatch.transforms import fedwatch
+
+    class _SoakDay(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 18, 12, 0, tzinfo=tz)
+
+    monkeypatch.setattr(fedwatch, "datetime", _SoakDay)
+
+
 class TestZscore:
     def test_basic(self):
         # values 1-100: mean ≈ 50.5, std ≈ 28.9 → z of the last value (100) ≈ +1.71
@@ -162,7 +178,7 @@ class TestFedWatch:
             f"not the prior month's averaged implied"
         )
 
-    def test_stale_anchor_self_heal(self):
+    def test_stale_anchor_self_heal(self, fedwatch_on_soak_day):
         """2026-09-17 incident: DFF prints T+1, so the morning after the
         Sep-16 hike (3.63→3.88) the anchor was still the pre-hike 3.63. The
         D/n_post extraction amplified the 25bp error ×31/4 → Oct-26 implied
@@ -192,7 +208,7 @@ class TestFedWatch:
         assert abs(oct_row.implied_rate - 3.98) < 0.01
         assert oct_row.prob_hike == pytest.approx((3.98 - 3.860357) / 0.25, abs=1e-3)  # +12bp
 
-    def test_stale_anchor_without_date_now_sane(self):
+    def test_stale_anchor_without_date_now_sane(self, fedwatch_on_soak_day):
         """SOAK 2026-09-18: without anchor_date, the Sep bootstrap + the
         next-month convention for late meetings keep every row INSIDE the
         ±100bp tripwire band — the old cascade (5.53 → 3.61 → 7.02) is gone

@@ -224,6 +224,11 @@ def test_openai_payload_disables_streaming(monkeypatch):
         return _Ok()
 
     monkeypatch.setattr(nlp.requests, "post", post)
-    cfg = {"format": "openai", "endpoint": "https://example.test/v1/chat/completions", "api_key": "k", "model": "m"}
+    cfg = {
+        "format": "openai",
+        "endpoint": "https://example.test/v1/chat/completions",
+        "api_key": "k",
+        "model": "m",
+    }
     assert nlp._call_one(cfg, "sys", "user") == "ok"
     assert sent["stream"] is False

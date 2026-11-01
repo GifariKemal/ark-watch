@@ -212,6 +212,7 @@ def _call_one(cfg: dict, system: str, user: str) -> str:
         json={
             "model": cfg["model"],
             "max_tokens": 4096,
+            "stream": False,  # gateways (9router) default to SSE when omitted
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},

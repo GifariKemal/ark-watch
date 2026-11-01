@@ -206,3 +206,24 @@ def test_unparseable_json_raises_instead_of_error_dict():
     assert nlp._extract_json('```json\n{"score": 5}\n```') == {"score": 5}
     with pytest.raises(nlp.NlpError, match="unparseable"):
         nlp._extract_json('{"score": 5,, }')
+
+
+def test_openai_payload_disables_streaming(monkeypatch):
+    """Gateways default to SSE when `stream` is omitted; _openai_content cannot parse that."""
+    sent = {}
+
+    class _Ok:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    def post(url, **kw):
+        sent.update(kw["json"])
+        return _Ok()
+
+    monkeypatch.setattr(nlp.requests, "post", post)
+    cfg = {"format": "openai", "endpoint": "https://example.test/v1/chat/completions", "api_key": "k", "model": "m"}
+    assert nlp._call_one(cfg, "sys", "user") == "ok"
+    assert sent["stream"] is False

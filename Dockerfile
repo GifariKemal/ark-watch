@@ -27,6 +27,9 @@ RUN uv sync --locked --no-dev --no-install-project
 
 # --- runtime
 FROM python:3.12-slim-trixie@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+# Update keamanan Debian di atas digest yang dipin (16 Nov 2026: trivy HIGH apt 3.0.3 dan zlib1g pada base
+# yang dipin; base baru belum berumur 2 minggu). Layer ini mengikuti tanggal build; image tetap ditag per sha.
+RUN apt-get update && apt-get -y --no-install-recommends upgrade && rm -rf /var/lib/apt/lists/*
 ARG GIT_SHA=unknown
 ENV PYTHONUTF8=1 \
     PYTHONUNBUFFERED=1 \

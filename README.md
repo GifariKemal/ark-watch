@@ -61,11 +61,13 @@ Calibration (job `calibration`, stored in `computed_signals`) scores Polymarket 
 - Playbook scenarios: one push when a scenario fills (entry, stop, target, R:R) and one when a filled trade closes (outcome, exit, R). Keys are per scenario, so each event is sent once; only events within the last 12 hours of bar time are sent, so a first deploy does not replay the backlog.
 - Credit vs equity divergence: HY OAS widening 50bp or more (IG 20bp) over five prints while ES1 (completed days) did not fall over the same dates; at most one alert per series per ISO week. Thresholds live in `config/params_signals.yaml` (`credit_div_*`).
 - Dead-man switch: create a free healthchecks.io check (period 5 min, grace 10 min) and set `HEALTHCHECK_PING_URL` to its ping URL. The daemon pings it every 5 minutes while `healthcheck` passes and hits `<url>/fail` when a job fails, so a dead or hung daemon, a full disk or stopped backups page you by email.
-- The topic URL, token and ping URL are secrets: keep them in the Easypanel environment, they never appear in logs.
+- The topic URL, token and ping URL are secrets: keep them in the Coolify environment, they never appear in logs.
 
 ## Deployment
 
-One image, three roles (daemon, okxws, api), run as an Easypanel **Compose** service from `docker-compose.yml`.
+One image, three roles (daemon, okxws, api), run as a Coolify **Compose** service (project Zonelab, service `arkwatch`) on the primary server. The deploy compose is `Music/SuriotaPrimaryServer/zonelab/arkwatch.yml` in the Zonelab workspace; `docker-compose.yml` here is a reference file for local runs and for reading the service layout.
+
+Deploys are manual: CI (`.github/workflows/ci.yml`) only runs lint, type check, tests and the dependency audit. Once CI is green on `main`, deploy with `scripts/deploy.sh arkwatch` from the Zonelab repo. Never deploy a commit whose CI is red.
 
 ```mermaid
 flowchart LR
@@ -112,7 +114,7 @@ docker compose --profile litestream up -d
 ```
 
 > [!IMPORTANT]
-> Secrets come only from the Easypanel environment (`ARKWATCH_API_KEY` is mandatory, the compose file refuses to start the api without it). Never commit `.env`.
+> Secrets come only from the Coolify environment (`ARKWATCH_API_KEY` is mandatory, the compose file refuses to start the api without it). Never commit `.env`.
 
 <details><summary>Restore from a backup</summary>
 
@@ -130,12 +132,11 @@ Drill it once a quarter on a throwaway container from the newest backup.
 
 | Secret | Set in | Also change | Restart |
 |---|---|---|---|
-| `ARKWATCH_API_KEY` | Easypanel `arkwatch` env | Zonelab `ZONELAB_ARKWATCH_KEY` (must be equal) | api, Zonelab |
-| `NTFY_URL` (topic) | Easypanel `arkwatch` env | resubscribe in the ntfy app | daemon |
-| `HEALTHCHECK_PING_URL` | Easypanel `arkwatch` env | healthchecks.io check | daemon |
-| `NLP_API_KEY` | Easypanel `arkwatch` env | equals `forwardKey` in the `ofm-data` volume (`/data/settings.json`), regenerated when that volume is recreated | daemon |
-| `FRED_API_KEY`, `FMP_API_KEY` | Easypanel `arkwatch` env | provider dashboard | daemon |
-| `EASYPANEL_DEPLOY_URL` | GitHub repo secret | Easypanel deploy token | none |
+| `ARKWATCH_API_KEY` | Coolify env (Zonelab / arkwatch) | Zonelab `ZONELAB_ARKWATCH_KEY` (must be equal) | api, Zonelab |
+| `NTFY_URL` (topic) | Coolify env (Zonelab / arkwatch) | resubscribe in the ntfy app | daemon |
+| `HEALTHCHECK_PING_URL` | Coolify env (Zonelab / arkwatch) | healthchecks.io check | daemon |
+| `NLP_API_KEY` | Coolify env (Zonelab / arkwatch) | equals `forwardKey` in the `ofm-data` volume (`/data/settings.json`), regenerated when that volume is recreated | daemon |
+| `FRED_API_KEY`, `FMP_API_KEY` | Coolify env (Zonelab / arkwatch) | provider dashboard | daemon |
 
 </details>
 

@@ -1,6 +1,8 @@
-# Easypanel Compose service. No `ports:` (Traefik routes the api by domain) and
-# no container_name (Easypanel names containers). Secrets come only from the
-# environment set in the panel, never from a committed file.
+# REFERENCE FILE. Production runs on the primary server under Coolify (project Zonelab,
+# service arkwatch) from Music/SuriotaPrimaryServer/zonelab/arkwatch.yml, deployed manually
+# with Zonelab's scripts/deploy.sh arkwatch after CI is green. Keep the service layout here in
+# sync with that file. No `ports:` and no container_name (the platform names containers).
+# Secrets come only from the environment set in the Coolify panel, never from a committed file.
 x-app: &app
   build:
     context: .
@@ -76,7 +78,7 @@ services:
     command:
       ["uvicorn", "arkwatch.server.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     environment:
-      ARKWATCH_API_KEY: ${ARKWATCH_API_KEY:?set ARKWATCH_API_KEY in the Easypanel environment}
+      ARKWATCH_API_KEY: ${ARKWATCH_API_KEY:?set ARKWATCH_API_KEY in the Coolify environment}
       # optional: when set, the write routes need this key instead of the read key
       ARKWATCH_WRITE_KEY: ${ARKWATCH_WRITE_KEY:-}
     # reads open SQLite with mode=ro; four audited write routes (playbook cancel, outbox

@@ -1,7 +1,7 @@
-# Gate for production: a push to main reaches the VPS only after lint and the full offline test
-# suite pass. Deploy is one POST to the Easypanel deploy URL kept in the EASYPANEL_DEPLOY_URL
-# secret (it embeds a deploy token). The old GitHub push webhook must stay removed or every push
-# would deploy twice and bypass this gate.
+# CI gate: lint, type check and the full offline test suite (job test) plus a dependency
+# vulnerability scan (job audit). This workflow does NOT deploy. Deploys are manual: run
+# scripts/deploy.sh arkwatch from the Zonelab repo, only after CI is green on main, to the
+# primary server under Coolify.
 name: ci
 
 on:
@@ -51,16 +51,3 @@ jobs:
         run: |
           uv export --locked --no-dev --no-hashes --format requirements-txt -o req.txt
           uvx --from pip-audit==2.10.0 pip-audit -r req.txt --progress-spinner off
-
-  deploy:
-    needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Trigger Easypanel deploy
-        env:
-          DEPLOY_URL: ${{ secrets.EASYPANEL_DEPLOY_URL }}
-        run: |
-          test -n "$DEPLOY_URL" || { echo "EASYPANEL_DEPLOY_URL secret is not set"; exit 1; }
-          curl -fsS -X POST --max-time 30 -o /dev/null -w "deploy trigger HTTP %{http_code}\n" "$DEPLOY_URL"

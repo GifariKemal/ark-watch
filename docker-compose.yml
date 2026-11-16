@@ -89,10 +89,10 @@ services:
     read_only: true
     tmpfs: ["/tmp:size=64m"]
     # shared bridge so Zonelab can reach http://arkwatch-api:8000 without a public
-    # domain; create once on the host: docker network create arkwatch-internal
+    # domain; create once on the host: docker network create zonelab-net
     networks:
       default: {}
-      arkwatch-internal:
+      zonelab-net:
         aliases: [arkwatch-api]
     depends_on:
       - daemon
@@ -185,9 +185,9 @@ volumes:
   ofm-data:
 
 networks:
-  arkwatch-internal:
+  zonelab-net:
     external: true
-    name: arkwatch-internal
+    name: zonelab-net
   warp-net: {}
   ofm-net:
     ipam:

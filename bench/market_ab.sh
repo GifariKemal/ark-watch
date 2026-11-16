@@ -1,6 +1,8 @@
 #!/bin/sh
 # A/B the market job: old tree ~/ab-old vs new tree ~/arkbench, each on its own copy of the
 # prod DB, through the same WARP egress. Usage: market_ab.sh <runs>
+# NOTE: targets the retired VPS (Easypanel, network portfolio_arkwatch_default, stopped 2026-11-16); on the
+# primary server use network arkwatch-warp-net (Coolify) and ARKWATCH_PROXY from the arkwatch-warp service.
 RUNS=${1:-3}
 for side in old new; do
   dir=$HOME/ab-old; [ $side = new ] && dir=$HOME/arkbench

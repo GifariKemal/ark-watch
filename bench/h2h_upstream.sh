@@ -4,6 +4,8 @@
 #   git -c core.autocrlf=false archive upstream/main | ssh vps 'mkdir -p ~/h2h/kresna && tar -x -C ~/h2h/kresna'
 #   scp bench/{lib_bench,replay_freshness,h2h_static}.py vps:~/h2h/tools/
 # Every step runs both trees in the same image with the same CPU/memory cap and the same WARP egress.
+# NOTE: targets the retired VPS (Easypanel names portfolio_arkwatch_*, stopped 2026-11-16). On the primary server the
+# containers are arkwatch-daemon-<uuid>, the WARP network is arkwatch-warp-net, docker needs sudo; adapt before use.
 set -u
 H=$HOME/h2h; OUT=$H/out; mkdir -p $OUT
 IMG=ghcr.io/astral-sh/uv:0.12.23-python3.12-trixie-slim

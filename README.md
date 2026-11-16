@@ -71,7 +71,7 @@ Deploys are manual: CI (`.github/workflows/ci.yml`) only runs lint, type check, 
 
 ```mermaid
 flowchart LR
-  Z[Zonelab api] -->|arkwatch-internal network| A[api: uvicorn :8000]
+  Z[Zonelab api] -->|zonelab-net network| A[api: uvicorn :8000]
   D[daemon: scheduler + job subprocesses] -->|writer| V[(arkwatch-data volume /data)]
   O[okxws: OKX WebSocket collector] -->|OKX_WS rows| V
   A -->|reads mode=ro, 4 audited writes| V
@@ -79,7 +79,7 @@ flowchart LR
   V --> L
 ```
 
-The api has no public domain: Zonelab reaches it as `http://arkwatch-api:8000` on the external `arkwatch-internal` network. The `warp` SOCKS proxy has no auth and sits on its own `warp-net`, shared only with the daemon.
+The api has no public domain: Zonelab reaches it as `http://arkwatch-api:8000` on the external docker network `zonelab-net` (production, Coolify; the reference `docker-compose.yml` here still names it `arkwatch-internal`). The `warp` SOCKS proxy has no auth and runs as its own Coolify service `arkwatch-warp` (no env, because Coolify attaches a service `.env` to every container of that service) on `arkwatch-warp-net`, shared only with the daemon.
 
 | Service | Command | Limits | Health |
 |---|---|---|---|
@@ -135,14 +135,14 @@ Drill it once a quarter on a throwaway container from the newest backup.
 | `ARKWATCH_API_KEY` | Coolify env (Zonelab / arkwatch) | Zonelab `ZONELAB_ARKWATCH_KEY` (must be equal) | api, Zonelab |
 | `NTFY_URL` (topic) | Coolify env (Zonelab / arkwatch) | resubscribe in the ntfy app | daemon |
 | `HEALTHCHECK_PING_URL` | Coolify env (Zonelab / arkwatch) | healthchecks.io check | daemon |
-| `NLP_API_KEY` | Coolify env (Zonelab / arkwatch) | equals `forwardKey` in the `ofm-data` volume (`/data/settings.json`), regenerated when that volume is recreated | daemon |
+| `NLP_API_KEY` | Coolify env (Zonelab / arkwatch) | key for the NLP endpoint (`api.suriota.fun`); the free `ofm` relay is not run since 2026-11-16 | daemon |
 | `FRED_API_KEY`, `FMP_API_KEY` | Coolify env (Zonelab / arkwatch) | provider dashboard | daemon |
 
 </details>
 
 <details><summary>Deploy-time checks</summary>
 
-- [ ] The external network exists: `docker network create arkwatch-internal` (once per host).
+- [ ] The external network exists: `docker network create zonelab-net` (once per host; production already has it, subnet 10.0.17.0/24).
 - [ ] `sqlite3.sqlite_version` inside the image prints 3.53.4 (the build fails below 3.51.3).
 - [ ] First boot: the healthcheck reports unhealthy until a job has created `/data/arkwatch.db`.
 - [ ] Only one `daemon` replica: the OS lock on `/data/daemon.lock` makes a second one exit.
@@ -191,7 +191,7 @@ Tiers: `unvalidated` below 20 trades; `supported` needs 100+ trades, a Wilson lo
 
 ### Free LLM endpoint (optional)
 
-The `ofm` compose service runs [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)
+Not run in production since 2026-11-16 (NLP goes through `api.suriota.fun`; data kept in `/srv/suriota/arkwatch/ofm-data`, re-enable as a separate Coolify service without env). The `ofm` compose service runs [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)
 (`packages/standalone`, MIT) so news NLP works without a paid key. It is third-party code: the image
 is built from a pinned commit (not vendored here), one patch disables its sealed EAC path, and it runs
 on its own network (`ofm-net`, shared only with the daemon) with no secrets, a read-only rootfs and

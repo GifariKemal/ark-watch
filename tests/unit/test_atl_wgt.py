@@ -45,6 +45,13 @@ class TestWgt:
         out = atl.fetch_latest()
         assert out == {"ts": "2026-08-01", "value": 4.1}  # Overall, NOT 0.0
 
+    def test_url_follows_2026_site_move(self):
+        """Atlanta Fed moved data files from /Documents/datafiles/chcs/ to
+        /Documents/research-and-data/data/ (Nov 2026); the old path 302s to
+        notfound.aspx (HTTP 404) and verify failed daily with 'not XLSX'."""
+        assert "/Documents/research-and-data/data/wage-growth-tracker/" in atl.URL
+        assert "/datafiles/chcs/" not in atl.URL
+
     def test_sanity_floor_blocks_exact_zero(self):
         """The meta-lesson: sanity_min=0.0 let literal zeros pass as a wage
         median. The registry floor is now 1.0 — assert it from the YAML so

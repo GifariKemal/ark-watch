@@ -22,9 +22,11 @@ from datetime import datetime
 import requests
 from openpyxl import load_workbook
 
+# Site move Nov 2026: /Documents/datafiles/chcs/... -> /Documents/research-and-data/data/...
+# (old path 302s to notfound.aspx). Link taken from the official page's "Download the data".
 URL = (
     "https://www.atlantafed.org/-/media/Project/Atlanta/FRBA/Documents/"
-    "datafiles/chcs/wage-growth-tracker/wage-growth-data.xlsx"
+    "research-and-data/data/wage-growth-tracker/wage-growth-data.xlsx"
 )
 UA = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36"

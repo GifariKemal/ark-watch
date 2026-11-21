@@ -310,9 +310,9 @@ golden_anchors:
 
   - series_id: M2SL
     anchor_date: "2026-08-01"
-    expected: 23342.8
+    expected: 23300.9
     tolerance: 1.0       # SA $ billions; monthly level
-    provenance: "quarterly recalibrated 2026-10-02, FRED M2SL"
+    provenance: "recalibrated 2026-11-21 (H.6 2026-10-27 revised Aug 23342.8 -> 23300.9), FRED fredgraph.csv M2SL"
 
   - series_id: FISCAL:TGA_DAILY
     anchor_date: "2026-08-27"

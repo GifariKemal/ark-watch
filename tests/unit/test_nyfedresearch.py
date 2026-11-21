@@ -72,6 +72,18 @@ class TestMct:
         assert out["MCT_BAND_LO"][-1] == ("2026-07-01", 2.22)
         assert out["MCT_BAND_HI"][-1] == ("2026-07-01", 3.09)
 
+    def test_iso_dates_2026_11_format_change(self, monkeypatch):
+        """NY Fed switched the chart CSV dates from M/D/YYYY to ISO YYYY-MM-DD
+        (live CSV 2026-11): the M/D/YYYY-only regex skipped every row ->
+        'mct: no rows' and verify paged MCT + both bands daily."""
+        iso = (
+            _mct_text().replace(",1/1/1960,", ",1960-01-01,").replace(",7/1/2026,", ",2026-07-01,")
+        )
+        monkeypatch.setattr(nr, "_download", lambda k: iso.encode())
+        out = nr._mct()
+        assert out["MCT"][0] == ("1960-01-01", 1.51)
+        assert out["MCT"][-1] == ("2026-07-01", 2.67)
+
     def test_band_invariant_is_a_tripwire(self, monkeypatch):
         """lo<=point<=hi enforced at parse — a schema drift must FAIL loudly,
         not store scrambled columns."""

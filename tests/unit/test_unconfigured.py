@@ -71,6 +71,29 @@ def test_verify_reports_unconfigured_once_without_violation(no_eodhd):
     ]
 
 
+def test_verify_degrades_when_upstream_retries_exhausted(monkeypatch):
+    """2026-11-21: FRED:CCSA paged ✗ with 'Max retries exceeded' (urllib3 Retry
+    gave up on 5xx/429 -> requests RetryError, NOT a ConnectionError subclass),
+    while the same fetch succeeded seconds later. An upstream that keeps
+    failing says nothing about the data: degrade to '·' like Timeout."""
+    import requests
+
+    from arkwatch.fetchers import fred
+
+    monkeypatch.setenv("FRED_API_KEY", "t")
+
+    def boom(*a, **k):
+        raise requests.exceptions.RetryError("Max retries exceeded (too many 429)")
+
+    monkeypatch.setattr(fred, "fetch_observations", boom)
+    rows = [{"series_id": "FRED:CCSA", "block": "D", "freq": "W"}]
+    rep = vs.verify(registry=rows, anchors=[])
+    assert rep.violations == []
+    assert [(r.series_id, r.anchor, r.note) for r in rep.rows] == [
+        ("FRED:CCSA", "·", "source unreachable: RetryError")
+    ]
+
+
 def test_freshness_marks_skipped_provider_unconfigured(tmp_path):
     c = db.get_conn(tmp_path / "a.db", allow_init=True)
     for sid in ("EODHD:GSPC.INDX", "EODHD:NDX.INDX", "FRED:X"):

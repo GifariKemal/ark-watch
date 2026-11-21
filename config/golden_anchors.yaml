@@ -124,9 +124,9 @@ golden_anchors:
 
   - series_id: PCEPILFE
     anchor_date: "2026-08-01"
-    expected: 130.455
+    expected: 130.489
     tolerance: 0.01      # core PCE index, 3dp
-    provenance: "quarterly recalibrated 2026-10-02, FRED PCEPILFE"
+    provenance: "recalibrated 2026-11-21 (BEA revised Aug 130.455 -> 130.489), FRED fredgraph.csv PCEPILFE"
 
   - series_id: MICH
     anchor_date: "2026-08-01"
@@ -253,15 +253,15 @@ golden_anchors:
 
   - series_id: INDPRO
     anchor_date: "2026-08-01"
-    expected: 103.2664
+    expected: 103.0954
     tolerance: 0.005     # IP index, 4dp
-    provenance: "recalibrated 2026-10-18 (G.17 2026-10-16 revised Aug), FRED INDPRO"
+    provenance: "recalibrated 2026-11-21 (G.17 Nov revised Aug 103.2664 -> 103.0954), FRED fredgraph.csv INDPRO"
 
   - series_id: RSAFS
     anchor_date: "2026-08-01"
-    expected: 739322
+    expected: 740502
     tolerance: 100       # $ millions; monthly revisions with each retail-sales cycle
-    provenance: "recalibrated 2026-10-18 (Census 2026-10-16 revised Aug), FRED RSAFS"
+    provenance: "recalibrated 2026-11-21 (Census Nov revised Aug 739322 -> 740502), FRED fredgraph.csv RSAFS"
   - series_id: GDPNOW
     anchor_date: "2026-04-01"
     expected: 1.54

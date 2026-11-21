@@ -418,11 +418,12 @@
                                     # 12m ahead of it — the horizon lives in
                                     # the series definition, not the ts)
   release_schedule: monthly (with the model refresh)
-  expected_start: "2025-07-01"       # ROLLING WINDOW: the CSV's forecast leg
+  expected_start: null               # ROLLING WINDOW: the CSV's forecast leg
                                     # only carries ~14 recent vintages (review-1
-                                    # live-decode) — the series is young by
-                                    # construction, NOT truncated harvesting;
-                                    # depth grows one row per model month
+                                    # live-decode). The window ROLLS (first row
+                                    # 2025-07 -> 2025-10 by 2026-11), so a fixed
+                                    # start date failed the depth gate monthly;
+                                    # depth gate off for this series by design
   sanity_min: 0.0
   sanity_max: 100.0
   primary_source: "CLEVELAND:chart2_recession_probability_w_forecast.csv (forecast leg)"

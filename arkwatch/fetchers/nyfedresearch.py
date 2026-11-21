@@ -100,8 +100,11 @@ def _dd_mon_yyyy(s: str) -> str:
 
 
 def _m_dy(s: str) -> str:
-    """'7/1/2026' (M/D/YYYY, the chart-feed convention) → ISO."""
-    return datetime.strptime(s.strip(), "%m/%d/%Y").date().isoformat()
+    """'7/1/2026' (M/D/YYYY, the chart-feed convention) or '2026-07-01' (ISO,
+    MCT CSV since 2026-11) → ISO."""
+    s = s.strip()
+    fmt = "%Y-%m-%d" if "-" in s else "%m/%d/%Y"
+    return datetime.strptime(s, fmt).date().isoformat()
 
 
 def _month_start(month_end_iso: str) -> str:
@@ -519,7 +522,9 @@ def _mct() -> dict[str, list[tuple[str, float]]]:
     out: dict[str, list[tuple[str, float]]] = {"MCT": [], "MCT_BAND_LO": [], "MCT_BAND_HI": []}
     for ln in lines[4:]:  # 4 header rows; the leading unnamed col shifts dates to parts[1]
         parts = ln.split(",")
-        if len(parts) < 5 or not re.match(r"\d{1,2}/\d{1,2}/\d{4}", parts[1].strip()):
+        if len(parts) < 5 or not re.match(
+            r"\d{1,2}/\d{1,2}/\d{4}$|\d{4}-\d{2}-\d{2}$", parts[1].strip()
+        ):
             continue
         ts = _m_dy(parts[1])
         lo, pt, hi = _f(parts[2]), _f(parts[3]), _f(parts[4])

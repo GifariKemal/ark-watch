@@ -406,7 +406,11 @@ def verify(
                 r.crossval = _crossval_eodhd_ust(
                     e["series_id"], cur["value"], cur["ts"], e.get("tolerance")
                 )
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as ex:
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.RetryError,  # urllib3 Retry gave up on 5xx/429
+        ) as ex:
             # an unreachable/slow upstream says nothing about the data: degrade, never page
             r.anchor = r.sanity = r.depth = r.crossval = "·"
             r.note = f"source unreachable: {type(ex).__name__}"
